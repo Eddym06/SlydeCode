@@ -1,0 +1,125 @@
+/* Presenter: the slide is the only thing on screen. */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #0b0b0d;
+  color: #f4f3f1;
+  font-family: var(--font-ui);
+  overflow: hidden;
+  cursor: default;
+}
+
+.present {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.present-frame {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: 0 40px 120px -40px rgba(0, 0, 0, 0.9);
+  background: #17161a;
+}
+
+.present-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.present-empty {
+  color: rgba(244, 243, 241, 0.55);
+  font-size: 15px;
+}
+
+.hud {
+  position: fixed;
+  right: 20px;
+  bottom: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: rgba(244, 243, 241, 0.55);
+  opacity: 0;
+  transition: opacity 300ms var(--ease-out);
+  pointer-events: none;
+}
+
+.hud[data-visible="true"] {
+  opacity: 1;
+}
+
+.hud-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.hud-sep {
+  margin: 0 3px;
+  opacity: 0.5;
+}
+
+.hud-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hud-dot {
+  opacity: 0.4;
+}
+
+kbd {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  border: 1px solid rgba(244, 243, 241, 0.22);
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: rgba(244, 243, 241, 0.72);
+}
+
+.progress {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(244, 243, 241, 0.08);
+}
+
+.progress span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--gradient-signature);
+  transition: width 320ms var(--ease-out);
+}
+
+.click-zone {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  cursor: pointer;
+}
+
+.click-zone.prev {
+  left: 0;
+}
+
+.click-zone.next {
+  right: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
