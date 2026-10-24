@@ -1,0 +1,12 @@
+[package]
+name = "slyde-core"
+description = "SlydeCode domain model, presentation state and history."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
