@@ -143,9 +143,12 @@ async fn run_app(raw_args: &[String]) -> Result<(), String> {
         clear_runtime();
     }
 
-    let state = seed_state();
+    let (state, persist) = load_state();
     let mut config = ServerConfig::new(ui_dir, state);
     config.port = args.port;
+    if persist {
+        config.deck_path = Some(slyde_server::storage::current_path());
+    }
 
     let server = slyde_server::start(config)
         .await
@@ -166,6 +169,15 @@ async fn run_app(raw_args: &[String]) -> Result<(), String> {
     println!("Press Ctrl+C to quit.");
 
     let _ = tokio::signal::ctrl_c().await;
+
+    // Flush before exiting: the debounced autosave may be waiting on the last
+    // change, and Ctrl+C would otherwise drop it.
+    if persist {
+        let deck = server.state.core.read().await.presentation().clone();
+        if let Err(err) = slyde_server::storage::save(&slyde_server::storage::current_path(), &deck).await {
+            eprintln!("slyde: could not save the deck on exit: {err}");
+        }
+    }
 
     server.shutdown().await;
     clear_runtime();
@@ -199,6 +211,41 @@ fn open_window(url: &str, present: bool, no_open: bool) -> Result<(), String> {
         Err(err) => {
             println!("Could not launch {}. Open this URL manually: {url}", browser.path.display());
             Err(format!("browser launch failed: {err}"))
+        }
+    }
+}
+
+/// Restores the deck the user had open.
+///
+/// Returns `false` for `persist` when the saved file exists but cannot be read:
+/// in that case autosave stays off for the session so a corrupt file is never
+/// silently overwritten by the seed deck, giving the user a chance to recover it.
+fn load_state() -> (PresentationState, bool) {
+    let path = slyde_server::storage::current_path();
+    match slyde_server::storage::load(&path) {
+        Ok(Some(deck)) => {
+            let mut state = PresentationState::new(
+                deck.title.clone(),
+                deck.theme.clone(),
+                deck.aspect_ratio,
+            );
+            match state.replace(deck) {
+                Ok(()) => {
+                    println!("Restored deck from {}", path.display());
+                    (state, true)
+                }
+                Err(err) => {
+                    eprintln!("slyde: saved deck is invalid: {err}");
+                    eprintln!("slyde: keeping {} untouched; autosave is off", path.display());
+                    (seed_state(), false)
+                }
+            }
+        }
+        Ok(None) => (seed_state(), true),
+        Err(err) => {
+            eprintln!("slyde: could not read {}: {err}", path.display());
+            eprintln!("slyde: autosave is off for this session to protect the file");
+            (seed_state(), false)
         }
     }
 }

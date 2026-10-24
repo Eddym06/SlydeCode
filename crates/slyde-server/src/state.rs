@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, header};
-use slyde_core::{AnimationStep, CoreError, PresentationState, StateView};
-use tokio::sync::{RwLock, broadcast};
+use slyde_core::{AnimationStep, CoreError, Presentation, PresentationState, StateView};
+use tokio::sync::{RwLock, broadcast, watch};
 
 pub const EVENT_CHANNEL_CAPACITY: usize = 64;
 
@@ -18,6 +18,9 @@ pub struct AppState {
     pub ui_dir: PathBuf,
     /// Origin of the sandbox listener, e.g. `http://127.0.0.1:4322`.
     pub sandbox_origin: String,
+    /// When present, every committed deck is also handed to the autosave task.
+    /// Tests and ephemeral servers leave it `None` and never touch the disk.
+    deck_tx: Option<watch::Sender<Presentation>>,
 }
 
 impl AppState {
@@ -28,6 +31,17 @@ impl AppState {
         allowed_origins: Vec<String>,
         sandbox_origin: String,
     ) -> Arc<Self> {
+        Self::with_deck_sink(core, token, ui_dir, allowed_origins, sandbox_origin, None)
+    }
+
+    pub fn with_deck_sink(
+        core: PresentationState,
+        token: String,
+        ui_dir: PathBuf,
+        allowed_origins: Vec<String>,
+        sandbox_origin: String,
+        deck_tx: Option<watch::Sender<Presentation>>,
+    ) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Arc::new(Self {
             core: RwLock::new(core),
@@ -36,6 +50,7 @@ impl AppState {
             allowed_origins,
             ui_dir,
             sandbox_origin,
+            deck_tx,
         })
     }
 
@@ -48,8 +63,14 @@ impl AppState {
         let _ = self.events.send(event);
     }
 
+    /// Publishes the new read model to the UI and, when persistence is enabled,
+    /// to the autosave task. Called after every successful mutation, including
+    /// undo/redo, so the saved file always matches what the user sees.
     pub async fn publish_state(&self) {
         let view = self.view().await;
+        if let Some(tx) = &self.deck_tx {
+            let _ = tx.send(view.presentation.clone());
+        }
         self.broadcast(ServerEvent::StateChanged { view });
     }
 }

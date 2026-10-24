@@ -34,4 +34,7 @@ pub enum CoreError {
 
     #[error("animation step {index} does not exist on slide {slide_id}")]
     AnimationStepNotFound { slide_id: String, index: usize },
+
+    #[error("invalid project: {0}")]
+    InvalidProject(String),
 }

@@ -240,7 +240,7 @@ pub fn render_print_document(deck: &Presentation, sandbox_origin: &str, token: &
     )
 }
 
-fn percent_encode(raw: &str) -> String {
+pub(crate) fn percent_encode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.bytes() {
         match byte {

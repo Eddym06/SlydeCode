@@ -17,4 +17,10 @@ pub enum ServerError {
 
     #[error("ui directory does not exist: {0}")]
     UiMissing(String),
+
+    #[error("deck file: {0}")]
+    Deck(String),
+
+    #[error(transparent)]
+    Core(#[from] slyde_core::CoreError),
 }

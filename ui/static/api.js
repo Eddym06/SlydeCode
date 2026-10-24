@@ -46,6 +46,15 @@ export function createClient(token) {
       });
     },
 
+    /** Opens a `.slyde` file uploaded from the user's disk. */
+    openDeck(text) {
+      return json(`/api/deck/open?${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: text,
+      });
+    },
+
     /**
      * Connects the event stream. Returns a disposer. Reconnects with backoff;
      * the server sends the full view on every (re)connect, so no replay logic.

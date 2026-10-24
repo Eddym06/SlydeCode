@@ -110,6 +110,21 @@ impl PresentationState {
         }
     }
 
+    /// Replaces the whole deck, as when a project file is opened.
+    ///
+    /// History restarts: undoing into the deck that was just replaced would be
+    /// confusing, and could silently resurrect work the user believed gone.
+    pub fn replace(&mut self, presentation: Presentation) -> Result<(), CoreError> {
+        presentation.theme.validate()?;
+        self.history = vec![HistoryEntry {
+            label: "open".into(),
+            presentation,
+        }];
+        self.cursor = 0;
+        self.revision += 1;
+        Ok(())
+    }
+
     pub fn undo(&mut self) -> Result<(), CoreError> {
         if !self.can_undo() {
             return Err(CoreError::NothingToUndo);
@@ -550,6 +565,35 @@ mod tests {
         theme.accent = "javascript:alert(1)".into();
         assert!(s.set_theme(theme).is_err());
         assert!(!s.can_undo());
+        assert_eq!(s.revision(), 0);
+    }
+
+    #[test]
+    fn replace_swaps_the_deck_and_restarts_history() {
+        let mut s = state();
+        s.upsert_slide(0, None, "<h1>A</h1>".into(), TemplateType::Code, vec![])
+            .unwrap();
+        assert!(s.can_undo());
+
+        let mut loaded = Presentation::new("Loaded", Theme::paper(), AspectRatio::R4x3);
+        loaded.slides.push(Slide::new("sld_1".into(), "<h1>L</h1>".into()));
+        s.replace(loaded).unwrap();
+
+        assert_eq!(s.presentation().title, "Loaded");
+        assert_eq!(s.presentation().slides.len(), 1);
+        assert!(!s.can_undo());
+        assert!(!s.can_redo());
+        assert_eq!(s.history_labels(), vec!["open"]);
+        assert_eq!(s.revision(), 2);
+    }
+
+    #[test]
+    fn replace_rejects_an_invalid_theme_without_touching_the_deck() {
+        let mut s = state();
+        let mut incoming = Presentation::new("Bad", Theme::studio(), AspectRatio::R16x9);
+        incoming.theme.background = "url(evil)".into();
+        assert!(s.replace(incoming).is_err());
+        assert_eq!(s.presentation().title, "Deck");
         assert_eq!(s.revision(), 0);
     }
 }

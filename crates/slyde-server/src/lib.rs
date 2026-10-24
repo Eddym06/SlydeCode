@@ -18,6 +18,7 @@ pub mod routes;
 pub mod sandbox;
 pub mod starter;
 pub mod state;
+pub mod storage;
 pub mod ws;
 
 use std::path::PathBuf;
@@ -45,6 +46,8 @@ pub struct ServerConfig {
     pub port: u16,
     pub sandbox_port: u16,
     pub token: String,
+    /// When set, every committed deck is written here (atomic, debounced).
+    pub deck_path: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -55,6 +58,7 @@ impl ServerConfig {
             port: 0,
             sandbox_port: 0,
             token: new_token(),
+            deck_path: None,
         }
     }
 }
@@ -110,13 +114,26 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
         format!("http://localhost:{port}"),
     ];
 
-    let state = AppState::new(
+    let (deck_tx, autosave) = match &config.deck_path {
+        Some(path) => {
+            let (tx, rx) = tokio::sync::watch::channel(config.state.presentation().clone());
+            (Some(tx), Some((rx, path.clone())))
+        }
+        None => (None, None),
+    };
+
+    let state = AppState::with_deck_sink(
         config.state,
         config.token.clone(),
         config.ui_dir,
         origins,
         format!("http://127.0.0.1:{sandbox_port}"),
+        deck_tx,
     );
+
+    if let Some((rx, path)) = autosave {
+        tokio::spawn(storage::run_autosave(rx, path));
+    }
 
     let (shutdown, _) = watch::channel(false);
 

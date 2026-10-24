@@ -258,6 +258,15 @@ function boot(sessionToken) {
           <span class="hint">${escapeHtml(t("inspector.aspect"))}</span>
           <select class="select" id="ratio-select">${ratioOptions}</select>
         </label>
+      </section>
+      <section class="field">
+        <span class="field-label">${escapeHtml(t("inspector.file"))}</span>
+        <div class="file-actions">
+          <button type="button" class="file-btn" id="save-deck">${escapeHtml(t("inspector.saveCopy"))}</button>
+          <button type="button" class="file-btn" id="open-deck">${escapeHtml(t("inspector.open"))}</button>
+        </div>
+        <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
+        <input type="file" id="deck-file" accept=".slyde,application/json" hidden>
       </section>`;
 
     if (!current) {
@@ -351,6 +360,42 @@ function boot(sessionToken) {
         stageKey = "";
         thumbsKey = "";
         run("set_aspect_ratio", { ratio: ratio.value });
+      });
+    }
+
+    const save = $("save-deck");
+    if (save) {
+      save.addEventListener("click", () => {
+        // A download link is the browser-native "save as": it lands in the
+        // user's downloads folder with the deck name, no extension prompt.
+        const link = document.createElement("a");
+        link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
+        link.download = "";
+        document.body.append(link);
+        link.click();
+        link.remove();
+        toast(t("toast.downloaded"));
+      });
+    }
+
+    const open = $("open-deck");
+    const file = $("deck-file");
+    if (open && file) {
+      open.addEventListener("click", () => file.click());
+      file.addEventListener("change", async () => {
+        const chosen = file.files && file.files[0];
+        if (!chosen) return;
+        try {
+          const payload = await client.openDeck(await chosen.text());
+          selectedId = null;
+          stageKey = "";
+          thumbsKey = "";
+          applyView(payload.view);
+          toast(t("toast.opened"));
+        } catch (error) {
+          toast(`${t("toast.error")} — ${error.message}`);
+        }
+        file.value = "";
       });
     }
   }
