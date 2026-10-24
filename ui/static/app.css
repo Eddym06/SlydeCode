@@ -83,7 +83,6 @@
 .deck-title:focus {
   background: var(--surface);
   border-color: var(--border-strong);
-  outline: none;
 }
 
 .topbar-actions {
@@ -105,7 +104,8 @@
   border: 0;
   background: transparent;
   color: var(--ink-muted);
-  padding: 4px 10px;
+  min-height: 32px;
+  padding: 0 12px;
   border-radius: 999px;
   font-size: 12.5px;
   font-weight: 500;
@@ -287,13 +287,13 @@
 }
 
 .thumb-index {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-subtle);
   font-variant-numeric: tabular-nums;
 }
 
 .thumb-template {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-muted);
   background: var(--surface-sunken);
   border-radius: 999px;
@@ -375,6 +375,7 @@
   background: var(--surface);
   color: var(--ink-muted);
   border-radius: 999px;
+  min-height: 28px;
   padding: 4px 10px;
   font-size: 12px;
   transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
@@ -508,7 +509,6 @@ textarea.notes {
 }
 
 textarea.notes:focus {
-  outline: none;
   border-color: var(--brand);
 }
 
@@ -534,7 +534,6 @@ select.select {
 }
 
 select.select:focus {
-  outline: none;
   border-color: var(--brand);
 }
 
@@ -580,9 +579,11 @@ select.select:focus {
   border: 0;
   background: transparent;
   color: var(--brand);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
-  padding: 2px 4px;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 2px 6px;
   border-radius: 6px;
 }
 

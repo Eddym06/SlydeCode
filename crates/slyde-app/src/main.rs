@@ -146,6 +146,7 @@ async fn run_app(raw_args: &[String]) -> Result<(), String> {
     let (state, persist) = load_state();
     let mut config = ServerConfig::new(ui_dir, state);
     config.port = args.port;
+    config.assets_dir = Some(resolve_assets_dir());
     if persist {
         config.deck_path = Some(slyde_server::storage::current_path());
     }
@@ -286,6 +287,30 @@ fn resolve_ui_dir(explicit: Option<PathBuf>) -> PathBuf {
         .find(|path| path.join("index.html").is_file())
         .cloned()
         .unwrap_or_else(|| PathBuf::from("ui"))
+}
+
+/// Fonts and brand assets. Same resolution rules as the UI: explicit env,
+/// then relative to the executable (bundled build), then the repo checkout.
+fn resolve_assets_dir() -> PathBuf {
+    if let Ok(from_env) = std::env::var("SLYDE_ASSETS_DIR") {
+        return PathBuf::from(from_env);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("assets"));
+            candidates.push(dir.join("../../../assets"));
+        }
+    }
+    candidates.push(PathBuf::from("assets"));
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets"));
+
+    candidates
+        .iter()
+        .find(|path| path.join("fonts").is_dir())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from("assets"))
 }
 
 /// Kept here so `slyde mcp` and the studio agree on the runtime file location.

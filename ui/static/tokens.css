@@ -2,6 +2,7 @@
    Never use raw hex in components; always go through a token. */
 
 :root {
+  color-scheme: light;
   --bg: #fafafa;
   --surface: #ffffff;
   --surface-sunken: #f4f3f1;
@@ -9,7 +10,9 @@
   --border-strong: #d7d3cf;
   --ink: #1a1a1e;
   --ink-muted: #5f5c63;
-  --ink-subtle: #8e8a92;
+  /* 5.2:1 on --surface, 4.8:1 on --surface-sunken: hints and placeholders are
+     small text, so "subtle" still has to clear AA. */
+  --ink-subtle: #6f6b73;
   --brand: #7c3aed;
   --brand-strong: #6d28d9;
   --brand-soft: #f1e9fe;
@@ -41,6 +44,7 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --bg: #121214;
   --surface: #1a1a1e;
   --surface-sunken: #0e0e10;
@@ -48,7 +52,8 @@
   --border-strong: #3d3d44;
   --ink: #f4f3f1;
   --ink-muted: #a6a3ab;
-  --ink-subtle: #77747c;
+  /* 5.2:1 on --surface (#1a1a1e) and on the sunken backdrop. */
+  --ink-subtle: #908d95;
   --brand: #9b6bff;
   --brand-strong: #b08bff;
   --brand-soft: #2a2140;

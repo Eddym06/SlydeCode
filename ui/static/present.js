@@ -9,6 +9,7 @@ const hud = document.getElementById("hud");
 const currentEl = document.getElementById("current");
 const totalEl = document.getElementById("total");
 const progress = document.getElementById("progress-fill");
+const progressBar = document.getElementById("progress");
 
 let view = null;
 let index = 0;
@@ -49,6 +50,7 @@ async function start(sessionToken) {
       totalEl.textContent = "0";
       currentEl.textContent = "0";
       progress.style.width = "0%";
+      progressBar.setAttribute("aria-valuenow", "0");
       return;
     }
 
@@ -59,7 +61,9 @@ async function start(sessionToken) {
     const slide = slides[index];
     totalEl.textContent = String(slides.length);
     currentEl.textContent = String(index + 1);
-    progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+    const percent = Math.round(((index + 1) / slides.length) * 100);
+    progress.style.width = `${percent}%`;
+    progressBar.setAttribute("aria-valuenow", String(percent));
 
     const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
     if (key !== slideKey) {

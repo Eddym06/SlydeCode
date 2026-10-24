@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tower_http::services::ServeDir;
 
 pub use chrome::{Browser, BrowserKind, OpenMode, discover_browser};
 pub use error::ServerError;
@@ -48,6 +49,9 @@ pub struct ServerConfig {
     pub token: String,
     /// When set, every committed deck is written here (atomic, debounced).
     pub deck_path: Option<PathBuf>,
+    /// Asset root (fonts, brand, icons), served at `/fonts` on both origins.
+    /// `None` is valid: the UI and slides then use the system fallback stack.
+    pub assets_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -59,6 +63,7 @@ impl ServerConfig {
             sandbox_port: 0,
             token: new_token(),
             deck_path: None,
+            assets_dir: None,
         }
     }
 }
@@ -137,8 +142,24 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
 
     let (shutdown, _) = watch::channel(false);
 
+    let (mut app, mut sandbox) = (
+        routes::app_router(state.clone()),
+        routes::sandbox_router(state.clone()),
+    );
+    match config.assets_dir.as_ref().map(|dir| dir.join("fonts")) {
+        Some(fonts) if fonts.is_dir() => {
+            // Same directory on both origins: the editor paints with Geist, and
+            // every slide iframe shares one cached copy from the sandbox origin.
+            app = app.nest_service("/fonts", ServeDir::new(&fonts));
+            sandbox = sandbox.nest_service("/fonts", ServeDir::new(&fonts));
+        }
+        Some(fonts) => {
+            tracing::warn!(dir = %fonts.display(), "font directory not found; using system fallbacks");
+        }
+        None => {}
+    }
+
     let mut app_shutdown = shutdown.subscribe();
-    let app = routes::app_router(state.clone());
     tokio::spawn(async move {
         let server = axum::serve(app_listener, app).with_graceful_shutdown(async move {
             let _ = app_shutdown.changed().await;
@@ -149,7 +170,6 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
     });
 
     let mut sandbox_shutdown = shutdown.subscribe();
-    let sandbox = routes::sandbox_router(state.clone());
     tokio::spawn(async move {
         let server = axum::serve(sandbox_listener, sandbox).with_graceful_shutdown(async move {
             let _ = sandbox_shutdown.changed().await;

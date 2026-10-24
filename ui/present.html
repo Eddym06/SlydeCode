@@ -3,22 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
   <title>SlydeCode — Present</title>
+  <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts.css">
   <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/present.css">
 </head>
 <body>
   <main class="present" id="present">
     <div class="present-frame" id="present-frame">
-      <iframe id="present-slide" sandbox="allow-scripts" title="Slide"></iframe>
+      <iframe id="present-slide" sandbox="allow-scripts" data-i18n-title="a11y.slideCanvas" title="Current slide"></iframe>
     </div>
-    <div class="present-empty" id="present-empty" hidden>
+    <div class="present-empty" id="present-empty" role="status" hidden>
       <p data-i18n="present.empty">No slides yet. Add one in the studio.</p>
     </div>
   </main>
 
   <div class="hud" id="hud">
-    <div class="hud-count"><span id="current">1</span><span class="hud-sep">/</span><span id="total">1</span></div>
+    <div class="hud-count" role="status" aria-live="polite"><span id="current">1</span><span class="hud-sep">/</span><span id="total">1</span></div>
     <div class="hud-hint" id="hud-hint">
       <kbd>←</kbd><kbd>→</kbd> <span data-i18n="present.navigate">navigate</span>
       <span class="hud-dot">·</span>
@@ -28,7 +31,10 @@
     </div>
   </div>
 
-  <div class="progress"><span id="progress-fill"></span></div>
+  <div class="progress" id="progress" role="progressbar" data-i18n-aria="present.progress"
+       aria-label="Presentation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <span id="progress-fill"></span>
+  </div>
 
   <script type="module" src="/static/present.js"></script>
 </body>

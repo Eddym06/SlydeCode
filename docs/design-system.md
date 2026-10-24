@@ -31,7 +31,7 @@ Tokens are semantic, never raw hex in components. Both modes ship in the same re
 | `--border-strong` | `#D7D3CF` | Inputs, selected outlines |
 | `--ink` | `#1A1A1E` | Primary text |
 | `--ink-muted` | `#5F5C63` | Secondary text, labels |
-| `--ink-subtle` | `#8E8A92` | Placeholders, timestamps, disabled |
+| `--ink-subtle` | `#6F6B73` | Placeholders, timestamps, disabled (5.2:1 on surface) |
 | `--brand` | `#7C3AED` | Primary action, active state, focus |
 | `--brand-strong` | `#6D28D9` | Hover/pressed on primary |
 | `--brand-soft` | `#F1E9FE` | Selected row, soft badge |
@@ -52,7 +52,7 @@ Tokens are semantic, never raw hex in components. Both modes ship in the same re
 | `--border-strong` | `#3D3D44` | Inputs, selected outlines |
 | `--ink` | `#F4F3F1` | Primary text |
 | `--ink-muted` | `#A6A3AB` | Secondary text |
-| `--ink-subtle` | `#77747C` | Placeholders, disabled |
+| `--ink-subtle` | `#908D95` | Placeholders, disabled (5.3:1 on surface) |
 | `--brand` | `#9B6BFF` | Primary action (lightened for contrast) |
 | `--brand-strong` | `#B08BFF` | Hover |
 | `--brand-soft` | `#2A2140` | Selected row |
@@ -77,6 +77,8 @@ Tokens are semantic, never raw hex in components. Both modes ship in the same re
 ## 3. Typography
 
 **Geist Sans** for everything in the UI (fallback: Inter, system-ui). **Geist Mono** only inside Developer Mode and code views (fallback: JetBrains Mono, ui-monospace).
+
+Both families ship **bundled** as variable woff2 files in `assets/fonts/` (Geist 1.8.2, SIL OFL 1.1 — see `assets/fonts/README.md`) and are served at `/fonts` on the app origin and on the sandbox origin. `font-display: swap`; the UI preloads the upright sans face. Slides use the same files, so exports do not depend on the machine's installed fonts.
 
 | Token | Size / line-height / tracking | Use |
 |---|---|---|
@@ -205,11 +207,11 @@ Reveals: MCP log, state tree, raw JSON, FPS/RAM, and the code tab. Monospace, mu
 
 ## 9. Accessibility baseline
 
-- Text ≥4.5:1; large text and graphics ≥3:1. Verified per mode, per token pair.
-- Visible focus ring: 2px `--brand` + 2px offset, never `outline: none` without a replacement.
-- Keyboard: every action reachable; `Esc` closes overlays; arrow keys navigate the storyboard when focused.
-- Hit targets ≥32px in the desktop shell (44px for any touch-capable surface).
-- All icon-only buttons have `aria-label`; the AI chip is `aria-live="polite"` and never announces more than once per state change.
+- Text ≥4.5:1; large text and graphics ≥3:1. Every text token pair is measured in both modes (`tests/ui/studio.test.mjs` fails below 4.5:1). Current worst pair: `--ink-subtle` on `--surface-sunken`, 4.7:1 in light mode.
+- Visible focus ring: 2px `--brand` + 2px offset, never `outline: none` without a replacement. Inputs keep the ring as well as their border change.
+- Keyboard: every action reachable; `Esc` closes overlays; arrow keys navigate the storyboard. Only the selected thumbnail is in the tab order, and focus follows the selection.
+- Hit targets ≥32px for top-bar controls in the desktop shell (compact chips are ≥28px).
+- All icon-only buttons have `aria-label`; status text is `aria-live="polite"`; the presenter exposes its progress as a `progressbar`.
 - Slide content is rendered in a sandboxed iframe; the app's own chrome never inherits slide CSS.
 
 ---

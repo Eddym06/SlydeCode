@@ -16,11 +16,44 @@ const CSP: &str = "default-src 'none'; \
 style-src 'unsafe-inline'; \
 script-src 'unsafe-inline'; \
 img-src data: blob:; \
-font-src data:; \
+font-src 'self' data:; \
 media-src data: blob:; \
 connect-src 'none'; \
 form-action 'none'; \
 base-uri 'none'";
+
+/// Bundled typefaces for slide content. `'self'` in the CSP means the sandbox
+/// origin, where `slyde-server` also mounts `/fonts`; the browser then caches a
+/// single copy for every slide iframe instead of inlining the face per document.
+const FONT_FACES: &str = r#"
+  @font-face {
+    font-family: "Geist";
+    src: url("/fonts/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist";
+    src: url("/fonts/Geist-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist Mono";
+    src: url("/fonts/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist Mono";
+    src: url("/fonts/GeistMono-Italic-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: italic;
+    font-display: swap;
+  }"#;
 
 pub fn csp_header() -> &'static str {
     CSP
@@ -47,7 +80,7 @@ pub fn render_document(deck: &Presentation, slide: &Slide, static_mode: bool) ->
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="{csp}">
 <title>{title}</title>
-<style>
+<style>{font_faces}
   :root {{
     --slyde-bg: {bg};
     --slyde-fg: {fg};
@@ -92,6 +125,7 @@ pub fn render_document(deck: &Presentation, slide: &Slide, static_mode: bool) ->
 </html>"#,
         csp = CSP,
         title = title,
+        font_faces = FONT_FACES,
         bg = theme.background,
         fg = theme.foreground,
         muted = theme.muted,
@@ -290,6 +324,9 @@ mod tests {
         assert!(html.contains("height: 720px"));
         assert!(html.contains("Content-Security-Policy"));
         assert!(html.contains("connect-src 'none'"));
+        assert!(html.contains("font-src 'self' data:"));
+        assert!(html.contains("@font-face"));
+        assert!(html.contains("/fonts/Geist-Variable.woff2"));
     }
 
     #[test]

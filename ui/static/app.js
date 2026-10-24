@@ -34,6 +34,7 @@ function boot(sessionToken) {
   let resizeTimer = null;
 
   $("app").hidden = false;
+  syncThemeToggle();
 
   const els = {
     title: $("deck-title"),
@@ -132,16 +133,32 @@ function boot(sessionToken) {
     renderInspector(d);
   }
 
+  /// Every thumb is a button; only the selected one is in the tab order, so
+  /// Tab jumps straight into the deck and the arrow keys walk the slides.
+  function syncStoryboardSelection() {
+    els.storyboard.querySelectorAll(".thumb").forEach((el) => {
+      const current = el.dataset.id === selectedId;
+      el.setAttribute("aria-current", String(current));
+      el.tabIndex = current ? 0 : -1;
+    });
+  }
+
+  function focusSelectedThumb() {
+    const target = [...els.storyboard.querySelectorAll(".thumb")].find(
+      (el) => el.dataset.id === selectedId
+    );
+    if (target) target.focus();
+  }
+
   function renderStoryboard(d) {
     const key = d.slides.map((s) => `${s.id}:${hash(s.code)}:${s.template}`).join("|") + `:${d.aspect_ratio}`;
     if (key === thumbsKey) {
-      els.storyboard.querySelectorAll(".thumb").forEach((el) => {
-        el.setAttribute("aria-current", String(el.dataset.id === selectedId));
-      });
+      syncStoryboardSelection();
       return;
     }
     thumbsKey = key;
 
+    const hadFocus = els.storyboard.contains(document.activeElement);
     const [w, h] = d.aspect_ratio.split(":").map(Number);
 
     els.storyboard.innerHTML = "";
@@ -155,15 +172,20 @@ function boot(sessionToken) {
     }
 
     d.slides.forEach((s, index) => {
+      const label = t("storyboard.slide", {
+        n: index + 1,
+        template: t(`template.${s.template}`),
+      });
       const button = document.createElement("button");
       button.type = "button";
       button.className = "thumb";
       button.dataset.id = s.id;
-      button.setAttribute("role", "listitem");
+      button.tabIndex = s.id === selectedId ? 0 : -1;
       button.setAttribute("aria-current", String(s.id === selectedId));
+      button.setAttribute("aria-label", label);
       button.innerHTML = `
         <span class="thumb-media" style="aspect-ratio:${w}/${h}">
-          <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1"
+          <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1" aria-hidden="true" title=""
             src="${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1"></iframe>
         </span>
         <span class="thumb-foot">
@@ -177,6 +199,8 @@ function boot(sessionToken) {
       });
       els.storyboard.append(button);
     });
+
+    if (hadFocus) focusSelectedThumb();
   }
 
   function renderStage(d) {
@@ -440,10 +464,16 @@ function boot(sessionToken) {
     titleTimer = window.setTimeout(() => run("set_title", { title: value }, { silent: true }), 400);
   });
 
+  function syncThemeToggle() {
+    const dark = document.documentElement.dataset.theme === "dark";
+    $("theme-toggle").setAttribute("aria-pressed", String(dark));
+  }
+
   $("theme-toggle").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     localStorage.setItem("slyde.theme", next);
+    syncThemeToggle();
   });
 
   $("lang-switch").querySelectorAll("[data-lang]").forEach((button) => {
@@ -493,9 +523,11 @@ function boot(sessionToken) {
     const index = d.slides.findIndex((s) => s.id === selectedId);
     const next = Math.min(d.slides.length - 1, Math.max(0, (index < 0 ? 0 : index) + delta));
     if (d.slides[next].id !== selectedId) {
+      const focusInside = els.storyboard.contains(document.activeElement);
       selectedId = d.slides[next].id;
       stageKey = "";
       applyView(view);
+      if (focusInside) focusSelectedThumb();
     }
   }
 
@@ -516,6 +548,7 @@ function boot(sessionToken) {
       setStatus("connecting");
       applyView(payload.view);
       syncLangButtons();
+      syncThemeToggle();
       applyI18n();
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {
