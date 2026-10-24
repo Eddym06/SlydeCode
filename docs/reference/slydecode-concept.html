@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light" data-lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SlydeCode — reference concept</title>
+<!--
+  REFERENCE MOCKUP — not the product UI.
+  Purpose: visual + interaction reference for the SlydeCode design system.
+  Open in Chrome. No build step, no dependencies, no network requests.
+
+  What it demonstrates:
+  - Light / dark tokens, the signature gradient, type scale, spacing
+  - Studio layout: top bar / storyboard / stage / inspector / HUD
+  - The AI generation sequence (chip + scanline + staggered reveal)
+  - Developer Mode (opt-in), Presenter view, EN/ES switch
+-->
+<style>
+  /* ---------- Tokens ---------- */
+  :root {
+    --bg: #FAFAFA;
+    --surface: #FFFFFF;
+    --surface-sunken: #F4F3F1;
+    --border: #E8E6E3;
+    --border-strong: #D7D3CF;
+    --ink: #1A1A1E;
+    --ink-muted: #5F5C63;
+    --ink-subtle: #7A7680;
+    --brand: #7C3AED;
+    --brand-strong: #6D28D9;
+    --brand-soft: #F1E9FE;
+    --accent: #FF6B4A;
+    --accent-soft: #FFE9E3;
+    --success: #16A34A;
+    --warning: #D97706;
+    --danger: #DC2626;
+
+    --grad-signature: linear-gradient(135deg, #7C3AED, #FF6B4A);
+    --grad-signature: linear-gradient(135deg in oklch, #7C3AED, #FF6B4A);
+    --grad-action: linear-gradient(135deg, #6D28D9, #7C3AED);
+
+    --shadow-1: 0 1px 2px rgba(28, 22, 18, .06);
+    --shadow-2: 0 4px 14px -4px rgba(28, 22, 18, .10), 0 2px 4px -2px rgba(28, 22, 18, .06);
+    --shadow-3: 0 18px 48px -16px rgba(28, 22, 18, .18);
+    --glow-brand: 0 10px 30px -10px rgba(124, 58, 237, .40);
+
+    --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-pill: 999px;
+
+    --dur-1: 120ms; --dur-2: 180ms; --dur-3: 260ms; --dur-4: 420ms; --dur-5: 700ms;
+    --ease-out: cubic-bezier(.16, 1, .3, 1);
+    --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+    --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+
+    --topbar-h: 56px;
+    --hud-h: 36px;
+    --rail-w: 232px;
+    --inspector-w: 296px;
+
+    --font-ui: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", monospace;
+  }
+
+  [data-theme="dark"] {
+    --bg: #121214;
+    --surface: #1A1A1E;
+    --surface-sunken: #0E0E10;
+    --border: #2E2E33;
+    --border-strong: #3D3D44;
+    --ink: #F4F3F1;
+    --ink-muted: #A6A3AB;
+    --ink-subtle: #8A8690;
+    --brand: #9B6BFF;
+    --brand-strong: #B08BFF;
+    --brand-soft: #2A2140;
+    --accent: #FF8265;
+    --accent-soft: #3A211C;
+    --success: #34D399;
+    --warning: #FBBF24;
+    --danger: #F87171;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .5);
+    --shadow-2: 0 6px 18px -6px rgba(0, 0, 0, .65);
+    --shadow-3: 0 24px 60px -20px rgba(0, 0, 0, .75);
+    --glow-brand: 0 10px 34px -10px rgba(155, 107, 255, .45);
+  }
+
+  /* ---------- Base ---------- */
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* ---------- App frame ---------- */
+  .app {
+    display: grid;
+    grid-template-rows: var(--topbar-h) 1fr var(--hud-h);
+    height: 100vh;
+    min-width: 900px;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    padding: 0 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    z-index: 20;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .mark { width: 26px; height: 26px; flex: none; }
+  .wordmark { font-weight: 600; letter-spacing: -.02em; font-size: 15.5px; }
+  .wordmark span { color: var(--brand); }
+  .divider-v { width: 1px; height: 20px; background: var(--border); flex: none; }
+  .project {
+    display: flex; align-items: center; gap: 6px;
+    background: transparent; border: 1px solid transparent;
+    border-radius: var(--r-xs); padding: 4px 8px; max-width: 260px;
+    cursor: text; color: var(--ink); min-width: 0;
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+  }
+  .project:hover { background: var(--surface-sunken); border-color: var(--border); }
+  .project span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+  .project svg { color: var(--ink-subtle); flex: none; }
+
+  .center-cluster { display: flex; align-items: center; gap: 12px; }
+
+  .theme-gallery { display: flex; align-items: center; gap: 4px; padding: 3px; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: var(--r-pill); }
+  .swatch {
+    width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,.10);
+    cursor: pointer; padding: 0; position: relative;
+    transition: transform var(--dur-1) var(--ease-out);
+  }
+  .swatch:hover { transform: scale(1.08); }
+  .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--brand); }
+  .swatch.s1 { background: linear-gradient(135deg, #17161A, #2B2930); }
+  .swatch.s2 { background: linear-gradient(135deg, #FBF8F3, #EDE6DA); }
+  .swatch.s3 { background: linear-gradient(135deg, #1E1B4B, #4C1D95); }
+
+  /* AI chip */
+  .chip {
+    position: relative; display: inline-flex; align-items: center; gap: 8px;
+    height: 30px; padding: 0 13px; border-radius: var(--r-pill);
+    background: var(--surface); border: 0; cursor: pointer;
+    font-size: 12.5px; color: var(--ink); box-shadow: var(--shadow-1);
+    white-space: nowrap;
+  }
+  .chip::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1.5px;
+    background: var(--grad-signature);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    pointer-events: none;
+  }
+  .chip .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--brand); flex: none; position: relative;
+  }
+  .chip[data-state="writing"] .dot,
+  .chip[data-state="thinking"] .dot,
+  .chip[data-state="adjusting"] .dot { background: var(--accent); }
+  .chip[data-state="writing"] .dot::after,
+  .chip[data-state="thinking"] .dot::after,
+  .chip[data-state="adjusting"] .dot::after {
+    content: ""; position: absolute; inset: -4px; border-radius: 50%;
+    border: 1px solid var(--accent); opacity: .55;
+    animation: ping 1.6s var(--ease-out) infinite;
+  }
+  .chip[data-state="done"] .dot { background: var(--success); }
+  .chip .shimmer { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; opacity: 0; }
+  .chip .shimmer::after {
+    content: ""; position: absolute; inset: 0; width: 60%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+    transform: translateX(-120%);
+  }
+  .chip[data-state="writing"] .shimmer,
+  .chip[data-state="thinking"] .shimmer,
+  .chip[data-state="adjusting"] .shimmer { opacity: .9; }
+  .chip[data-state="writing"] .shimmer::after,
+  .chip[data-state="thinking"] .shimmer::after,
+  .chip[data-state="adjusting"] .shimmer::after { animation: sweep 2.4s linear infinite; }
+
+  @keyframes ping { 0% { transform: scale(.6); opacity: .7; } 100% { transform: scale(1.8); opacity: 0; } }
+  @keyframes sweep { to { transform: translateX(220%); } }
+
+  .actions { display: flex; align-items: center; gap: 6px; justify-self: end; }
+  .icon-btn {
+    width: 32px; height: 32px; display: inline-grid; place-items: center;
+    border-radius: var(--r-xs); border: 1px solid transparent; background: transparent;
+    color: var(--ink-muted); cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+  }
+  .icon-btn:hover { background: var(--surface-sunken); color: var(--ink); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 13px;
+    border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface);
+    color: var(--ink); font-size: 13px; font-weight: 500; cursor: pointer;
+    transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), transform var(--dur-1) var(--ease-out);
+  }
+  .btn:hover { border-color: var(--border-strong); }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary {
+    border: 0; color: #fff; background: var(--grad-action);
+    box-shadow: var(--shadow-1);
+  }
+  .btn-primary:hover { box-shadow: var(--glow-brand); }
+
+  /* ---------- Workspace ---------- */
+  .workspace {
+    display: grid;
+    grid-template-columns: var(--rail-w) 1fr var(--inspector-w);
+    min-height: 0;
+  }
+
+  /* Storyboard */
+  .storyboard {
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--surface); border-right: 1px solid var(--border);
+  }
+  .panel-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 12px 14px 8px;
+  }
+  .panel-title { font-size: 12.5px; font-weight: 500; color: var(--ink-muted); }
+  .dev-toggle {
+    display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+    border-radius: var(--r-pill); border: 1px solid var(--border); background: transparent;
+    font-size: 11px; color: var(--ink-subtle); cursor: pointer;
+  }
+  .dev-toggle[aria-pressed="true"] { background: var(--brand-soft); border-color: transparent; color: var(--brand); }
+  .thumbs { padding: 4px 14px 14px; overflow-y: auto; display: grid; gap: 10px; min-height: 0; }
+  .thumb {
+    position: relative; display: block; width: 100%; aspect-ratio: 16 / 9;
+    border-radius: var(--r-md); border: 1px solid var(--border); background: #17161A;
+    padding: 0; cursor: pointer; overflow: hidden;
+    transition: transform var(--dur-2) var(--ease-spring), box-shadow var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out);
+  }
+  .thumb:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
+  .thumb[aria-current="true"] { border-color: transparent; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--brand); }
+  .thumb .num {
+    position: absolute; left: 6px; bottom: 5px; z-index: 2;
+    font-size: 10px; color: rgba(255,255,255,.72);
+    background: rgba(0,0,0,.35); border-radius: 4px; padding: 0 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .thumb-inner { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; padding: 12px 14px; text-align: left; }
+  .thumb-inner i { display: block; height: 3px; border-radius: 2px; background: rgba(255,255,255,.22); }
+  .thumb-inner i.t { height: 7px; width: 70%; background: rgba(255,255,255,.72); }
+  .thumb-inner i.a { background: var(--accent); opacity: .85; }
+  .thumb-inner .big { font-size: 22px; font-weight: 600; color: #fff; letter-spacing: -.02em; line-height: 1; }
+
+  .add-slide {
+    margin: 0 14px 14px; display: flex; align-items: center; justify-content: center; gap: 7px;
+    height: 38px; border-radius: var(--r-sm); border: 1px dashed var(--border-strong);
+    background: transparent; color: var(--ink-muted); font-size: 13px; cursor: pointer;
+    transition: border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out), background var(--dur-1) var(--ease-out);
+  }
+  .add-slide:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+
+  /* Dev panel replaces the storyboard content */
+  .dev-panel { display: none; padding: 4px 14px 14px; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; color: var(--ink-muted); }
+  .dev-panel .log-line { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+  .dev-panel .k { color: var(--brand); }
+  .dev-panel .s { color: var(--success); }
+  .dev-panel .sep { height: 1px; background: var(--border); margin: 10px 0; }
+  [data-dev="on"] .thumbs, [data-dev="on"] .add-slide { display: none; }
+  [data-dev="on"] .dev-panel { display: block; }
+
+  /* Stage */
+  .stage {
+    position: relative; min-width: 0; min-height: 0;
+    background: var(--surface-sunken);
+    display: grid; place-items: center;
+    padding: 28px;
+  }
+  .stage-wrap { width: min(100%, 1120px); }
+  .canvas {
+    --slide-bg: #17161A;
+    --slide-ink: #F7F4EF;
+    --slide-muted: rgba(247, 244, 239, .55);
+    --slide-foot: rgba(247, 244, 239, .38);
+    position: relative; aspect-ratio: 16 / 9; width: 100%;
+    border-radius: var(--r-md); overflow: hidden;
+    background: var(--slide-bg); color: var(--slide-ink);
+    box-shadow: var(--shadow-3);
+    container-type: inline-size;
+  }
+  .canvas[data-slide="paper"] {
+    --slide-bg: #FBF8F3;
+    --slide-ink: #17161A;
+    --slide-muted: rgba(23, 22, 26, .58);
+    --slide-foot: rgba(23, 22, 26, .42);
+  }
+  .canvas[data-slide="paper"] .slide::after {
+    background: radial-gradient(120% 90% at 88% -10%, rgba(255, 107, 74, .14), transparent 60%),
+                radial-gradient(90% 70% at 0% 110%, rgba(124, 58, 237, .12), transparent 60%);
+  }
+  .canvas[data-slide="night"] {
+    --slide-bg: linear-gradient(140deg, #1E1B4B, #4C1D95 60%, #2A1140);
+  }
+  .slide { position: absolute; inset: 0; padding: 6.2cqw 6.6cqw; display: flex; flex-direction: column; }
+  .slide::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 88% -10%, rgba(255,107,74,.18), transparent 60%),
+                radial-gradient(90% 70% at 0% 110%, rgba(124,58,237,.28), transparent 60%);
+  }
+  .slide-kicker { font-size: 1.15cqw; letter-spacing: .06em; color: var(--slide-muted); text-transform: none; }
+  .slide h1 {
+    margin: 1.4cqw 0 0; font-size: 3.5cqw; line-height: 1.08; letter-spacing: -.025em;
+    font-weight: 600; max-width: 62%;
+  }
+  .slide-body { margin-top: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: 4cqw; }
+  .stat { display: flex; flex-direction: column; gap: .4cqw; }
+  .stat .num {
+    font-size: 7.4cqw; line-height: .92; font-weight: 600; letter-spacing: -.04em;
+    background: var(--grad-signature); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .stat .cap { font-size: 1.15cqw; color: var(--slide-muted); max-width: 15ch; }
+  .bars { display: flex; align-items: flex-end; gap: 1.1cqw; height: 9.5cqw; }
+  .bar { width: 2.2cqw; border-radius: .5cqw .5cqw .2cqw .2cqw; background: rgba(255,107,74,.85); }
+  .bar:nth-child(2) { background: rgba(255,107,74,.55); }
+  .bar:nth-child(4) { background: linear-gradient(180deg, #FF6B4A, #7C3AED); }
+  .bar:nth-child(5) { background: rgba(255,107,74,.35); }
+  .slide-foot { margin-top: 2.4cqw; font-size: .95cqw; color: var(--slide-foot); }
+
+  /* Generation overlay */
+  .gen { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity var(--dur-2) var(--ease-out); }
+  .canvas.generating .gen { opacity: 1; }
+  .canvas.generating .slide { filter: brightness(.96); }
+  .scan {
+    position: absolute; left: 0; right: 0; height: 22%;
+    background: linear-gradient(180deg, transparent, rgba(255,255,255,.10) 55%, rgba(255,107,74,.55) 99%, transparent);
+    transform: translateY(-120%);
+  }
+  .canvas.generating .scan { animation: scanline var(--dur-5) var(--ease-in-out) 1 both; }
+  @keyframes scanline { from { transform: translateY(-120%); } to { transform: translateY(520%); } }
+  .gen-label {
+    position: absolute; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 1.05cqw; color: #fff; background: rgba(23,22,26,.72);
+    border: 1px solid rgba(255,255,255,.14); border-radius: var(--r-pill);
+    padding: .45cqw 1cqw; backdrop-filter: blur(6px);
+    opacity: 0; transform: translateY(4px);
+  }
+  .canvas.generating .gen-label { animation: labelIn 240ms var(--ease-out) 900ms both; }
+  @keyframes labelIn { to { opacity: 1; transform: none; } }
+
+  .reveal { opacity: 1; }
+  .canvas.generating .reveal { animation: rise 520ms var(--ease-out) both; animation-delay: calc(360ms + var(--i, 0) * 130ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  /* Inspector */
+  .inspector { background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .insp-head { padding: 12px 16px 0; }
+  .tabs { display: flex; gap: 2px; background: var(--surface-sunken); padding: 3px; border-radius: var(--r-sm); }
+  .tab {
+    flex: 1; height: 26px; border: 0; border-radius: 7px; background: transparent;
+    font-size: 12px; color: var(--ink-muted); cursor: pointer;
+  }
+  .tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
+  .insp-body { padding: 14px 16px; overflow-y: auto; display: grid; gap: 18px; }
+  .code-view {
+    margin: 0; padding: 14px 16px; overflow: auto;
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7;
+    color: var(--ink-muted); white-space: pre;
+  }
+  .group { display: grid; gap: 8px; }
+  .group > h2 { margin: 0; font-size: 12.5px; font-weight: 500; color: var(--ink-muted); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; }
+  .row > span { font-size: 13px; color: var(--ink-muted); }
+  .seg { display: flex; gap: 2px; background: var(--surface-sunken); border-radius: var(--r-xs); padding: 2px; }
+  .seg button { height: 24px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; font-size: 11.5px; color: var(--ink-muted); cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
+  .field {
+    height: 30px; padding: 0 9px; border-radius: var(--r-xs); border: 1px solid var(--border);
+    background: var(--surface); font-size: 12.5px; color: var(--ink); width: 132px;
+  }
+  .swatches { display: flex; gap: 6px; }
+  .sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
+  .sw[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--brand); }
+  .insp-foot { margin-top: auto; padding: 12px 16px 14px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+  .regen { width: 100%; justify-content: center; }
+
+  /* HUD */
+  .hud {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 0 14px; background: var(--surface); border-top: 1px solid var(--border);
+    font-size: 11.5px; color: var(--ink-muted);
+  }
+  .hud-left, .hud-right { display: flex; align-items: center; gap: 10px; }
+  .pager { display: flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+  .pager button { width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--ink-subtle); cursor: pointer; }
+  .pager button:hover { background: var(--surface-sunken); color: var(--ink); }
+  .conn { display: inline-flex; align-items: center; gap: 6px; }
+  .conn i { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: block; }
+  .dev-only { display: none; }
+  [data-dev="on"] .dev-only { display: inline-flex; align-items: center; gap: 10px; }
+  .zoom { display: inline-flex; align-items: center; gap: 6px; }
+  .zoom .field { width: 56px; height: 24px; text-align: center; font-variant-numeric: tabular-nums; }
+
+  /* ---------- Presenter ---------- */
+  .presenter {
+    position: fixed; inset: 0; z-index: 100; display: none;
+    background: #0B0B0D; color: #F7F4EF;
+    grid-template-rows: 1fr auto;
+  }
+  .presenter[data-open="true"] { display: grid; }
+  .presenter .slide-frame { display: grid; place-items: center; padding: 4vh 6vw 2vh; }
+  .presenter .canvas { width: min(100%, calc((100vh - 190px) * 16 / 9)); box-shadow: none; }
+  .presenter .bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 24px 22px; color: rgba(247,244,239,.55); font-size: 12px;
+  }
+  .presenter .bar .left, .presenter .bar .right { display: flex; align-items: center; gap: 14px; }
+  .seal {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: var(--r-pill);
+    border: 1px solid rgba(255,255,255,.14); color: rgba(247,244,239,.72); font-size: 11px;
+  }
+  .seal i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); display: block; }
+  .presenter .icon-btn { color: rgba(247,244,239,.6); }
+  .presenter .icon-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+  .timer { font-variant-numeric: tabular-nums; color: rgba(247,244,239,.75); }
+  .notes { max-width: 46ch; color: rgba(247,244,239,.42); font-size: 12px; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 1180px) {
+    :root { --inspector-w: 0px; }
+    .inspector { display: none; }
+  }
+  @media (max-width: 1024px) {
+    :root { --rail-w: 96px; }
+    .thumbs { padding: 4px 8px 10px; }
+    .panel-head .panel-title, .dev-toggle span, .add-slide span { display: none; }
+    .add-slide { margin: 0 8px 10px; }
+  }
+
+  /* ---------- Reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    .canvas.generating .scan { display: none; }
+    .chip[data-state] .dot::after { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app" id="app" data-dev="off">
+
+  <!-- ============ Top bar ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#7C3AED"/><stop offset="1" stop-color="#FF6B4A"/>
+          </linearGradient>
+        </defs>
+        <rect x="1.25" y="1.25" width="23.5" height="23.5" rx="6.5" stroke="url(#g)" stroke-width="1.5"/>
+        <rect x="15.5" y="7" width="2.2" height="12" rx="1.1" fill="url(#g)"/>
+      </svg>
+      <span class="wordmark">Slyde<span>Code</span></span>
+      <span class="divider-v"></span>
+      <button class="project" type="button" aria-label="Renombrar proyecto">
+        <span id="projectName">El coste de las reuniones</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+    </div>
+
+    <div class="center-cluster">
+      <div class="theme-gallery" role="group" aria-label="Tema de la presentación">
+        <button class="swatch s1" type="button" aria-pressed="true" aria-label="Tema Studio" data-theme-pick="studio"></button>
+        <button class="swatch s2" type="button" aria-pressed="false" aria-label="Tema Papel" data-theme-pick="paper"></button>
+        <button class="swatch s3" type="button" aria-pressed="false" aria-label="Tema Noche" data-theme-pick="night"></button>
+      </div>
+
+      <button class="chip" id="aiChip" type="button" data-state="idle" aria-live="polite" title="Reproducir la secuencia de generación">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="aiLabel">Copiloto listo</span>
+        <span class="shimmer" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <div class="actions">
+      <button class="icon-btn" type="button" aria-label="Cambiar idioma" id="langBtn" title="ES / EN">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+      </button>
+      <button class="icon-btn" type="button" aria-label="Cambiar tema de la interfaz" id="themeBtn">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+      </button>
+      <button class="icon-btn" type="button" aria-label="Compartir">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.3M8.2 13.2l7.6 4.3"/></svg>
+      </button>
+      <button class="btn" type="button" id="exportBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span data-i18n="export">Exportar</span>
+      </button>
+      <button class="btn btn-primary" type="button" id="presentBtn">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>
+        <span data-i18n="present">Presentar</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ Workspace ============ -->
+  <div class="workspace">
+
+    <!-- Storyboard -->
+    <aside class="storyboard" aria-label="Diapositivas">
+      <div class="panel-head">
+        <span class="panel-title" data-i18n="slides">Diapositivas</span>
+        <button class="dev-toggle" id="devBtn" type="button" aria-pressed="false" title="Developer Mode">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></svg>
+          <span>Dev</span>
+        </button>
+      </div>
+
+      <div class="thumbs" id="thumbs">
+        <button class="thumb" type="button" aria-current="true" aria-label="Diapositiva 1">
+          <span class="thumb-inner"><i class="t"></i><i></i><i style="width:55%"></i><span class="big">42%</span></span>
+          <span class="num">1</span>
+        </button>
+        <button class="thumb" type="button" aria-current="false" aria-label="Diapositiva 2">
+          <span class="thumb-inner"><i class="t" style="width:50%"></i><i></i><i></i><i style="width:72%"></i></span>
+          <span class="num">2</span>
+        </button>
+        <button class="thumb" type="button" aria-current="false" aria-label="Diapositiva 3">
+          <span class="thumb-inner"><i class="t" style="width:62%"></i><span class="big" style="font-size:15px">6 h</span><i class="a" style="width:44%"></i></span>
+          <span class="num">3</span>
+        </button>
+        <button class="thumb" type="button" aria-current="false" aria-label="Diapositiva 4">
+          <span class="thumb-inner"><i class="t" style="width:40%"></i><i></i><i style="width:80%"></i><i style="width:60%"></i><i style="width:70%"></i></span>
+          <span class="num">4</span>
+        </button>
+      </div>
+
+      <div class="dev-panel" id="devPanel" aria-hidden="true">
+        <div class="log-line"><span class="k">POST</span> /mcp  <span class="s">200</span>  4ms</div>
+        <div class="log-line">→ tools/call <span class="k">upsert_slide</span></div>
+        <div class="log-line">  index: 0</div>
+        <div class="log-line">  template: "hero"</div>
+        <div class="log-line">  bytes: 1842</div>
+        <div class="log-line"><span class="s">✓</span> state.revision = 12</div>
+        <div class="sep"></div>
+        <div class="log-line">{</div>
+        <div class="log-line">  "id": "sld_01HX…",</div>
+        <div class="log-line">  "aspect": "16:9",</div>
+        <div class="log-line">  "elements": 14,</div>
+        <div class="log-line">  "animations": 3</div>
+        <div class="log-line">}</div>
+      </div>
+
+      <button class="add-slide" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span data-i18n="newSlide">Nueva diapositiva</span>
+      </button>
+    </aside>
+
+    <!-- Stage -->
+    <main class="stage">
+      <div class="stage-wrap">
+        <div class="canvas" id="canvas" role="img" aria-label="Diapositiva 1: cada reunión de 30 minutos nos cuesta medio día de equipo">
+          <div class="slide">
+            <div class="slide-kicker reveal" style="--i:0">Operaciones · Q3</div>
+            <h1 class="reveal" style="--i:1">Cada reunión de 30 minutos nos cuesta medio día de equipo</h1>
+            <div class="slide-body">
+              <div class="stat reveal" style="--i:2">
+                <span class="num">42%</span>
+                <span class="cap">del tiempo semanal se va en sincronizar</span>
+              </div>
+              <div class="bars reveal" style="--i:3" aria-hidden="true">
+                <span class="bar" style="height:38%"></span>
+                <span class="bar" style="height:52%"></span>
+                <span class="bar" style="height:31%"></span>
+                <span class="bar" style="height:64%"></span>
+                <span class="bar" style="height:46%"></span>
+              </div>
+            </div>
+            <div class="slide-foot reveal" style="--i:4">Fuente: auditoría interna · 214 reuniones medidas</div>
+          </div>
+
+          <div class="gen" aria-hidden="true">
+            <div class="scan"></div>
+            <div class="gen-label" style="left: 7cqw; bottom: 7cqw;">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/></svg>
+              <span id="genLabel">Ajustando el layout…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Inspector -->
+    <aside class="inspector" aria-label="Propiedades">
+      <div class="insp-head">
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" aria-selected="true" data-tab="design" data-i18n="design">Diseño</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="code" id="codeTab" hidden data-i18n="code">Código</button>
+        </div>
+      </div>
+
+      <div class="insp-body">
+        <section class="group">
+          <h2 data-i18n="layout">Formato</h2>
+          <div class="row">
+            <span data-i18n="ratio">Proporción</span>
+            <div class="seg" role="group" aria-label="Proporción">
+              <button type="button" aria-pressed="true">16:9</button>
+              <button type="button" aria-pressed="false">4:3</button>
+              <button type="button" aria-pressed="false">9:16</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h2 data-i18n="color">Color</h2>
+          <div class="row">
+            <span data-i18n="accent">Acento</span>
+            <div class="swatches" role="group" aria-label="Color de acento">
+              <button class="sw" style="background:#FF6B4A" aria-pressed="true" aria-label="Coral"></button>
+              <button class="sw" style="background:#7C3AED" aria-pressed="false" aria-label="Violeta"></button>
+              <button class="sw" style="background:#34D399" aria-pressed="false" aria-label="Verde"></button>
+              <button class="sw" style="background:#FBBF24" aria-pressed="false" aria-label="Ámbar"></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="group">
+          <h2 data-i18n="type">Tipografía</h2>
+          <div class="row">
+            <span data-i18n="family">Familia</span>
+            <select class="field" aria-label="Familia tipográfica">
+              <option>Geist</option>
+              <option>Inter</option>
+              <option>Söhne</option>
+            </select>
+          </div>
+          <div class="row">
+            <span data-i18n="scale">Escala</span>
+            <select class="field" aria-label="Escala tipográfica">
+              <option>Editorial</option>
+              <option>Compacta</option>
+              <option>Expresiva</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="group">
+          <h2 data-i18n="motion">Animación</h2>
+          <div class="row">
+            <span data-i18n="entrance">Entrada</span>
+            <select class="field" aria-label="Animación de entrada">
+              <option data-i18n="fadeUp">Aparecer y subir</option>
+              <option>Reveal</option>
+              <option>Ninguna</option>
+            </select>
+          </div>
+        </section>
+      </div>
+
+      <pre class="code-view" id="codeView" hidden><code>&lt;section class="slide" data-template="hero"&gt;
+  &lt;div class="slide-kicker"&gt;Operaciones · Q3&lt;/div&gt;
+  &lt;h1&gt;Cada reunión de 30 minutos
+      nos cuesta medio día de equipo&lt;/h1&gt;
+  &lt;div class="slide-body"&gt;
+    &lt;div class="stat"&gt;
+      &lt;span class="num"&gt;42%&lt;/span&gt;
+      &lt;span class="cap"&gt;del tiempo semanal
+        se va en sincronizar&lt;/span&gt;
+    &lt;/div&gt;
+    &lt;div class="bars"&gt;…&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/section&gt;</code></pre>
+
+      <div class="insp-foot">
+        <button class="btn btn-primary regen" type="button" id="regenBtn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>
+          <span data-i18n="regenerate">Regenerar con IA</span>
+        </button>
+      </div>
+    </aside>
+  </div>
+  <!-- ============ HUD ============ -->
+  <footer class="hud">
+    <div class="hud-left">
+      <div class="pager">
+        <button type="button" aria-label="Diapositiva anterior">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span id="pagerLabel">1 / 4</span>
+        <button type="button" aria-label="Diapositiva siguiente">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+      <span class="conn" title="Conectado">
+        <i aria-hidden="true"></i><span data-i18n="connected">Conectado</span>
+      </span>
+    </div>
+
+    <div class="hud-right">
+      <span class="dev-only" aria-hidden="true">FPS 60 · RAM 48 MB · rev 12</span>
+      <span class="zoom">
+        <span data-i18n="zoom">Zoom</span>
+        <input class="field" value="100%" aria-label="Zoom">
+      </span>
+    </div>
+  </footer>
+</div>
+
+<!-- ============ Presenter ============ -->
+<div class="presenter" id="presenter" data-open="false" role="dialog" aria-modal="true" aria-label="Modo presentación">
+  <div class="slide-frame">
+    <div class="canvas" id="presenterCanvas"></div>
+  </div>
+  <div class="bar">
+    <div class="left">
+      <button class="icon-btn" type="button" id="closePresenter" aria-label="Salir de la presentación">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <span class="timer" id="timer">00:00</span>
+      <span class="seal"><i aria-hidden="true"></i><span data-i18n="aiSeal">Generado con IA</span></span>
+    </div>
+    <div class="right">
+      <p class="notes" data-i18n="notes">Notas: cerrar con la cifra de horas recuperadas y proponer un piloto de dos semanas.</p>
+      <span id="presenterCount">1 / 4</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  const app = document.getElementById('app');
+  const canvas = document.getElementById('canvas');
+  const chip = document.getElementById('aiChip');
+  const aiLabel = document.getElementById('aiLabel');
+  const genLabel = document.getElementById('genLabel');
+
+  /* ---------- i18n (the real app loads locale files; this is inline for the mockup) ---------- */
+  const dict = {
+    es: {
+      export: 'Exportar', present: 'Presentar', slides: 'Diapositivas', newSlide: 'Nueva diapositiva',
+      design: 'Diseño', code: 'Código', layout: 'Formato', ratio: 'Proporción', color: 'Color',
+      accent: 'Acento', type: 'Tipografía', family: 'Familia', scale: 'Escala', motion: 'Animación',
+      entrance: 'Entrada', fadeUp: 'Aparecer y subir', regenerate: 'Regenerar con IA',
+      connected: 'Conectado', zoom: 'Zoom', aiSeal: 'Generado con IA',
+      notes: 'Notas: cerrar con la cifra de horas recuperadas y proponer un piloto de dos semanas.',
+      idle: 'Copiloto listo', thinking: 'Pensando…', writing: 'Escribiendo diapositiva 3…',
+      adjusting: 'Ajustando el layout…', animating: 'Aplicando animación de entrada…', done: 'Lista',
+      genAdjust: 'Ajustando el layout…'
+    },
+    en: {
+      export: 'Export', present: 'Present', slides: 'Slides', newSlide: 'New slide',
+      design: 'Design', code: 'Code', layout: 'Format', ratio: 'Aspect ratio', color: 'Color',
+      accent: 'Accent', type: 'Typography', family: 'Family', scale: 'Scale', motion: 'Motion',
+      entrance: 'Entrance', fadeUp: 'Fade up', regenerate: 'Regenerate with AI',
+      connected: 'Connected', zoom: 'Zoom', aiSeal: 'AI generated',
+      notes: 'Notes: close with the hours recovered and propose a two-week pilot.',
+      idle: 'Co-pilot ready', thinking: 'Thinking…', writing: 'Writing slide 3…',
+      adjusting: 'Adjusting layout…', animating: 'Applying entrance animation…', done: 'Done',
+      genAdjust: 'Adjusting layout…'
+    }
+  };
+  let lang = 'es';
+  const t = (key) => dict[lang][key] ?? key;
+
+  function applyLang() {
+    document.documentElement.dataset.lang = lang;
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.dataset.i18n;
+      if (dict[lang][key]) el.textContent = dict[lang][key];
+    });
+    aiLabel.textContent = t(chip.dataset.state);
+    genLabel.textContent = t('genAdjust');
+  }
+
+  /* ---------- Theme ---------- */
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+  });
+  document.getElementById('langBtn').addEventListener('click', () => {
+    lang = lang === 'es' ? 'en' : 'es';
+    applyLang();
+  });
+
+  /* ---------- Storyboard selection ---------- */
+  const thumbs = [...document.querySelectorAll('.thumb')];
+  const pagerLabel = document.getElementById('pagerLabel');
+  thumbs.forEach((thumb, index) => {
+    thumb.addEventListener('click', () => {
+      thumbs.forEach((other) => other.setAttribute('aria-current', 'false'));
+      thumb.setAttribute('aria-current', 'true');
+      pagerLabel.textContent = `${index + 1} / ${thumbs.length}`;
+      document.getElementById('presenterCount').textContent = `${index + 1} / ${thumbs.length}`;
+    });
+  });
+
+  /* ---------- Developer Mode ---------- */
+  const devBtn = document.getElementById('devBtn');
+  const codeTab = document.getElementById('codeTab');
+  devBtn.addEventListener('click', () => {
+    const on = app.dataset.dev === 'on';
+    app.dataset.dev = on ? 'off' : 'on';
+    devBtn.setAttribute('aria-pressed', String(!on));
+    document.getElementById('devPanel').setAttribute('aria-hidden', String(on));
+    codeTab.hidden = on;
+  });
+
+  /* ---------- Inspector tabs ---------- */
+  const inspBody = document.querySelector('.insp-body');
+  const codeView = document.getElementById('codeView');
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((other) => other.setAttribute('aria-selected', 'false'));
+      tab.setAttribute('aria-selected', 'true');
+      const showCode = tab.dataset.tab === 'code';
+      inspBody.style.display = showCode ? 'none' : '';
+      codeView.style.display = showCode ? 'block' : 'none';
+    });
+  });
+  codeView.style.display = 'none';
+
+  /* ---------- Slide theme gallery ---------- */
+  document.querySelectorAll('[data-theme-pick]').forEach((swatch) => {
+    swatch.addEventListener('click', () => {
+      document.querySelectorAll('[data-theme-pick]').forEach((other) => other.setAttribute('aria-pressed', 'false'));
+      swatch.setAttribute('aria-pressed', 'true');
+      canvas.dataset.slide = swatch.dataset.themePick;
+    });
+  });
+
+  /* ---------- Generation sequence ---------- */
+  let running = false;
+  const sequence = [
+    { state: 'thinking', at: 0 },
+    { state: 'writing', at: 420 },
+    { state: 'adjusting', at: 1500 },
+    { state: 'animating', at: 2300 },
+    { state: 'done', at: 3200 }
+  ];
+
+  function runGeneration() {
+    if (running) return;
+    running = true;
+    canvas.classList.add('generating');
+    sequence.forEach(({ state, at }) => {
+      setTimeout(() => {
+        chip.dataset.state = state;
+        aiLabel.textContent = t(state);
+      }, at);
+    });
+    setTimeout(() => {
+      canvas.classList.remove('generating');
+      running = false;
+    }, 3800);
+  }
+
+  chip.addEventListener('click', runGeneration);
+  document.getElementById('regenBtn').addEventListener('click', runGeneration);
+
+  /* ---------- Presenter ---------- */
+  const presenter = document.getElementById('presenter');
+  const presenterCanvas = document.getElementById('presenterCanvas');
+  let timerId = null;
+  let seconds = 0;
+
+  function openPresenter() {
+    presenterCanvas.innerHTML = canvas.querySelector('.slide').outerHTML;
+    presenter.dataset.open = 'true';
+    seconds = 0;
+    document.getElementById('timer').textContent = '00:00';
+    timerId = setInterval(() => {
+      seconds += 1;
+      const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
+      const ss = String(seconds % 60).padStart(2, '0');
+      document.getElementById('timer').textContent = `${mm}:${ss}`;
+    }, 1000);
+    document.getElementById('closePresenter').focus();
+  }
+  function closePresenter() {
+    presenter.dataset.open = 'false';
+    clearInterval(timerId);
+  }
+  document.getElementById('presentBtn').addEventListener('click', openPresenter);
+  document.getElementById('closePresenter').addEventListener('click', closePresenter);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && presenter.dataset.open === 'true') closePresenter();
+    if (event.key === 'ArrowRight') document.querySelector('.pager button:last-child').click();
+    if (event.key === 'ArrowLeft') document.querySelector('.pager button:first-child').click();
+  });
+
+  /* ---------- Init ---------- */
+  applyLang();
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    setTimeout(runGeneration, 600);
+  }
+</script>
+</body>
+</html>
