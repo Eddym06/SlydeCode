@@ -212,7 +212,10 @@ fn is_css_color(value: &str) -> bool {
     if let Some(hex) = v.strip_prefix('#') {
         return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|c| c.is_ascii_hexdigit());
     }
-    (v.starts_with("rgb(") || v.starts_with("rgba(") || v.starts_with("hsl(") || v.starts_with("oklch("))
+    (v.starts_with("rgb(")
+        || v.starts_with("rgba(")
+        || v.starts_with("hsl(")
+        || v.starts_with("oklch("))
         && v.ends_with(')')
 }
 
@@ -329,8 +332,10 @@ mod tests {
     #[test]
     fn presentation_finds_slides_by_id() {
         let mut deck = Presentation::new("Deck", Theme::studio(), AspectRatio::R16x9);
-        deck.slides.push(Slide::new("a".into(), "<h1>A</h1>".into()));
-        deck.slides.push(Slide::new("b".into(), "<h1>B</h1>".into()));
+        deck.slides
+            .push(Slide::new("a".into(), "<h1>A</h1>".into()));
+        deck.slides
+            .push(Slide::new("b".into(), "<h1>B</h1>".into()));
         assert_eq!(deck.slide_index("b"), Some(1));
         assert_eq!(deck.slide("a").unwrap().code, "<h1>A</h1>");
         assert!(deck.slide("missing").is_none());

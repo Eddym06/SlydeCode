@@ -25,9 +25,73 @@
     <div class="hud-hint" id="hud-hint">
       <kbd>←</kbd><kbd>→</kbd> <span data-i18n="present.navigate">navigate</span>
       <span class="hud-dot">·</span>
+      <kbd>S</kbd> <span id="hud-speaker" data-i18n="present.speakerMode">Speaker notes</span>
+      <span class="hud-dot">·</span>
       <kbd>F</kbd> <span data-i18n="present.fullscreen">fullscreen</span>
       <span class="hud-dot">·</span>
       <kbd>Esc</kbd> <span data-i18n="present.exit">exit</span>
+    </div>
+  </div>
+
+  <div class="speaker-console" id="speaker-console" hidden>
+    <header class="speaker-top">
+      <div class="speaker-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M5 6.5h14M5 12h9M5 17.5h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </span>
+        <span class="speaker-title" id="speaker-deck-title">SlydeCode</span>
+      </div>
+      <div class="speaker-clocks">
+        <div class="speaker-clock">
+          <span class="clock-label" data-i18n="present.clock">Clock</span>
+          <span class="clock-time" id="wall-clock">00:00:00</span>
+        </div>
+        <div class="speaker-timer">
+          <span class="clock-label" data-i18n="present.timer">Timer</span>
+          <span class="timer-digits" id="timer-display">00:00</span>
+          <button type="button" class="speaker-btn speaker-btn-sm" id="timer-toggle">▶</button>
+          <button type="button" class="speaker-btn speaker-btn-sm" id="timer-reset">↺</button>
+        </div>
+      </div>
+      <div class="speaker-actions">
+        <button type="button" class="speaker-btn" id="exit-speaker" data-i18n="present.standardMode">Slide view</button>
+      </div>
+    </header>
+
+    <div class="speaker-body">
+      <div class="speaker-col-slides">
+        <div class="speaker-card current-card">
+          <div class="speaker-card-head">
+            <span class="badge" data-i18n="a11y.slideCanvas">Current slide</span>
+            <span class="slide-num"><span id="sc-current">1</span> / <span id="sc-total">1</span></span>
+          </div>
+          <div class="speaker-stage-wrap">
+            <iframe id="sc-current-frame" sandbox="allow-scripts" tabindex="-1"></iframe>
+          </div>
+        </div>
+        <div class="speaker-card next-card">
+          <div class="speaker-card-head">
+            <span class="badge badge-subtle" data-i18n="present.nextSlide">Next slide</span>
+          </div>
+          <div class="speaker-next-wrap">
+            <iframe id="sc-next-frame" sandbox="allow-scripts" tabindex="-1"></iframe>
+            <div class="no-next-hint" id="no-next-hint" hidden>End of presentation</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="speaker-col-notes">
+        <div class="speaker-card notes-card">
+          <div class="speaker-card-head">
+            <span data-i18n="present.notesTitle">Speaker Notes</span>
+            <div class="notes-font-controls">
+              <button type="button" class="speaker-btn speaker-btn-sm" id="notes-font-down">A-</button>
+              <button type="button" class="speaker-btn speaker-btn-sm" id="notes-font-up">A+</button>
+            </div>
+          </div>
+          <div class="speaker-notes-content" id="speaker-notes-body"></div>
+        </div>
+      </div>
     </div>
   </div>
 

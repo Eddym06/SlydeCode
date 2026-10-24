@@ -31,3 +31,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.30"
+# Provider transports. rustls keeps the binary free of an OpenSSL runtime
+# dependency on Windows, macOS and Linux.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+base64 = "0.22"
+# PDF/DOCX/PPTX text extraction for copilot attachments.
+pdf-extract = "0.12"

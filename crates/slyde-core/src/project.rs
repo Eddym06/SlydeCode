@@ -207,7 +207,8 @@ mod tests {
             ProjectFile::from_json(&json),
             Err(CoreError::InvalidTheme(_))
         ));
-    }    #[test]
+    }
+    #[test]
     fn accepts_a_deck_with_no_slides() {
         let deck = Presentation::new("Empty", Theme::paper(), AspectRatio::R4x3);
         let json = ProjectFile::new(deck).to_json().unwrap();

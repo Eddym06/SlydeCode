@@ -11,6 +11,7 @@
 
 pub mod agent;
 pub mod chrome;
+pub mod copilot;
 pub mod error;
 pub mod export_api;
 pub mod http;
@@ -125,13 +126,14 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
         None => (None, None),
     };
 
-    let state = AppState::with_deck_sink(
+    let state = AppState::with_copilot(
         config.state,
         config.token.clone(),
         config.ui_dir,
         origins,
         format!("http://127.0.0.1:{sandbox_port}"),
         deck_tx,
+        Arc::new(copilot::CopilotState::persistent()),
     );
 
     if let Some((rx, path)) = autosave {

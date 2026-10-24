@@ -197,6 +197,34 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
     }
 }
 
+/// Executes a command and publishes every observable side effect.
+///
+/// Both the MCP bridge (`/api/agent`) and the copilot use this entry point, so
+/// they cannot drift in event order or persistence behavior.
+pub async fn run(state: &AppState, command: AgentCommand) -> Result<AgentOutcome, CoreError> {
+    let mut activity = command.activity();
+    state.broadcast(activity.event(activity.phase));
+
+    match handle(state, command).await {
+        Ok(outcome) => {
+            if let Some(upsert) = &outcome.upsert {
+                activity.slide_id = Some(upsert.slide_id.clone());
+                activity.slide_index = Some(upsert.index);
+            }
+            if let Some(event) = outcome.animation.clone() {
+                state.broadcast(event);
+            }
+            state.publish_state().await;
+            state.broadcast(activity.event(AgentPhase::Done));
+            Ok(outcome)
+        }
+        Err(error) => {
+            state.broadcast(activity.event(AgentPhase::Error));
+            Err(error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,5 @@
 import { createClient, readToken } from "./api.js";
-import { apply as applyI18n } from "./i18n.js";
+import { apply as applyI18n, t } from "./i18n.js";
 
 const token = readToken();
 const frame = document.getElementById("present-slide");
@@ -11,14 +11,107 @@ const totalEl = document.getElementById("total");
 const progress = document.getElementById("progress-fill");
 const progressBar = document.getElementById("progress");
 
+const speakerConsole = document.getElementById("speaker-console");
+const speakerTitle = document.getElementById("speaker-deck-title");
+const scCurrent = document.getElementById("sc-current");
+const scTotal = document.getElementById("sc-total");
+const scCurrentFrame = document.getElementById("sc-current-frame");
+const scNextFrame = document.getElementById("sc-next-frame");
+const noNextHint = document.getElementById("no-next-hint");
+const speakerNotesBody = document.getElementById("speaker-notes-body");
+const wallClock = document.getElementById("wall-clock");
+const timerDisplay = document.getElementById("timer-display");
+const timerToggle = document.getElementById("timer-toggle");
+const timerReset = document.getElementById("timer-reset");
+const exitSpeaker = document.getElementById("exit-speaker");
+const hudSpeaker = document.getElementById("hud-speaker");
+const notesFontDown = document.getElementById("notes-font-down");
+const notesFontUp = document.getElementById("notes-font-up");
+
 let view = null;
 let index = 0;
 let sandboxOrigin = "";
 let slideKey = "";
 let hudTimer = null;
 let pendingSteps = [];
+let timerSeconds = 0;
+let timerRunning = false;
+let timerInterval = null;
+let notesFontSize = 18;
+let isSpeakerMode = new URLSearchParams(window.location.search).get("speaker") === "1";
 
 applyI18n();
+
+function updateClock() {
+  if (wallClock) {
+    const now = new Date();
+    wallClock.textContent = now.toTimeString().slice(0, 8);
+  }
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function startTimer() {
+  if (timerRunning) return;
+  timerRunning = true;
+  if (timerToggle) timerToggle.textContent = "⏸";
+  timerInterval = setInterval(() => {
+    timerSeconds += 1;
+    if (timerDisplay) timerDisplay.textContent = formatTime(timerSeconds);
+  }, 1000);
+}
+
+function pauseTimer() {
+  timerRunning = false;
+  if (timerToggle) timerToggle.textContent = "▶";
+  clearInterval(timerInterval);
+}
+
+if (timerToggle) {
+  timerToggle.addEventListener("click", () => {
+    if (timerRunning) pauseTimer();
+    else startTimer();
+  });
+}
+
+if (timerReset) {
+  timerReset.addEventListener("click", () => {
+    pauseTimer();
+    timerSeconds = 0;
+    if (timerDisplay) timerDisplay.textContent = "00:00";
+  });
+}
+
+function toggleSpeakerMode(force) {
+  isSpeakerMode = typeof force === "boolean" ? force : !isSpeakerMode;
+  if (speakerConsole) speakerConsole.hidden = !isSpeakerMode;
+  if (isSpeakerMode && !timerRunning && timerSeconds === 0) {
+    startTimer();
+  }
+  if (view) renderSpeakerConsole();
+}
+
+if (exitSpeaker) exitSpeaker.addEventListener("click", () => toggleSpeakerMode(false));
+if (hudSpeaker) hudSpeaker.addEventListener("click", () => toggleSpeakerMode(true));
+
+if (notesFontDown) {
+  notesFontDown.addEventListener("click", () => {
+    notesFontSize = Math.max(14, notesFontSize - 2);
+    if (speakerNotesBody) speakerNotesBody.style.fontSize = `${notesFontSize}px`;
+  });
+}
+if (notesFontUp) {
+  notesFontUp.addEventListener("click", () => {
+    notesFontSize = Math.min(32, notesFontSize + 2);
+    if (speakerNotesBody) speakerNotesBody.style.fontSize = `${notesFontSize}px`;
+  });
+}
 
 if (token) {
   start(token);
@@ -32,6 +125,7 @@ async function start(sessionToken) {
     const payload = await client.getState();
     sandboxOrigin = payload.sandbox_origin;
     applyView(payload.view);
+    if (isSpeakerMode) toggleSpeakerMode(true);
     client.connect({ onEvent: onEvent, onStatus: () => {} });
   } catch {
     empty.hidden = false;
@@ -39,6 +133,38 @@ async function start(sessionToken) {
 
   function onEvent(event) {
     if (event.type === "state_changed") applyView(event.view);
+  }
+
+  function renderSpeakerConsole() {
+    if (!speakerConsole || speakerConsole.hidden || !view) return;
+    const slides = view.presentation.slides;
+    if (!slides.length) return;
+    const slide = slides[index];
+    if (speakerTitle) speakerTitle.textContent = view.presentation.title || "SlydeCode";
+    if (scCurrent) scCurrent.textContent = String(index + 1);
+    if (scTotal) scTotal.textContent = String(slides.length);
+    if (scCurrentFrame) {
+      scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?static=1`;
+    }
+    if (index + 1 < slides.length) {
+      const nextSlide = slides[index + 1];
+      if (scNextFrame) {
+        scNextFrame.hidden = false;
+        scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
+      }
+      if (noNextHint) noNextHint.hidden = true;
+    } else {
+      if (scNextFrame) scNextFrame.hidden = true;
+      if (noNextHint) noNextHint.hidden = false;
+    }
+    if (speakerNotesBody) {
+      if (slide.notes && slide.notes.trim()) {
+        speakerNotesBody.textContent = slide.notes;
+        speakerNotesBody.classList.remove("speaker-notes-empty");
+      } else {
+        speakerNotesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
+      }
+    }
   }
 
   function applyView(next) {
@@ -73,6 +199,7 @@ async function start(sessionToken) {
     }
 
     fit();
+    renderSpeakerConsole();
   }
 
   function fit() {
@@ -105,8 +232,6 @@ async function start(sessionToken) {
   });
 
   frame.addEventListener("load", () => {
-    // Fallback for the ready handshake; posting twice is harmless because each
-    // animation is a fresh WAAPI call on a visible element.
     window.setTimeout(playPending, 120);
   });
 
@@ -131,16 +256,24 @@ async function start(sessionToken) {
     } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
       event.preventDefault();
       go(-1);
+    } else if (event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      toggleSpeakerMode();
     } else if (event.key.toLowerCase() === "f") {
       toggleFullscreen();
     } else if (event.key === "Escape") {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else window.close();
+      if (isSpeakerMode) {
+        toggleSpeakerMode(false);
+      } else if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        window.close();
+      }
     }
   });
 
   document.addEventListener("click", (event) => {
-    if (event.target.closest("#hud")) return;
+    if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
     if (event.clientX < window.innerWidth / 2) go(-1);
     else go(1);
   });

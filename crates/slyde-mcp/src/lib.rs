@@ -221,7 +221,10 @@ mod tests {
         let response = handle_line(&runtime(), line).await.unwrap();
         assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
         assert_eq!(response["result"]["serverInfo"]["name"], "slydecode");
-        assert_eq!(response["result"]["capabilities"]["tools"]["listChanged"], false);
+        assert_eq!(
+            response["result"]["capabilities"]["tools"]["listChanged"],
+            false
+        );
     }
 
     #[tokio::test]
@@ -262,9 +265,11 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#;
         let response = handle_line(&runtime(), line).await.unwrap();
         assert_eq!(response["result"]["isError"], true);
-        assert!(response["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("unknown tool"));
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("unknown tool")
+        );
     }
 }

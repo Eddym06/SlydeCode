@@ -5,6 +5,8 @@ use axum::http::{HeaderMap, header};
 use slyde_core::{AnimationStep, CoreError, Presentation, PresentationState, StateView};
 use tokio::sync::{RwLock, broadcast, watch};
 
+use crate::copilot::CopilotState;
+
 pub const EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Everything the transport layer needs. Shared by the app router and the
@@ -21,6 +23,10 @@ pub struct AppState {
     /// When present, every committed deck is also handed to the autosave task.
     /// Tests and ephemeral servers leave it `None` and never touch the disk.
     deck_tx: Option<watch::Sender<Presentation>>,
+    /// Provider keys, model discovery and chat transports. The deck remains
+    /// the only shared mutable domain state; the copilot mutates it through
+    /// `agent::run`, never directly.
+    pub copilot: Arc<CopilotState>,
 }
 
 impl AppState {
@@ -42,6 +48,29 @@ impl AppState {
         sandbox_origin: String,
         deck_tx: Option<watch::Sender<Presentation>>,
     ) -> Arc<Self> {
+        Self::with_copilot(
+            core,
+            token,
+            ui_dir,
+            allowed_origins,
+            sandbox_origin,
+            deck_tx,
+            Arc::new(CopilotState::in_memory()),
+        )
+    }
+
+    /// Production constructor. `copilot` is persistent here; tests keep using
+    /// the in-memory constructor above and never read the user's key file.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_copilot(
+        core: PresentationState,
+        token: String,
+        ui_dir: PathBuf,
+        allowed_origins: Vec<String>,
+        sandbox_origin: String,
+        deck_tx: Option<watch::Sender<Presentation>>,
+        copilot: Arc<CopilotState>,
+    ) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Arc::new(Self {
             core: RwLock::new(core),
@@ -51,6 +80,7 @@ impl AppState {
             ui_dir,
             sandbox_origin,
             deck_tx,
+            copilot,
         })
     }
 
@@ -102,6 +132,9 @@ pub enum AgentAction {
     MoveSlide,
     SetNotes,
     TriggerAnimation,
+    /// The in-app copilot is generating or choosing a tool. This is the only
+    /// action that can legitimately sit in `Thinking` phase.
+    Chat,
 }
 
 /// Messages pushed to every connected UI over WebSocket.
@@ -156,6 +189,11 @@ pub enum UiCommand {
     },
     AddSlide {
         template: String,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    DuplicateSlide {
+        slide_id: String,
     },
     MoveSlide {
         from: usize,

@@ -30,7 +30,8 @@ pub async fn post_json(
     body: &serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, HttpError> {
-    let encoded = serde_json::to_vec(body).map_err(|e| HttpError::InvalidResponse(e.to_string()))?;
+    let encoded =
+        serde_json::to_vec(body).map_err(|e| HttpError::InvalidResponse(e.to_string()))?;
     request("POST", url, Some(encoded), timeout).await
 }
 

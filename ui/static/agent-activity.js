@@ -8,7 +8,9 @@
 //
 // The done state persists long enough to be read as confirmation; there is no
 // inferred "still working" tail, because after the command the agent is done.
-// `thinking` is reserved for a future explicit generation channel.
+// `thinking` belongs to the copilot's explicit SSE channel. It stays visible
+// until the next tool phase or outcome, with a safety window longer than the
+// provider request timeout.
 //
 // It is deliberately DOM-free so the timings can be tested with the Node test
 // runner instead of a browser clock.
@@ -16,7 +18,9 @@
 export const TIMING = Object.freeze({
   minPhase: 1000,
   doneHold: 2600,
-  thinkHold: 2400,
+  // Longer than the 300s provider request timeout, so a slow first token does
+  // not make the chip claim the copilot stopped thinking.
+  thinkHold: 310000,
   errorHold: 4200,
 });
 
@@ -109,7 +113,8 @@ export function receiveActivity(current, event, now = Date.now()) {
     };
   }
 
-  // `thinking` is reserved for a future explicit generation channel.
+  // The copilot's explicit stream resets this window at request start and
+  // between tool rounds; done/error always wins.
   const hideAt = Math.max(current.hideAt || 0, now + TIMING.thinkHold);
   return {
     ...current,

@@ -33,6 +33,10 @@
       <div class="deck-meta">
         <input id="deck-title" class="deck-title" data-i18n-placeholder="deck.untitled"
                data-i18n-aria="deck.titleLabel" spellcheck="false" aria-label="Deck title">
+        <div class="save-status" id="save-status" role="status" aria-live="polite">
+          <span class="save-dot" id="save-dot" aria-hidden="true"></span>
+          <span class="save-label" id="save-label" data-i18n="deck.saved">Saved</span>
+        </div>
         <div class="agent-chip" id="agent-chip" data-phase="idle" hidden>
           <span class="agent-dot" aria-hidden="true"></span>
           <span class="agent-label" id="agent-label"></span>
@@ -40,6 +44,15 @@
       </div>
 
       <div class="topbar-actions">
+        <div class="zoom-controls" id="zoom-controls" role="group" aria-label="Canvas zoom">
+          <button type="button" class="icon-btn icon-btn-sm" id="zoom-out" data-i18n-title="zoom.out" aria-label="Zoom out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
+          </button>
+          <button type="button" class="zoom-pill" id="zoom-value" data-i18n="zoom.fit">Fit</button>
+          <button type="button" class="icon-btn icon-btn-sm" id="zoom-in" data-i18n-title="zoom.in" aria-label="Zoom in">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
         <div class="seg" id="lang-switch" role="group" data-i18n-aria="lang.label" aria-label="Language">
           <button type="button" data-lang="en" data-i18n-aria="lang.english" aria-label="English" aria-pressed="false">EN</button>
           <button type="button" data-lang="es" data-i18n-aria="lang.spanish" aria-label="Spanish" aria-pressed="false">ES</button>
@@ -63,6 +76,29 @@
             <path d="M15 7h4v4"/><path d="M18.5 11a7 7 0 1 0-1.6 7.3"/>
           </svg>
         </button>
+        <div class="dropdown" id="export-dropdown">
+          <button type="button" class="btn btn-ghost topbar-export-btn" id="export-menu-trigger" aria-haspopup="menu" aria-expanded="false" data-i18n-title="export.button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span data-i18n="export.button">Export</span>
+          </button>
+          <div class="dropdown-menu" id="export-menu" role="menu" hidden>
+            <button type="button" class="dropdown-item" id="topbar-export-pdf" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span data-i18n="export.asPdf">PDF Document</span>
+            </button>
+            <button type="button" class="dropdown-item" id="topbar-export-png" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span data-i18n="export.asPng">PNG Images (ZIP)</span>
+            </button>
+            <div class="dropdown-divider"></div>
+            <button type="button" class="dropdown-item" id="topbar-save-deck" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              <span data-i18n="export.asSlyde">Slyde Deck (.slyde)</span>
+            </button>
+          </div>
+        </div>
         <button type="button" class="btn btn-primary" id="present">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10-6.5z"/></svg>
           <span data-i18n="action.present">Present</span>
@@ -77,9 +113,21 @@
           <span class="count" id="slide-count"></span>
         </div>
         <div class="storyboard" id="storyboard" data-i18n-aria="storyboard.title" aria-label="Storyboard"></div>
-        <button type="button" class="add-slide" id="add-slide">
-          + <span data-i18n="storyboard.add">Add slide</span>
-        </button>
+        <div class="add-slide-wrap">
+          <button type="button" class="add-slide" id="add-slide">
+            + <span data-i18n="storyboard.add">Add slide</span>
+          </button>
+          <button type="button" class="add-slide-picker" id="add-slide-picker" data-i18n-title="templatePicker.title" aria-label="Choose layout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="template-popover" id="template-popover" role="dialog" aria-modal="true" aria-label="Choose layout" hidden>
+          <div class="popover-header">
+            <span class="popover-title" data-i18n="templatePicker.title">Choose a layout</span>
+            <button type="button" class="icon-btn icon-btn-sm" id="close-template-popover" aria-label="Close">✕</button>
+          </div>
+          <div class="template-grid" id="template-grid"></div>
+        </div>
       </aside>
 
       <section class="stage-wrap">
@@ -98,7 +146,15 @@
             </div>
             <h1 data-i18n="empty.title">Your story starts here</h1>
             <p data-i18n="empty.body"></p>
-            <button type="button" class="btn btn-primary" id="empty-cta" data-i18n="empty.cta"></button>
+            <div class="empty-actions">
+              <button type="button" class="btn btn-primary" id="empty-cta" data-i18n="empty.cta"></button>
+              <button type="button" class="btn btn-ghost" id="empty-copilot">
+                <span class="spark-glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/></svg>
+                </span>
+                <span data-i18n="empty.copilot">Ask the copilot</span>
+              </button>
+            </div>
           </div>
         </div>
         <div class="stage-bar">
@@ -110,12 +166,117 @@
         </div>
       </section>
 
-      <aside class="inspector">
-        <div class="panel-head">
-          <span data-i18n="inspector.title">Inspector</span>
-          <span class="count" id="revision"></span>
+      <aside class="inspector" id="right-panel">
+        <div class="panel-tabs" role="tablist" data-i18n-aria="panel.tabs" aria-label="Studio panels">
+          <button type="button" class="panel-tab" id="tab-inspector" role="tab"
+                  aria-selected="true" aria-controls="inspector-panel" tabindex="0">
+            <span data-i18n="inspector.title">Inspector</span>
+          </button>
+          <button type="button" class="panel-tab" id="tab-copilot" role="tab"
+                  aria-selected="false" aria-controls="copilot-panel" tabindex="-1">
+            <span class="spark-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/></svg>
+            </span>
+            <span data-i18n="copilot.title">Copilot</span>
+            <span class="panel-live" id="copilot-live" hidden aria-hidden="true"></span>
+          </button>
         </div>
-        <div class="inspector-scroll" id="inspector"></div>
+
+        <div class="panel-body" id="inspector-panel" role="tabpanel" aria-labelledby="tab-inspector">
+          <div class="inspector-subtabs" role="tablist" aria-label="Inspector views">
+            <button type="button" class="inspector-subtab active" id="subtab-slide" role="tab" aria-selected="true" data-i18n="inspector.tabSlide">Slide</button>
+            <button type="button" class="inspector-subtab" id="subtab-deck" role="tab" aria-selected="false" data-i18n="inspector.tabDeck">Deck</button>
+          </div>
+          <div class="panel-head">
+            <span id="inspector-subhead" data-i18n="inspector.subtitle">Deck &amp; slide</span>
+            <span class="count" id="revision"></span>
+          </div>
+          <div class="inspector-scroll" id="inspector"></div>
+        </div>
+
+        <div class="copilot-panel" id="copilot-panel" role="tabpanel"
+             aria-labelledby="tab-copilot" hidden>
+          <div class="copilot-top">
+            <button type="button" class="provider-trigger" id="copilot-provider"
+                    aria-haspopup="dialog" aria-controls="copilot-sheet">
+              <span class="provider-avatar" id="copilot-provider-icon" aria-hidden="true"></span>
+              <span class="provider-copy">
+                <span class="provider-name" id="copilot-provider-name" data-i18n="copilot.connect">Connect AI</span>
+                <span class="provider-model" id="copilot-model-label" data-i18n="copilot.chooseModel">Choose a model</span>
+              </span>
+              <svg class="provider-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m7 10 5 5 5-5"/>
+              </svg>
+            </button>
+            <button type="button" class="icon-btn icon-btn-sm" id="copilot-new"
+                    data-i18n-title="copilot.newChat" data-i18n-aria="copilot.newChat"
+                    aria-label="New chat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="copilot-thread" id="copilot-thread" role="log"
+               aria-live="off" aria-relevant="additions text"></div>
+          <p class="sr-only" id="copilot-announcer" role="status" aria-live="polite"
+             aria-atomic="true"></p>
+
+          <div class="copilot-attachments" id="copilot-attachments" hidden></div>
+
+          <div class="copilot-context-bar" id="copilot-context-bar">
+            <span class="context-pill" id="copilot-context-pill"></span>
+          </div>
+          <div class="copilot-prompt-pills" id="copilot-prompt-pills"></div>
+
+          <form class="composer" id="copilot-form">
+            <div class="composer-field">
+              <textarea id="copilot-input" class="composer-input" rows="1"
+                        data-i18n-placeholder="copilot.placeholder"
+                        data-i18n-aria="copilot.inputLabel" aria-label="Message the copilot"
+                        spellcheck="true"></textarea>
+            </div>
+            <div class="composer-actions">
+              <button type="button" class="composer-btn" id="copilot-attach"
+                      data-i18n-title="copilot.attach" data-i18n-aria="copilot.attach"
+                      aria-label="Attach files">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20 11.5 12.4 19a4.5 4.5 0 0 1-6.4-6.4l7.3-7.3a3 3 0 0 1 4.3 4.3l-7.3 7.3a1.5 1.5 0 0 1-2.2-2.2l6.7-6.6"/>
+                </svg>
+              </button>
+              <button type="button" class="model-chip" id="copilot-model-chip"
+                      data-i18n-title="copilot.chooseModel" data-i18n-aria="copilot.chooseModel"
+                      aria-label="Choose a model">
+                <span id="copilot-model-chip-text" data-i18n="copilot.model">Model</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m7 10 5 5 5-5"/>
+                </svg>
+              </button>
+              <span class="composer-spacer"></span>
+              <button type="submit" class="send-btn" id="copilot-send"
+                      data-i18n-title="copilot.send" data-i18n-aria="copilot.send"
+                      aria-label="Send message">
+                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 19V5M6 11l6-6 6 6"/>
+                </svg>
+                <svg class="stop-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="2"/>
+                </svg>
+              </button>
+            </div>
+            <input type="file" id="copilot-file" hidden multiple
+                   accept="image/png,image/jpeg,image/webp,application/pdf,.docx,.pptx,.txt,.md,.csv,.json,.html,.css,.js,.ts,.yaml,.yml">
+          </form>
+          <p class="copilot-foot" data-i18n="copilot.foot">The copilot edits your real deck. Review changes as they happen.</p>
+
+          <div class="copilot-sheet" id="copilot-sheet" role="dialog" aria-modal="true"
+               aria-labelledby="copilot-sheet-title" hidden></div>
+        </div>
       </aside>
     </main>
   </div>

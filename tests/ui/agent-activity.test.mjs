@@ -118,10 +118,11 @@ test("done without an active phase still renders a legible done state", () => {
   assert.equal(tickActivity(state, state.doneUntil).phase, "idle");
 });
 
-test("an explicit thinking event stays bounded and expires", () => {
+test("an explicit thinking event outlives a provider timeout and expires", () => {
   const now = 2_000;
   const state = receiveActivity(idleActivity(), { phase: "thinking" }, now);
   assert.equal(state.phase, "thinking");
+  assert.ok(TIMING.thinkHold > 300_000, "thinking covers the 300s provider timeout");
   assert.equal(state.hideAt, now + TIMING.thinkHold);
   assert.equal(tickActivity(state, state.hideAt - 1).phase, "thinking");
   assert.equal(tickActivity(state, state.hideAt).phase, "idle");

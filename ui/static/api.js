@@ -57,6 +57,92 @@ export function createClient(token) {
       });
     },
 
+    async copilotConfig() {
+      const payload = await json(`/api/copilot/config?${query}`);
+      return payload.config;
+    },
+
+    async copilotModels(provider) {
+      const payload = await json(
+        `/api/copilot/models?provider=${encodeURIComponent(provider)}&${query}`
+      );
+      return payload.models || [];
+    },
+
+    async copilotSaveKey(provider, key) {
+      const payload = await json(`/api/copilot/key?${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, key }),
+      });
+      return payload.models || [];
+    },
+
+    /**
+     * POSTs a chat turn and consumes the SSE response. The server frames each
+     * event as a single `data:` JSON line, so the parser stays small and does
+     * not need an EventSource (which cannot POST or carry an abort signal).
+     */
+    async streamChat(payload, { signal, onEvent } = {}) {
+      const response = await fetch(`/api/copilot/chat?${query}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal,
+      });
+      if (!response.ok) {
+        let body = null;
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+        const error = new Error(body && body.error ? body.error : `HTTP ${response.status}`);
+        error.code = body && body.code ? body.code : "copilot_failed";
+        throw error;
+      }
+      if (!response.body) {
+        const error = new Error("streaming is not available in this browser");
+        error.code = "network";
+        throw error;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const dispatch = (block) => {
+        if (!block.trim()) return;
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (!data || data === "keep-alive") return;
+        try {
+          const event = JSON.parse(data);
+          if (event && event.type) onEvent(event);
+        } catch {
+          // A provider or proxy should never send malformed frames through the
+          // server, but one bad frame must not kill the rest of the stream.
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          dispatch(buffer.slice(0, boundary));
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) dispatch(buffer);
+    },
+
     /**
      * Renders the deck with headless Chrome and returns the finished file.
      * Progress arrives over the WebSocket as `export_progress` events.

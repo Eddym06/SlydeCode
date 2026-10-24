@@ -13,9 +13,7 @@ use tower_http::services::ServeDir;
 
 use crate::agent::{self, AgentCommand};
 use crate::sandbox;
-use crate::state::{
-    AgentPhase, AppState, AuthQuery, ServerEvent, UiCommand, is_authorized, origin_allowed,
-};
+use crate::state::{AppState, AuthQuery, ServerEvent, UiCommand, is_authorized, origin_allowed};
 
 /// Ceiling for an uploaded `.slyde` file. Core limits already cap slides and
 /// per-slide code; this stops an oversized body before it is parsed.
@@ -45,6 +43,21 @@ pub fn app_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/deck/open",
             post(api_deck_open).layer(DefaultBodyLimit::max(MAX_DECK_UPLOAD_BYTES)),
+        )
+        .route(
+            "/api/copilot/config",
+            get(crate::copilot::routes::api_config),
+        )
+        .route(
+            "/api/copilot/models",
+            get(crate::copilot::routes::api_models),
+        )
+        .route("/api/copilot/key", post(crate::copilot::routes::api_key))
+        .route(
+            "/api/copilot/chat",
+            post(crate::copilot::routes::api_chat).layer(DefaultBodyLimit::max(
+                crate::copilot::routes::MAX_CHAT_BODY_BYTES,
+            )),
         )
         .route("/ws", get(crate::ws::upgrade))
         .nest_service("/static", static_dir)
@@ -165,15 +178,33 @@ async fn apply_command(
             core.set_aspect_ratio(parsed).map(|_| None)
         }
         UiCommand::SetNotes { slide_id, notes } => core.set_notes(&slide_id, notes).map(|_| None),
-        UiCommand::AddSlide { template } => {
+        UiCommand::AddSlide { template, index } => {
             let code = crate::starter::default_code(&template);
-            let index = core.presentation().slides.len();
+            let target_index = index.unwrap_or_else(|| core.presentation().slides.len());
             core.upsert_slide(
-                index,
+                target_index,
                 None,
                 code,
                 crate::starter::template_type(&template),
                 crate::starter::default_animation_for(&template),
+            )
+            .map(|_| None)
+        }
+        UiCommand::DuplicateSlide { slide_id } => {
+            let (current_idx, slide) = core
+                .presentation()
+                .slides
+                .iter()
+                .enumerate()
+                .find(|(_, s)| s.id == slide_id)
+                .map(|(idx, s)| (idx, s.clone()))
+                .ok_or_else(|| CoreError::SlideNotFound(slide_id))?;
+            core.upsert_slide(
+                current_idx + 1,
+                None,
+                slide.code,
+                slide.template,
+                slide.animation,
             )
             .map(|_| None)
         }
@@ -208,37 +239,20 @@ async fn api_agent(
         return unauthorized();
     }
 
-    let mut activity = command.activity();
-    state.broadcast(activity.event(activity.phase));
-
-    match agent::handle(&state, command).await {
-        Ok(outcome) => {
-            if let Some(upsert) = &outcome.upsert {
-                activity.slide_id = Some(upsert.slide_id.clone());
-                activity.slide_index = Some(upsert.index);
-            }
-            if let Some(event) = outcome.animation.clone() {
-                state.broadcast(event);
-            }
-            state.publish_state().await;
-            state.broadcast(activity.event(AgentPhase::Done));
-            Json(json!({
-                "ok": true,
-                "created": outcome.created,
-                "upsert": outcome.upsert,
-                "sandbox_origin": state.sandbox_origin,
-                "view": state.view().await
-            }))
-            .into_response()
-        }
-        Err(err) => {
-            state.broadcast(activity.event(AgentPhase::Error));
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "ok": false, "error": err.to_string() })),
-            )
-                .into_response()
-        }
+    match agent::run(&state, command).await {
+        Ok(outcome) => Json(json!({
+            "ok": true,
+            "created": outcome.created,
+            "upsert": outcome.upsert,
+            "sandbox_origin": state.sandbox_origin,
+            "view": state.view().await
+        }))
+        .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": err.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -641,6 +655,45 @@ mod tests {
         let added = &core.presentation().slides[1];
         assert!(added.code.contains("class=\"title\""));
         assert_eq!(added.animation.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn duplicate_slide_clones_content_and_inserts_after() {
+        let state = test_state();
+        let app = app_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::post("/api/command?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"action":"duplicate_slide","slide_id":"sld_a"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let core = state.core.read().await;
+        assert_eq!(core.presentation().slides.len(), 2);
+        assert_ne!(core.presentation().slides[0].id, core.presentation().slides[1].id);
+        assert_eq!(core.presentation().slides[0].code, core.presentation().slides[1].code);
+    }
+
+    #[tokio::test]
+    async fn add_slide_supports_explicit_index() {
+        let state = test_state();
+        let app = app_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::post("/api/command?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"action":"add_slide","template":"bullets","index":0}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let core = state.core.read().await;
+        assert_eq!(core.presentation().slides.len(), 2);
+        assert_eq!(core.presentation().slides[0].template, slyde_core::TemplateType::Bullet);
     }
 
     #[tokio::test]

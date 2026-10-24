@@ -1,0 +1,201 @@
+//! HTTP surface for the copilot.
+//!
+//! Same token/origin guard as every other state-changing route. API keys go in,
+//! model metadata and streamed chat events go out — never keys back.
+
+use std::convert::Infallible;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
+use futures_util::stream;
+use serde::Deserialize;
+use serde_json::json;
+use tokio::sync::mpsc;
+
+use crate::state::{AppState, AuthQuery, is_authorized, origin_allowed};
+
+use super::chat::{self, ChatRequest};
+use super::error::CopilotError;
+use super::wire::ChatEvent;
+
+/// Generous because images and PDFs are base64-encoded in the request. The
+/// attachment decoder applies its own, tighter per-file limits.
+pub const MAX_CHAT_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+pub struct ProviderQuery {
+    provider: String,
+    #[serde(flatten)]
+    auth: AuthQuery,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KeyInput {
+    provider: String,
+    #[serde(default)]
+    key: String,
+}
+
+pub async fn api_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    let view = state.copilot.view().await;
+    (StatusCode::OK, Json(json!({ "ok": true, "config": view }))).into_response()
+}
+
+pub async fn api_models(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ProviderQuery>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &query.auth) {
+        return unauthorized();
+    }
+    match state.copilot.models(&query.provider).await {
+        Ok(models) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "models": models })),
+        )
+            .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<KeyInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match state.copilot.set_key(&input.provider, &input.key).await {
+        Ok(models) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "models": models })),
+        )
+            .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_chat(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(request): Json<ChatRequest>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+
+    let (tx, rx) = mpsc::unbounded_channel::<ChatEvent>();
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        chat::run(task_state, request, tx).await;
+    });
+
+    let stream = stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|event| {
+            let payload = serde_json::to_string(&event).unwrap_or_else(|_| {
+                "{\"type\":\"error\",\"code\":\"internal\",\"message\":\"serialization failed\"}"
+                    .to_string()
+            });
+            (Ok::<Event, Infallible>(Event::default().data(payload)), rx)
+        })
+    });
+
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", header::HeaderValue::from_static("no"));
+    response
+}
+
+fn error_response(error: CopilotError) -> Response {
+    let status = match error {
+        CopilotError::MissingKey => StatusCode::BAD_REQUEST,
+        CopilotError::InvalidKey => StatusCode::UNAUTHORIZED,
+        CopilotError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        CopilotError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+        CopilotError::Unsupported => StatusCode::BAD_REQUEST,
+        CopilotError::Cancelled => StatusCode::REQUEST_TIMEOUT,
+        CopilotError::Network | CopilotError::Upstream(_) => StatusCode::BAD_GATEWAY,
+    };
+    let body = json!({
+        "ok": false,
+        "code": error.code(),
+        "error": error.public_message(),
+    });
+    (status, Json(body)).into_response()
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "ok": false, "code": "unauthorized", "error": "unauthorized" })),
+    )
+        .into_response()
+}
+
+fn forbidden() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "ok": false, "code": "forbidden", "error": "origin not allowed" })),
+    )
+        .into_response()
+}
+
+/// Ensures the module is part of the app router even when the route list is
+/// edited later.
+pub fn routes() -> [&'static str; 4] {
+    [
+        "/api/copilot/config",
+        "/api/copilot/models",
+        "/api/copilot/key",
+        "/api/copilot/chat",
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_list_matches_the_documented_surface() {
+        assert_eq!(routes().len(), 4);
+    }
+}

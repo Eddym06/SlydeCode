@@ -453,6 +453,336 @@ test("presenter shows progress and advances with the keyboard", async () => {
   }
 });
 
+test("copilot connects a provider, filters models and restores focus", async () => {
+  // The provider transport is intentionally mocked at the HTTP boundary: this
+  // test covers the panel, key form, model discovery UI and selection without
+  // ever touching a real API key or a vendor network.
+  const fakeConfig = {
+    providers: [
+      { id: "openai", name: "ChatGPT", company: "OpenAI", icon: "openai", key_url: "https://platform.openai.com/api-keys", configured: false },
+      { id: "anthropic", name: "Claude", company: "Anthropic", icon: "anthropic", key_url: "https://console.anthropic.com/settings/keys", configured: false },
+      { id: "gemini", name: "Gemini", company: "Google", icon: "gemini", key_url: "https://aistudio.google.com/app/apikey", configured: false },
+      { id: "xai", name: "Grok", company: "xAI", icon: "xai", key_url: "https://console.x.ai", configured: false },
+      { id: "groq", name: "Groq", company: "Groq", icon: "groq", key_url: "https://console.groq.com/keys", configured: false },
+      { id: "openrouter", name: "OpenRouter", company: "OpenRouter", icon: "openrouter", key_url: "https://openrouter.ai/keys", configured: false },
+      { id: "deepseek", name: "DeepSeek", company: "DeepSeek", icon: "deepseek", key_url: "https://platform.deepseek.com/api_keys", configured: false },
+      { id: "nvidia", name: "NVIDIA", company: "NVIDIA", icon: "nvidia", key_url: "https://build.nvidia.com", configured: false },
+    ],
+    last_provider: null,
+    last_model: null,
+  };
+  const fakeModels = [
+    { id: "free-model", name: "Free Model", free: true, context_window: 128000 },
+    { id: "paid-model", name: "Paid Model", free: false, context_window: 32000 },
+    { id: "free-two", name: "Second Free", free: true, vision: true },
+  ];
+
+  const fulfill = (requestId, payload) =>
+    page.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "content-type", value: "application/json" }],
+      body: Buffer.from(JSON.stringify(payload)).toString("base64"),
+    });
+
+  const off = page.client.on("Fetch.requestPaused", async ({ requestId, request }) => {
+    try {
+      if (request.url.includes("/api/copilot/config")) {
+        await fulfill(requestId, { ok: true, config: fakeConfig });
+      } else if (request.url.includes("/api/copilot/key")) {
+        await fulfill(requestId, { ok: true, models: fakeModels });
+      } else {
+        await page.send("Fetch.continueRequest", { requestId });
+      }
+    } catch {
+      /* The page may have been torn down; nothing to resume. */
+    }
+  });
+
+  await page.send("Fetch.enable", {
+    patterns: [
+      { urlPattern: "*api/copilot/config*", requestStage: "Request" },
+      { urlPattern: "*api/copilot/key*", requestStage: "Request" },
+    ],
+  });
+
+  try {
+    const timeOrigin = await page.evaluate("performance.timeOrigin");
+    await page.send("Page.reload", { ignoreCache: true });
+    await page.waitFor(
+      `performance.timeOrigin !== ${JSON.stringify(timeOrigin)} &&
+       document.getElementById("app") && !document.getElementById("app").hidden`,
+      { timeout: 15000 }
+    );
+
+    await page.evaluate(`document.querySelector('[data-lang="es"]').click(); true`);
+    await page.waitFor(`document.documentElement.lang === "es"`);
+    await page.evaluate(`document.getElementById("tab-copilot").click(); true`);
+    await page.waitFor(`!!document.querySelector("#copilot-thread [data-connect]")`);
+
+    const spanishEmpty = await page.evaluate(
+      `document.querySelector("#copilot-thread h2").textContent`
+    );
+    assert.equal(spanishEmpty, "Conecta tu IA");
+
+    await page.evaluate(`document.querySelector('[data-lang="en"]').click(); true`);
+    await page.waitFor(
+      `document.documentElement.lang === "en" &&
+       document.querySelector("#copilot-thread h2")?.textContent === "Connect your AI"`
+    );
+
+    await page.evaluate(`document.querySelector("#copilot-thread [data-connect]").click(); true`);
+    await page.waitFor(`document.getElementById("copilot-sheet").hidden === false`);
+    await page.waitFor(`document.activeElement && document.activeElement.id === "sheet-key"`);
+
+    const sheet = await page.evaluate(`(() => {
+      const root = document.getElementById("copilot-sheet");
+      return {
+        title: document.getElementById("copilot-sheet-title").textContent,
+        providers: root.querySelectorAll("[data-provider]").length,
+        selected: root.querySelector(".provider-card.is-selected")?.dataset.provider,
+        keyVisible: !!root.querySelector("#sheet-key"),
+        focused: document.activeElement && document.activeElement.id,
+        marks: root.querySelectorAll(".provider-mark svg").length
+      };
+    })()`);
+    assert.equal(sheet.title, "Provider & model");
+    assert.equal(sheet.providers, 8, "all eight providers are offered");
+    assert.equal(sheet.selected, "openai");
+    assert.equal(sheet.keyVisible, true);
+    assert.equal(sheet.focused, "sheet-key");
+    assert.equal(sheet.marks, 8, "every provider has its own mark");
+
+    await page.evaluate(`(() => {
+      const key = document.getElementById("sheet-key");
+      key.value = "sk-e2e-not-a-real-key";
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("sheet-key-form").requestSubmit();
+      return true;
+    })()`);
+    await page.waitFor(`document.getElementById("sheet-search") !== null`);
+
+    const models = await page.evaluate(`(() => ({
+      rows: document.querySelectorAll("[data-model]").length,
+      free: document.querySelectorAll(".model-badge.is-free").length,
+      count: document.querySelector(".model-count").textContent
+    }))()`);
+    assert.equal(models.rows, 3);
+    assert.equal(models.free, 2);
+    assert.match(models.count, /3/);
+
+    await page.evaluate(`(() => {
+      const search = document.getElementById("sheet-search");
+      search.value = "paid";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })()`);
+    await page.waitFor(`document.querySelectorAll("[data-model]").length === 1`);
+
+    await page.evaluate(`(() => {
+      const search = document.getElementById("sheet-search");
+      search.value = "";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("sheet-free").click();
+      return true;
+    })()`);
+    await page.waitFor(`document.querySelectorAll("[data-model]").length === 2`);
+    const pressed = await page.evaluate(
+      `document.getElementById("sheet-free").getAttribute("aria-pressed")`
+    );
+    assert.equal(pressed, "true");
+
+    await page.evaluate(`document.querySelector('[data-model="free-model"]').click(); true`);
+    await page.waitFor(`document.getElementById("copilot-sheet").hidden === true`);
+    await page.waitFor(`document.activeElement && document.activeElement.id === "copilot-input"`);
+
+    const selected = await page.evaluate(`(() => ({
+      provider: document.getElementById("copilot-provider-name").textContent,
+      model: document.getElementById("copilot-model-label").textContent,
+      chip: document.getElementById("copilot-model-chip-text").textContent,
+      label: document.getElementById("copilot-provider").getAttribute("aria-label")
+    }))()`);
+    assert.equal(selected.provider, "ChatGPT");
+    assert.equal(selected.model, "free-model");
+    assert.equal(selected.chip, "free-model");
+    assert.equal(selected.label, "ChatGPT — free-model");
+
+    await page.evaluate(`(() => {
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(["# Notes\\nA short brief."], "brief.txt", { type: "text/plain" }));
+      const input = document.getElementById("copilot-file");
+      input.files = transfer.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    })()`);
+    await page.waitFor(`document.querySelectorAll("#copilot-attachments .pending-file").length === 1`);
+    const attached = await page.evaluate(`(() => ({
+      name: document.querySelector("#copilot-attachments .pending-name").textContent,
+      sendEnabled: !document.getElementById("copilot-send").disabled,
+      removeLabel: document.querySelector("#copilot-attachments .pending-remove").getAttribute("aria-label")
+    }))()`);
+    assert.equal(attached.name, "brief.txt");
+    assert.equal(attached.sendEnabled, true);
+    assert.match(attached.removeLabel, /brief\.txt/);
+
+    await page.evaluate(
+      `document.querySelector("#copilot-attachments .pending-remove").click(); true`
+    );
+    await page.waitFor(
+      `document.querySelectorAll("#copilot-attachments .pending-file").length === 0`
+    );
+
+    await page.evaluate(`document.querySelector('[data-lang="es"]').click(); true`);
+    await page.waitFor(
+      `document.documentElement.lang === "es" &&
+       document.querySelector("#copilot-thread h2")?.textContent === "Crea algo que merezca presentarse"`
+    );
+    const persisted = await page.evaluate(`(() => ({
+      model: document.getElementById("copilot-model-label").textContent,
+      stored: JSON.parse(localStorage.getItem("slyde.copilot.selection"))
+    }))()`);
+    assert.equal(persisted.model, "free-model");
+    assert.deepEqual(persisted.stored, { provider: "openai", model: "free-model" });
+  } finally {
+    off();
+    await page.send("Fetch.disable").catch(() => {});
+  }
+});
+
+test("copilot streams text and localized tool status into the thread", async () => {
+  const fakeConfig = {
+    providers: [
+      { id: "openai", name: "ChatGPT", company: "OpenAI", icon: "openai", key_url: "https://platform.openai.com/api-keys", configured: true },
+      { id: "anthropic", name: "Claude", company: "Anthropic", icon: "anthropic", key_url: "https://console.anthropic.com/settings/keys", configured: false },
+      { id: "gemini", name: "Gemini", company: "Google", icon: "gemini", key_url: "https://aistudio.google.com/app/apikey", configured: false },
+      { id: "xai", name: "Grok", company: "xAI", icon: "xai", key_url: "https://console.x.ai", configured: false },
+      { id: "groq", name: "Groq", company: "Groq", icon: "groq", key_url: "https://console.groq.com/keys", configured: false },
+      { id: "openrouter", name: "OpenRouter", company: "OpenRouter", icon: "openrouter", key_url: "https://openrouter.ai/keys", configured: false },
+      { id: "deepseek", name: "DeepSeek", company: "DeepSeek", icon: "deepseek", key_url: "https://platform.deepseek.com/api_keys", configured: false },
+      { id: "nvidia", name: "NVIDIA", company: "NVIDIA", icon: "nvidia", key_url: "https://build.nvidia.com", configured: false },
+    ],
+    last_provider: "openai",
+    last_model: "free-model",
+  };
+  const events = [
+    { type: "meta", provider: "openai", model: "free-model" },
+    { type: "delta", text: "I'll build " },
+    { type: "delta", text: "a cover slide." },
+    { type: "tool", name: "upsert_slide", status: "running" },
+    { type: "tool", name: "upsert_slide", status: "done" },
+    { type: "done" },
+  ];
+  const sse = `${events.map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+  let chatPayload = null;
+
+  const fulfill = (requestId, payload, contentType = "application/json") =>
+    page.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "content-type", value: contentType }],
+      body: Buffer.from(
+        typeof payload === "string" ? payload : JSON.stringify(payload)
+      ).toString("base64"),
+    });
+
+  const off = page.client.on("Fetch.requestPaused", async ({ requestId, request }) => {
+    try {
+      if (request.url.includes("/api/copilot/config")) {
+        await fulfill(requestId, { ok: true, config: fakeConfig });
+      } else if (request.url.includes("/api/copilot/chat")) {
+        chatPayload = JSON.parse(request.postData || "{}");
+        await fulfill(requestId, sse, "text/event-stream");
+      } else {
+        await page.send("Fetch.continueRequest", { requestId });
+      }
+    } catch {
+      /* The page may have been torn down; nothing to resume. */
+    }
+  });
+
+  await page.send("Fetch.enable", {
+    patterns: [
+      { urlPattern: "*api/copilot/config*", requestStage: "Request" },
+      { urlPattern: "*api/copilot/chat*", requestStage: "Request" },
+    ],
+  });
+
+  try {
+    const timeOrigin = await page.evaluate("performance.timeOrigin");
+    await page.evaluate(`(() => {
+      localStorage.setItem("slyde.copilot.selection", JSON.stringify({ provider: "openai", model: "free-model" }));
+      localStorage.setItem("slyde.lang", "es");
+      return true;
+    })()`);
+    await page.send("Page.reload", { ignoreCache: true });
+    await page.waitFor(
+      `performance.timeOrigin !== ${JSON.stringify(timeOrigin)} &&
+       document.getElementById("app") && !document.getElementById("app").hidden`,
+      { timeout: 15000 }
+    );
+    await page.evaluate(`document.getElementById("tab-copilot").click(); true`);
+    await page.waitFor(
+      `document.getElementById("copilot-provider-name").textContent === "ChatGPT" &&
+       document.getElementById("copilot-model-label").textContent === "free-model"`
+    );
+
+    await page.evaluate(`(() => {
+      const input = document.getElementById("copilot-input");
+      input.value = "Crea una portada";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("copilot-form").requestSubmit();
+      return true;
+    })()`);
+
+    await page.waitFor(
+      `document.querySelector(".msg-assistant .msg-text")?.textContent === "I'll build a cover slide."`,
+      { timeout: 5000 }
+    );
+    await page.waitFor(
+      `(() => {
+        const button = document.getElementById("copilot-send");
+        return !button.classList.contains("is-stopping") &&
+          document.getElementById("copilot-live").hidden === true;
+      })()`
+    );
+    await page.waitFor(
+      `document.getElementById("copilot-announcer").textContent === "El copiloto ha terminado de responder"`
+    );
+
+    const thread = await page.evaluate(`(() => {
+      const assistant = document.querySelector(".msg-assistant");
+      return {
+        state: assistant.dataset.state,
+        text: assistant.querySelector(".msg-text").textContent,
+        tools: [...assistant.querySelectorAll(".tool-row")].map((row) => ({
+          status: row.dataset.status,
+          label: row.textContent.trim()
+        })),
+        user: document.querySelector(".msg-user .msg-text").textContent,
+        sendDisabled: document.getElementById("copilot-send").disabled
+      };
+    })()`);
+    assert.equal(thread.state, "done");
+    assert.equal(thread.text, "I'll build a cover slide.");
+    assert.equal(thread.user, "Crea una portada");
+    assert.equal(thread.tools.length, 1);
+    assert.equal(thread.tools[0].status, "done");
+    assert.equal(thread.tools[0].label, "Escribiendo la diapositiva…");
+    assert.equal(thread.sendDisabled, true);
+
+    assert.ok(chatPayload, "the UI posted a chat request");
+    assert.equal(chatPayload.provider, "openai");
+    assert.equal(chatPayload.model, "free-model");
+    assert.equal(chatPayload.language, "es");
+    assert.ok(chatPayload.selected_slide_id, "the selected slide rides along");
+    assert.equal(chatPayload.messages.at(-1).role, "user");
+    assert.equal(chatPayload.messages.at(-1).text, "Crea una portada");
+  } finally {
+    off();
+    await page.send("Fetch.disable").catch(() => {});
+  }
+});
+
 test("meets the accessibility baseline: names, focus ring and AA contrast", async () => {
   // Start from a known point in the tab order, then move with the keyboard so
   // Chrome applies :focus-visible exactly as a real keyboard user would see it.

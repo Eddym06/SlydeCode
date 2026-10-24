@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use axum::extract::Query;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::extract::Query;
 use tokio::sync::broadcast;
 
 use crate::state::{AppState, AuthQuery, ServerEvent, is_authorized, origin_allowed};

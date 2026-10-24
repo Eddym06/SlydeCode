@@ -5,6 +5,7 @@ import {
   receiveActivity,
   tickActivity,
 } from "./agent-activity.js";
+import { mountCopilot } from "./copilot.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 
 const $ = (id) => document.getElementById(id);
@@ -54,12 +55,28 @@ function boot(sessionToken) {
 
   const els = {
     title: $("deck-title"),
+    saveStatus: $("save-status"),
+    saveDot: $("save-dot"),
+    saveLabel: $("save-label"),
+    zoomOut: $("zoom-out"),
+    zoomIn: $("zoom-in"),
+    zoomValue: $("zoom-value"),
+    exportMenuTrigger: $("export-menu-trigger"),
+    exportMenu: $("export-menu"),
+    topbarExportPdf: $("topbar-export-pdf"),
+    topbarExportPng: $("topbar-export-png"),
+    topbarSaveDeck: $("topbar-save-deck"),
     storyboard: $("storyboard"),
     slideCount: $("slide-count"),
+    templatePopover: $("template-popover"),
+    templateGrid: $("template-grid"),
+    closeTemplatePopover: $("close-template-popover"),
     frame: $("slide-frame"),
     frameWrap: $("stage-frame"),
     empty: $("empty"),
     chips: $("chips"),
+    subtabSlide: $("subtab-slide"),
+    subtabDeck: $("subtab-deck"),
     inspector: $("inspector"),
     revision: $("revision"),
     statusDot: $("status-dot"),
@@ -71,7 +88,52 @@ function boot(sessionToken) {
     agentLabel: $("agent-label"),
     agentAnnouncer: $("agent-announcer"),
     stageScan: $("stage-scan"),
+    copilotContextPill: $("copilot-context-pill"),
+    copilotPromptPills: $("copilot-prompt-pills"),
   };
+
+  let inspectorSubtab = "slide";
+  const ZOOM_LEVELS = ["fit", 0.5, 0.75, 1.0, 1.25, 1.5];
+  let currentZoomIdx = 0;
+  let saveTimer = null;
+
+  let copilot = null;
+  let activePanel = "inspector";
+
+  function setPanel(name, { focus = false } = {}) {
+    activePanel = name === "copilot" ? "copilot" : "inspector";
+    const copilotActive = activePanel === "copilot";
+    const tabs = [
+      ["inspector", $("tab-inspector")],
+      ["copilot", $("tab-copilot")],
+    ];
+    tabs.forEach(([id, tab]) => {
+      const selected = id === activePanel;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    });
+    $("inspector-panel").hidden = copilotActive;
+    $("copilot-panel").hidden = !copilotActive;
+    if (focus) {
+      $(copilotActive ? "tab-copilot" : "tab-inspector").focus();
+    }
+  }
+
+  $("tab-inspector").addEventListener("click", () => setPanel("inspector"));
+  $("tab-copilot").addEventListener("click", () => setPanel("copilot"));
+  $("right-panel").querySelector('[role="tablist"]').addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? "inspector"
+        : event.key === "End"
+          ? "copilot"
+          : activePanel === "inspector"
+            ? "copilot"
+            : "inspector";
+    setPanel(next, { focus: true });
+  });
 
   // ---------- helpers ----------
 
@@ -109,16 +171,54 @@ function boot(sessionToken) {
     }, 1800);
   }
 
+  function markSaving() {
+    if (els.saveStatus) {
+      els.saveStatus.dataset.state = "saving";
+      if (els.saveLabel) els.saveLabel.textContent = t("deck.saving");
+    }
+  }
+
+  function markSaved() {
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      if (els.saveStatus) {
+        els.saveStatus.dataset.state = "saved";
+        if (els.saveLabel) els.saveLabel.textContent = t("deck.saved");
+      }
+    }, 350);
+  }
+
   async function run(action, extra, { silent = false } = {}) {
+    markSaving();
     try {
       const payload = await client.command(action, extra);
       applyView(payload.view);
+      markSaved();
       return true;
     } catch (error) {
+      markSaved();
       if (!silent) toast(`${t("toast.error")} — ${error.message}`);
       return false;
     }
   }
+
+  function setZoom(delta) {
+    if (delta === 0) {
+      currentZoomIdx = 0;
+    } else {
+      currentZoomIdx = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, currentZoomIdx + delta));
+    }
+    const val = ZOOM_LEVELS[currentZoomIdx];
+    if (els.zoomValue) {
+      els.zoomValue.textContent = val === "fit" ? t("zoom.fit") : `${Math.round(val * 100)}%`;
+    }
+    const d = deck();
+    if (d) fitStage(d);
+  }
+
+  if (els.zoomOut) els.zoomOut.addEventListener("click", () => setZoom(-1));
+  if (els.zoomIn) els.zoomIn.addEventListener("click", () => setZoom(1));
+  if (els.zoomValue) els.zoomValue.addEventListener("click", () => setZoom(0));
 
   function setStatus(state) {
     els.statusDot.dataset.state = state;
@@ -304,7 +404,48 @@ function boot(sessionToken) {
     renderChips(d);
     renderInspector(d);
     renderAgentActivity({ announce: false });
+    updateCopilotContext(d);
     maybeSweep();
+  }
+
+  function updateCopilotContext(d) {
+    if (!els.copilotContextPill || !els.copilotPromptPills) return;
+    const current = slide();
+    const idx = current ? d.slides.findIndex((s) => s.id === current.id) : -1;
+    if (current && idx >= 0) {
+      els.copilotContextPill.textContent = t("copilot.contextSlide", {
+        n: idx + 1,
+        template: t(`template.${current.template}`),
+      });
+    } else {
+      els.copilotContextPill.textContent = t("copilot.contextDeck", {
+        n: d.slides.length,
+      });
+    }
+
+    const suggestions = [
+      t("copilot.prompt.summarize"),
+      t("copilot.prompt.action"),
+      t("copilot.prompt.animate"),
+      t("copilot.prompt.punchline"),
+    ];
+
+    els.copilotPromptPills.innerHTML = "";
+    suggestions.forEach((text) => {
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "prompt-pill";
+      pill.textContent = text;
+      pill.addEventListener("click", () => {
+        const input = $("copilot-input");
+        if (input) {
+          input.value = text;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.focus();
+        }
+      });
+      els.copilotPromptPills.append(pill);
+    });
   }
 
   /// Every thumb is a button; only the selected one is in the tab order, so
@@ -354,9 +495,49 @@ function boot(sessionToken) {
       button.type = "button";
       button.className = "thumb";
       button.dataset.id = s.id;
+      button.draggable = true;
       button.tabIndex = s.id === selectedId ? 0 : -1;
       button.setAttribute("aria-current", String(s.id === selectedId));
       button.setAttribute("aria-label", label);
+
+      button.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", String(index));
+        e.dataTransfer.effectAllowed = "move";
+        button.classList.add("dragging");
+      });
+      button.addEventListener("dragend", () => {
+        button.classList.remove("dragging");
+        els.storyboard.querySelectorAll(".thumb").forEach((t) => {
+          t.classList.remove("drag-over-top", "drag-over-bottom");
+        });
+      });
+      button.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const rect = button.getBoundingClientRect();
+        const mid = rect.top + rect.height / 2;
+        if (e.clientY < mid) {
+          button.classList.add("drag-over-top");
+          button.classList.remove("drag-over-bottom");
+        } else {
+          button.classList.add("drag-over-bottom");
+          button.classList.remove("drag-over-top");
+        }
+      });
+      button.addEventListener("dragleave", () => {
+        button.classList.remove("drag-over-top", "drag-over-bottom");
+      });
+      button.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const fromIdx = Number(e.dataTransfer.getData("text/plain"));
+        if (Number.isNaN(fromIdx) || fromIdx === index) return;
+        const rect = button.getBoundingClientRect();
+        const mid = rect.top + rect.height / 2;
+        let toIdx = index;
+        if (e.clientY >= mid && fromIdx > index) toIdx += 1;
+        run("move_slide", { from: fromIdx, to: toIdx });
+      });
+
       button.innerHTML = `
         <span class="thumb-media" style="aspect-ratio:${w}/${h}">
           <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1" aria-hidden="true" title=""
@@ -365,7 +546,27 @@ function boot(sessionToken) {
         <span class="thumb-foot">
           <span class="thumb-index">${String(index + 1).padStart(2, "0")}</span>
           <span class="thumb-template">${escapeHtml(t(`template.${s.template}`))}</span>
+          <span class="thumb-actions">
+            ${index > 0 ? `<button type="button" class="thumb-btn" data-action="up" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveUp"))}" aria-label="${escapeHtml(t("storyboard.moveUp"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>` : ""}
+            ${index < d.slides.length - 1 ? `<button type="button" class="thumb-btn" data-action="down" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveDown"))}" aria-label="${escapeHtml(t("storyboard.moveDown"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>` : ""}
+            <button type="button" class="thumb-btn" data-action="dup" data-id="${s.id}" title="${escapeHtml(t("storyboard.duplicate"))}" aria-label="${escapeHtml(t("storyboard.duplicate"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+            <button type="button" class="thumb-btn thumb-btn-danger" data-action="del" data-id="${s.id}" title="${escapeHtml(t("storyboard.delete"))}" aria-label="${escapeHtml(t("storyboard.delete"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+          </span>
         </span>`;
+
+      button.querySelectorAll(".thumb-btn").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const action = btn.dataset.action;
+          const slideId = btn.dataset.id;
+          const slideIdx = Number(btn.dataset.idx);
+          if (action === "dup") run("duplicate_slide", { slide_id: slideId });
+          else if (action === "del") run("remove_slide", { slide_id: slideId });
+          else if (action === "up") run("move_slide", { from: slideIdx, to: slideIdx - 1 });
+          else if (action === "down") run("move_slide", { from: slideIdx, to: slideIdx + 1 });
+        });
+      });
+
       button.addEventListener("click", () => {
         selectedId = s.id;
         stageKey = "";
@@ -399,15 +600,19 @@ function boot(sessionToken) {
   function fitStage(d) {
     if (!d || els.frameWrap.hidden) return;
     const [w, h] = d.aspect_ratio.split(":").map(Number);
+    const zoom = ZOOM_LEVELS[currentZoomIdx];
     const pad = 64;
     const availableW = Math.max(160, $("stage").clientWidth - pad);
     const availableH = Math.max(90, $("stage").clientHeight - pad);
-    let width = availableW;
-    let height = (width * h) / w;
-    if (height > availableH) {
-      height = availableH;
-      width = (height * w) / h;
+    let baseW = availableW;
+    let baseH = (baseW * h) / w;
+    if (baseH > availableH) {
+      baseH = availableH;
+      baseW = (baseH * w) / h;
     }
+    const scale = zoom === "fit" ? 1 : zoom;
+    const width = baseW * scale;
+    const height = baseH * scale;
     els.frameWrap.style.width = `${Math.round(width)}px`;
     els.frameWrap.style.height = `${Math.round(height)}px`;
   }
@@ -447,7 +652,32 @@ function boot(sessionToken) {
 
     const deckSection = `
       <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.deck"))}</span>
+        <span class="field-label">${escapeHtml(t("inspector.themeSwatches"))}</span>
+        <div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">
+          <button type="button" class="theme-swatch" data-theme="studio" role="radio" aria-checked="${d.theme.id === "studio"}" aria-label="Studio">
+            <span class="swatch-dots">
+              <span class="swatch-dot" style="background:#7C3AED"></span>
+              <span class="swatch-dot" style="background:#FF6B4A"></span>
+            </span>
+            <span class="swatch-name">Studio</span>
+          </button>
+          <button type="button" class="theme-swatch" data-theme="paper" role="radio" aria-checked="${d.theme.id === "paper"}" aria-label="Paper">
+            <span class="swatch-dots">
+              <span class="swatch-dot" style="background:#2C2B2A"></span>
+              <span class="swatch-dot" style="background:#D97706"></span>
+            </span>
+            <span class="swatch-name">Paper</span>
+          </button>
+          <button type="button" class="theme-swatch" data-theme="night" role="radio" aria-checked="${d.theme.id === "night"}" aria-label="Night">
+            <span class="swatch-dots">
+              <span class="swatch-dot" style="background:#9B6BFF"></span>
+              <span class="swatch-dot" style="background:#FF8265"></span>
+            </span>
+            <span class="swatch-name">Night</span>
+          </button>
+        </div>
+      </section>
+      <section class="field">
         <label class="field">
           <span class="hint">${escapeHtml(t("inspector.theme"))}</span>
           <select class="select" id="theme-select">${themeOptions}</select>
@@ -476,11 +706,18 @@ function boot(sessionToken) {
       </section>`;
 
     if (!current) {
-      els.inspector.innerHTML = deckSection;
+      els.inspector.innerHTML = `<div id="inspector-deck-section">${deckSection}</div>`;
+      if (els.subtabSlide) els.subtabSlide.disabled = true;
+      if (els.subtabDeck) {
+        els.subtabDeck.classList.add("active");
+        els.subtabDeck.setAttribute("aria-selected", "true");
+      }
       bindDeckControls();
       applyI18n(els.inspector);
       return;
     }
+
+    if (els.subtabSlide) els.subtabSlide.disabled = false;
 
     const steps = current.animation.length
       ? `<div class="steps">${current.animation
@@ -497,12 +734,18 @@ function boot(sessionToken) {
           .join("")}</div>`
       : `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`;
 
-    els.inspector.innerHTML = `
-      ${deckSection}
+    const slideSection = `
       <section class="field">
         <span class="field-label">${escapeHtml(t("inspector.slide"))}</span>
         <div class="field-value">${escapeHtml(t(`template.${current.template}`))}</div>
         <div class="mono" title="${escapeHtml(current.id)}">${escapeHtml(current.id)}</div>
+        <div class="slide-quick-actions">
+          <button type="button" class="btn" id="inspector-duplicate-slide">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            ${escapeHtml(t("inspector.duplicate"))}
+          </button>
+          <button type="button" class="danger-btn" id="delete-slide">${escapeHtml(t("action.delete"))}</button>
+        </div>
       </section>
       <section class="field">
         <label class="field-label" for="notes">${escapeHtml(t("inspector.notes"))}</label>
@@ -512,14 +755,36 @@ function boot(sessionToken) {
         <span class="field-label">${escapeHtml(t("inspector.animation"))}</span>
         ${steps}
       </section>
-      <button type="button" class="danger-btn" id="delete-slide">${escapeHtml(t("action.delete"))}</button>
       <details class="dev">
         <summary>${escapeHtml(t("inspector.developer"))}</summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
         <pre class="dev-code">${escapeHtml(current.code)}</pre>
       </details>`;
 
+    const showSlide = inspectorSubtab === "slide";
+    els.inspector.innerHTML = `
+      <div id="inspector-slide-section" ${showSlide ? "" : 'style="display:none"'}>
+        ${slideSection}
+      </div>
+      <div id="inspector-deck-section" ${showSlide ? 'style="display:none"' : ""}>
+        ${deckSection}
+      </div>`;
+
+    if (els.subtabSlide) {
+      els.subtabSlide.classList.toggle("active", showSlide);
+      els.subtabSlide.setAttribute("aria-selected", String(showSlide));
+    }
+    if (els.subtabDeck) {
+      els.subtabDeck.classList.toggle("active", !showSlide);
+      els.subtabDeck.setAttribute("aria-selected", String(!showSlide));
+    }
+
     bindDeckControls();
+
+    const dupBtn = $("inspector-duplicate-slide");
+    if (dupBtn) {
+      dupBtn.addEventListener("click", () => run("duplicate_slide", { slide_id: current.id }));
+    }
 
     const notes = $("notes");
     if (notes) {
@@ -559,6 +824,15 @@ function boot(sessionToken) {
   function bindDeckControls() {
     const theme = $("theme-select");
     if (theme) theme.addEventListener("change", () => run("set_theme", { theme_id: theme.value }));
+
+    els.inspector.querySelectorAll(".theme-swatch").forEach((swatch) => {
+      swatch.addEventListener("click", () => {
+        const themeId = swatch.dataset.theme;
+        const themeSelect = $("theme-select");
+        if (themeSelect) themeSelect.value = themeId;
+        run("set_theme", { theme_id: themeId });
+      });
+    });
 
     const ratio = $("ratio-select");
     if (ratio) {
@@ -723,6 +997,10 @@ function boot(sessionToken) {
 
   $("add-slide").addEventListener("click", () => run("add_slide", { template: "hero" }));
   $("empty-cta").addEventListener("click", () => run("add_slide", { template: "hero" }));
+  $("empty-copilot").addEventListener("click", () => {
+    setPanel("copilot");
+    if (copilot) copilot.focus();
+  });
 
   els.undo.addEventListener("click", () => run("undo"));
   els.redo.addEventListener("click", () => run("redo"));
@@ -825,6 +1103,106 @@ function boot(sessionToken) {
     }, 120);
   });
 
+  const TEMPLATES = [
+    { id: "hero", icon: "✨" },
+    { id: "bullet", icon: "📋" },
+    { id: "diagram", icon: "📊" },
+    { id: "chart", icon: "📈" },
+    { id: "image_layout", icon: "🖼️" },
+    { id: "code", icon: "💻" },
+  ];
+
+  function setupTemplatePicker() {
+    const popover = els.templatePopover;
+    const grid = els.templateGrid;
+    const pickerBtn = $("add-slide-picker");
+    const closeBtn = els.closeTemplatePopover;
+    if (!popover || !grid) return;
+
+    grid.innerHTML = "";
+    TEMPLATES.forEach((tpl) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "template-card";
+      card.innerHTML = `<span class="template-card-icon">${tpl.icon}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
+      card.addEventListener("click", () => {
+        popover.hidden = true;
+        run("add_slide", { template: tpl.id });
+      });
+      grid.append(card);
+    });
+
+    if (pickerBtn) {
+      pickerBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        popover.hidden = !popover.hidden;
+      });
+    }
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        popover.hidden = true;
+      });
+    }
+    document.addEventListener("click", (e) => {
+      if (!popover.contains(e.target) && e.target !== pickerBtn && !pickerBtn?.contains(e.target)) {
+        popover.hidden = true;
+      }
+    });
+  }
+
+  function setupExportDropdown() {
+    if (!els.exportMenuTrigger || !els.exportMenu) return;
+    els.exportMenuTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !els.exportMenu.hidden;
+      els.exportMenu.hidden = open;
+      els.exportMenuTrigger.setAttribute("aria-expanded", String(!open));
+    });
+    document.addEventListener("click", (e) => {
+      if (!els.exportMenu.contains(e.target) && e.target !== els.exportMenuTrigger) {
+        els.exportMenu.hidden = true;
+        els.exportMenuTrigger.setAttribute("aria-expanded", "false");
+      }
+    });
+    if (els.topbarExportPdf) {
+      els.topbarExportPdf.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        startExport("pdf");
+      });
+    }
+    if (els.topbarExportPng) {
+      els.topbarExportPng.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        startExport("png");
+      });
+    }
+    if (els.topbarSaveDeck) {
+      els.topbarSaveDeck.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        const link = document.createElement("a");
+        link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
+        link.download = "";
+        document.body.append(link);
+        link.click();
+        link.remove();
+        toast(t("toast.downloaded"));
+      });
+    }
+  }
+
+  if (els.subtabSlide) {
+    els.subtabSlide.addEventListener("click", () => {
+      inspectorSubtab = "slide";
+      if (view) applyView(view);
+    });
+  }
+  if (els.subtabDeck) {
+    els.subtabDeck.addEventListener("click", () => {
+      inspectorSubtab = "deck";
+      if (view) applyView(view);
+    });
+  }
+
   // ---------- start ----------
 
   (async () => {
@@ -832,10 +1210,17 @@ function boot(sessionToken) {
       const payload = await client.getState();
       sandboxOrigin = payload.sandbox_origin;
       setStatus("connecting");
+      setupTemplatePicker();
+      setupExportDropdown();
       applyView(payload.view);
       syncLangButtons();
       syncThemeToggle();
       applyI18n();
+      copilot = mountCopilot({
+        client,
+        getSelectedSlideId: () => selectedId,
+        notify: toast,
+      });
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {
       showFatal(error.message);

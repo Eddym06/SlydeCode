@@ -98,9 +98,7 @@ pub async fn probe_health(port: u16, timeout: Duration) -> bool {
     let attempt = async {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).await.ok()?;
         stream
-            .write_all(
-                b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-            )
+            .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
             .await
             .ok()?;
         let mut buf = Vec::new();
@@ -127,7 +125,11 @@ mod tests {
     fn app_data_dir_is_absolute_and_named() {
         let dir = app_data_dir();
         assert!(dir.is_absolute());
-        let name = dir.file_name().unwrap().to_string_lossy().to_ascii_lowercase();
+        let name = dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_ascii_lowercase();
         assert!(name.contains("slyde"));
     }
 

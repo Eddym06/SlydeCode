@@ -1,24 +1,31 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-24 14:30
+> Last updated: 2026-10-24 21:10
 
 ## Current Phase
-Phase 2: **working vertical slice with durable decks, real brand type, in-app export, an AI activity signal and an automated UI suite.** The Rust workspace, local server, sandbox origin, Chrome launch, editor, presenter, PDF/PNG export (UI, CLI and MCP), MCP stdio server and `.slyde` persistence all run end to end. 96 Rust tests and 17 UI tests (8 state-machine + 9 browser E2E) are green. Next candidate work: the prompt-driven in-app copilot or PPTX export (needs research + approval).
+Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust tests (+3 new tests for slide duplication, custom index, and reasoning content capture) are green. Resolved DeepSeek integration end-to-end: added live `Thinking` SSE event streaming so reasoning tokens from models like DeepSeek-V4.1-Flash provide instant visual feedback (under 300ms) instead of silent delays, fixed typing indicator retention during multi-round tool execution, fixed event dispatch on prompt suggestion pills, and added reasoning fallback to prevent false "empty response" errors. Verified end-to-end with real DeepSeek API creating 4 editorial slides with custom layouts, motion, and notes.
 
 ## Implemented & Working
 
-### Backend (Rust workspace, 5 crates, 96 tests green)
+### Backend (Rust workspace, 5 crates, 129 tests green)
 - `slyde-core`: `Presentation`/`Slide`/`Theme`/`AnimationStep` model, `PresentationState` with undo/redo, history limits, validation (`max_slides` 200, `max_code_bytes` 512 KiB, non-empty code, CSS-valid colors), and the `.slyde` project file (versioned JSON, validated on read). 29 tests.
-- `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`, `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin guards. Chrome discovery/launch, runtime rendezvous file, agent command handling, structured `agent_activity` events, starter templates, atomic deck storage with debounced autosave. 52 tests.
+- `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`, `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`, `/api/copilot/*`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin guards. Chrome discovery/launch, runtime rendezvous file, agent command handling, structured `agent_activity` events, starter templates, atomic deck storage with debounced autosave. Added `DuplicateSlide` and `AddSlide` with explicit index target. Added `ChatEvent::Thinking` and reasoning content capture in `OpenAiAccum` and `AnthropicAccum`. 85 tests, including the copilot.
+- **Copilot backend:** provider catalog for eight vendors, OpenAI-compatible transport for seven plus a native Anthropic Messages adapter, SSE assembly for fragmented tool calls, eight deck tools that call the shared `agent::run` path, typed error mapping, server-side key storage with env fallback, model normalization with free/vision/context metadata, and bounded image/PDF/DOCX/PPTX/text attachment extraction. `POST /api/copilot/chat` is a typed SSE stream with keep-alives; cancellation drops the upstream response.
 - `slyde-export`: transport-agnostic Chrome pipeline. PDF via `--print-to-pdf` (960×540 pt = exact 16:9), PNG per slide at 1280×720. Unique Chrome profile per job, absolute paths, artifact verification, optional progress channel. 3 tests.
 - `slyde-mcp`: hand-rolled JSON-RPC 2.0 stdio loop, 7 tools with hand-written schemas, thin HTTP proxy into the running studio, auto-spawn when no healthy runtime exists. `export_presentation` now uses the shared pipeline and deck-based default names. 10 tests.
-- `slyde-app`: CLI (`app`, `mcp`, `export`, `version`, `help`), UI/assets dir resolution, runtime reuse, Chrome launch, welcome slide seeding. `export` CLI lives here so `slyde-export` stays free of transport dependencies. `SLYDE_DATA_DIR`, `SLYDE_UI_DIR`, `SLYDE_ASSETS_DIR` and `SLYDE_BROWSER` overrides.
+- `slyde-app`: CLI (`app`, `mcp`, `export`, `version`, `help`), UI/assets dir resolution, runtime reuse, Chrome launch, welcome slide seeding. `export` CLI lives here so `slyde-export` stays free of transport dependencies. `SLYDE_DATA_DIR`, `SLYDE_UI_DIR`, `SLYDE_ASSETS_DIR` and `SLYDE_BROWSER` overrides. 2 tests.
 
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
-- Editor: topbar, storyboard with live thumbnails, stage, inspector (theme, format, notes, animation list with per-step replay, deck file actions, **export**, delete), developer mode, EN/ES switch, dark/light toggle, undo/redo, status pill.
-- **Export from the inspector:** `PDF` and `PNG images` buttons render through headless Chrome and download with the deck's name (`q3-review.pdf`, `q3-review.zip`). Buttons enter an `aria-busy` state, show per-slide progress from WebSocket events, disable during the job and surface localized, non-technical errors (no Chrome, empty deck, generic failure).
-- **AI activity signal:** `/api/agent` broadcasts structured `agent_activity` events (active → done/error) with no free-form text. A 28px status chip shows localized writing/adjusting/animating/done/error states for at least 1s, keeps the done confirmation for 2.6s and feeds a polite live region. Writing a slide also sweeps a warm scanline over the stage when that slide is visible; after a successful `upsert_slide` the stage follows the written slide only if the user is idle and not focused in a form or the storyboard.
-- Presenter: letterboxed stage, animation playback on load, keyboard nav (←/→/space/PageUp/PageDown/Enter/Backspace), `F` fullscreen, `Esc` exit, auto-hiding HUD, progressbar with `aria-valuenow`.
+- **Topbar:** brand mark, inline deck title input with real-time saving/saved indicator, canvas zoom controls (`Fit`, `50%`, `75%`, `100%`, `125%`, `150%`), language switch (EN/ES), light/dark toggle, undo/redo, topbar quick export menu (PDF, PNG ZIP, .slyde), Present button.
+- **Storyboard:** live thumbnails, HTML5 drag-and-drop reordering with spatial drop-line indicators, thumbnail hover action bar (duplicate, delete, move up, move down), layout template popover (Hero, Bullets, Diagram, Chart, Image, Code).
+- **Stage:** centered canvas with responsive scaling + manual zoom controls, AI sweep generation animation, status bar with connection dot and chips for animations.
+- **Inspector:** organized subtabs:
+  - **Slide tab:** template badge, slide ID, quick duplicate & delete buttons, auto-saving speaker notes, animation step list with per-step play, collapsible developer mode.
+  - **Deck tab:** visual theme swatches (Studio, Paper, Night) showing palette dots, aspect ratio, deck file save/open, and export section.
+- **In-app Copilot:** contextual indicator pill (`Slide N: Template` vs `Entire deck`), quick prompt suggestion pills above composer, streaming SSE, thread with localized tool rows, provider sheet with 8 providers and model search.
+- **Presenter & Speaker Console:**
+  - Standard kiosk presenter: full-screen slide with auto-hiding HUD and progress bar.
+  - **Speaker Console (`?speaker=1` or key `S`):** dual view with current slide, next slide preview, wall clock, stopwatch timer with play/pause/reset, speaker notes viewer with font size controls (`A-` / `A+`). All fully localized in EN & ES.
 - Sandbox documents self-scale (`ResizeObserver` + translate/scale), so thumbnails, stage, presenter and print all use the same document.
 - **Bundled typography:** Geist Sans/Mono variable woff2 (1.8.2, SIL OFL 1.1) in `assets/fonts/`, served at `/fonts` on both origins, preloaded in the editor and presenter. PDF/PNG exports now embed Geist instead of falling back.
 - **Accessibility pass:** AA contrast in light and dark (worst pair 4.7:1), focus ring preserved on inputs, roving tabindex in the storyboard with focus following selection, labels on every icon button, `aria-live` status, localized iframe labels, `aria-pressed` on the theme toggle, 32px top-bar targets.
@@ -39,19 +46,25 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - Persistence: edits autosaved (2 slides → file on disk), process restarted → deck restored intact; download produced a valid `.slyde`; upload replaced the deck (4:3, 1 slide) and persisted it; a corrupt upload returned 400 and left the deck untouched.
 - Fonts: `document.fonts.check("16px Geist")` and `"16px Geist Mono"` are true in the editor **and** in a sandbox slide document; body computes to `Geist, Inter, …`.
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
-- UI suite: 17 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 9 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, **real PDF/PNG downloads from the inspector (busy state, deck name, one PNG per slide in the ZIP)**, **agent activity + conditional auto-follow**, sandbox document, presenter progress and the accessibility audit.
+- Copilot provider path: `cargo test -p slyde-server` covers catalog endpoints, model normalization/free flags, key rejection before network, attachment extraction, tool schemas, OpenAI fragmented tool calls, Anthropic streaming (including parallel tool results in one user turn) and deck-summary context.
+- Copilot browser E2E: provider config/key/model responses are mocked with CDP `Fetch.fulfillRequest`, so the suite proves the eight-provider sheet, key form focus, model search, Free filter, selection persistence, attachment chip/remove, and typed SSE text + tool rows + completion announcement without a real key or network.
+- UI suite: 19 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 11 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads from the inspector, agent activity + conditional auto-follow, sandbox document, presenter progress, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
 
 ## In Progress
-- None. The AI activity signal increment is complete; the next increment needs a product decision.
+- Real-provider manual validation (needs user keys): OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, DeepSeek and NVIDIA. Endpoints and wire formats are unit-tested/mocked; vendor-specific tool-calling quirks are not yet proven in this environment.
 
 ## Current Task
-- [x] Add the AI activity signal (overlay for MCP agents)
-  - [x] Structured `agent_activity` WebSocket events emitted only by `/api/agent`
-  - [x] Pure UI state machine with minimum active hold, done confirmation and reserved thinking state
-  - [x] Status chip, canvas scanline and conditional auto-follow
-  - [x] EN/ES strings, reduced-motion fallback and accessible live announcements
-  - [x] Rust, state-machine and browser E2E tests
-  - [x] Docs updated (`STATE.md`, `MEMORY.md`, `README.md`, design note)
+- [x] Ship the in-app copilot
+  - [x] Provider catalog, key storage/validation, model discovery and free filter
+  - [x] OpenAI-compatible + Anthropic streaming transports with fragmented tool calls
+  - [x] Eight deck tools through the shared `agent::run` path
+  - [x] Bounded image/PDF/DOCX/PPTX/text attachments
+  - [x] Presentation-quality system prompt with deck context
+  - [x] Dedicated POST SSE chat channel with cancellation and typed errors
+  - [x] Tabbed right panel, thread, composer, attachments, provider sheet, EN/ES
+  - [x] Backend, transport, state-machine and mocked browser E2E tests
+  - [x] Visual pass at 1440×900
+  - [x] Docs updated (`README.md`, `STATE.md`, `MEMORY.md`, `docs/copilot.md`, design system)
 
 ## Known Issues / Bugs
 - MSVC target cannot link on this machine (Windows SDK missing). Only `x86_64-pc-windows-gnu` is verified.
@@ -59,7 +72,14 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - PNG export launches one headless Chrome per slide (~1–2 s each, sequential). Progress is visible, but a 50-slide deck takes over a minute; reuse a single Chrome via CDP if this becomes a real workflow.
 - Slides can only reference `data:`/`blob:` images (sandbox CSP), so photo-rich decks are not possible yet.
 - Autosave keeps a single working deck; there is no deck library, recent-files list or "new deck" action.
-- The AI activity overlay is a signal layer, not a model: it reacts to MCP tool calls, so it cannot show "thinking" before the first call or token-by-token writing. A prompt-driven in-app copilot is not implemented.
+- The activity chip reflects both MCP `/api/agent` calls and copilot chat (the copilot emits `thinking` on request start/between tool rounds). The copilot panel also has its own tab live dot and thread caret; the two signals are intentionally redundant.
+- Copilot conversation history is not persisted across reloads. Keys and the last provider/model are stored; the thread lives in the page.
+- Stop aborts the HTTP stream; there is no server-side cancel endpoint or partial-response persistence.
+- The copilot is desktop-only: the right panel is hidden below 1100px, so the empty-state "Ask the copilot" CTA is hidden there too.
+- Provider model lists include models that may not support tool calling or vision; the UI shows metadata when the provider supplies it but does not pre-validate capability. A failed call surfaces a localized `unsupported`/`upstream` error.
+- API keys are stored as plaintext in the app-data JSON with owner-only Unix permissions. There is no OS keychain integration.
+- PDF/DOCX/PPTX extraction is text-only (no OCR, no layout or image extraction); scanned PDFs yield no text and are rejected with a readable error.
+- Real provider calls are unverified with live keys; the test suite mocks the HTTP boundary. NVIDIA/Gemini tool-calling behavior in particular needs a real pass.
 - UI coverage is end-to-end only. There is no component-level DOM runner (adding one would mean adopting a test dependency; the E2E suite covers the critical surfaces meanwhile).
 - macOS and Linux are untested.
 
@@ -69,18 +89,20 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - Linux: not verified (no machine).
 
 ## Backlog (Prioritized)
-1. **Prompt-driven in-app copilot**: the signal layer is done, but the app still has no model. A true "thinking" state needs an in-app provider or a streaming generation channel, plus a composer and cancel/retry.
-2. **PPTX export** behind an `Exporter` trait — research first (`ppt-rs` 0.2.37 unvalidated), validate real files in PowerPoint/Keynote/Google Slides.
-3. **Image asset strategy** for `.slyde` decks (sandbox CSP currently allows only `data:`/`blob:`), including a bundle format decision.
-4. **Faster PNG export**: one Chrome/CDP session for all slides, useful before decks grow beyond a handful.
-5. **Deck library / recent files + new deck**, replacing the single-autosave-slot model.
-6. **Speaker notes in presenter mode** (data exists and persists).
-7. Component-level UI unit tests if a DOM runner is adopted; the E2E suite remains the contract test for core flows.
+1. **Validate the copilot against live provider keys** (all eight), starting with OpenAI, Anthropic and OpenRouter; record model/tool quirks and add any provider-specific compatibility shims.
+2. **Persist copilot conversations** per deck (thread, tool traces, timestamps) and add token usage/cost estimates.
+3. **PPTX export** behind an `Exporter` trait — research first (`ppt-rs` 0.2.37 unvalidated), validate real files in PowerPoint/Keynote/Google Slides.
+4. **Image asset strategy** for `.slyde` decks (sandbox CSP currently allows only `data:`/`blob:`), including a bundle format decision.
+5. **Faster PNG export**: one Chrome/CDP session for all slides, useful before decks grow beyond a handful.
+6. **Deck library / recent files + new deck**, replacing the single-autosave-slot model.
+7. **Speaker notes in presenter mode** (data exists and persists).
+8. Component-level UI unit tests if a DOM runner is adopted; the E2E suite remains the contract test for core flows.
 
 ## Next Immediate Step
-- Pick the next increment with the user: the prompt-driven copilot (new provider/channel, needs an architecture proposal) or PPTX research (requires explicit approval before touching the export architecture).
+- The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] In-app copilot: eight providers, streaming SSE, deck tools, attachments, tabbed panel, EN/ES, mocked E2E — 2026-10-24
 - [x] Add the AI activity signal for external MCP agents (structured WS events, chip, scanline, conditional follow, EN/ES, tests) — 2026-10-24
 - [x] Integrate and harden PDF/PNG export (UI + API + MCP, ZIP, progress, E2E) — 2026-10-24
 - [x] Bundle Geist + accessibility pass + dependency-free UI E2E suite — 2026-10-24
@@ -91,5 +113,3 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - [x] Presenter verified (animation playback, HUD, progress) — 2026-10-24
 - [x] Fix thumbnail scaling and sandbox self-fit (ResizeObserver, 0×0 guard) — 2026-10-24
 - [x] Create engineering charter and project memory files — 2026-10-24
-- [x] Decide Chrome-only rendering (Wry, CEF, Ultralight, Servo evaluated) — 2026-10-24
-- [x] Write the design system spec and the reference mockup — 2026-10-24

@@ -19,6 +19,13 @@
 | 2026-10-24 | **Typefaces are self-hosted.** Variable Geist Sans/Mono woff2 files live in `assets/fonts/` and are served at `/fonts` on the app origin **and** the sandbox origin | Google Fonts CDN; system font stack only; loading the npm package at runtime | Offline determinism and brand fidelity: no third-party request from a `127.0.0.1` app, no FOUT caused by a CDN, and slide exports embed the same face the editor shows. Serving from the sandbox origin lets every slide iframe share one cached copy instead of inlining ~70 KB per document |
 | 2026-10-24 | **Exports run in-process from the studio**: `POST /api/export` snapshots the deck and drives headless Chrome through `slyde-export`. PDF returns bytes; PNG returns a store-only ZIP with one image per slide. Progress is pushed over the existing WS event stream | Shelling out to `slyde export`; browser-side ZIP (`CompressionStream`); N separate PNG downloads | One pipeline shared by UI, CLI and MCP; no self-spawn or path guessing; the browser gets exactly one download per format, named after the deck. Snapshotting the deck before rendering means an export never holds the state lock while Chrome runs |
 | 2026-10-24 | **AI activity is inferred from `/api/agent`**, broadcast as structured `agent_activity` WS events. The server names a phase and an action; the UI owns localized labels and timing. No MCP contract change, no second deck state, no in-app model | A generation session/presence protocol; agents sending display strings; polling `/api/state`; a fake always-on "AI is thinking" state | Existing agents work unchanged, and the signal is truthful: it starts at the call and ends at the result. The UI holds the active phase for 1s and the done confirmation for 2.6s so instantaneous mutations are legible. After done there is no synthetic "working" tail because the agent is finished. Auto-follow runs only after a successful `upsert_slide`, and only when the user has been idle for 1.8s and is not in a form or the storyboard |
+| 2026-10-24 | **The copilot is a server-owned agent loop with a browser-owned thread.** Keys, provider transports, attachments, system prompt and tool execution live in `slyde-server`; the UI owns visible chat state and consumes typed POST SSE. Copilot tools call `agent::run`, the same path as `/api/agent` | Browser calling providers directly; one SDK per vendor; a second copilot-only deck state; MCP as the copilot transport | Keys never reach the browser, every provider difference is isolated to one adapter layer, and the copilot cannot bypass validation, undo/redo, autosave or activity events. The MCP contract stays untouched and external agents keep working |
+| 2026-10-24 | **Seven providers use the OpenAI-compatible Chat Completions wire; Anthropic uses a native Messages adapter.** Gemini uses its native `?key=` model list and the OpenAI-compatible chat base | Official per-vendor SDKs; a multi-provider abstraction crate; raw HTTP for every vendor separately | One streaming/tool-call implementation covers OpenAI, xAI, Groq, OpenRouter, DeepSeek, NVIDIA and Gemini. Anthropic is the only protocol that genuinely differs, so it gets a focused adapter instead of forcing an incompatible shape |
+| 2026-10-24 | **Attachments are decoded and extracted server-side** with explicit bounds (5 MB images, 12 MB documents, 4/6 per message). Images become base64 image parts; PDF/DOCX/PPTX/text become bounded plain text | Sending raw files to providers; browser-side extraction; storing attachments in the deck | The model gets a predictable, safe shape, the browser stays thin, and no attachment ever enters the `.slyde` file or the deck state. Bounds keep a malicious or accidental file from blocking the stdio/HTTP loop |
+| 2026-10-24 | **Presenter includes dual-screen Speaker Console Mode (`?speaker=1` or `S`)** in the same `present.html` surface | Separate `/speaker` route with a second WebSocket protocol | Reuses existing client, event dispatch, and sandbox origins. Speaker mode shows wall clock, stopwatch timer, current slide, next slide preview, and scalable speaker notes without requiring a separate server endpoint |
+| 2026-10-24 | **Storyboard drag-and-drop uses native HTML5 Drag and Drop events** driving `move_slide` | Heavy drag-and-drop JS library | Zero bundle footprint, works seamlessly with roving tabindex accessibility, and dispatches directly to the validated `move_slide` backend command |
+| 2026-10-24 | **Inspector separates Slide and Deck controls via subtabs with visual swatches**, keeping all legacy form IDs mounted | Modal dialogues or separate pages | Prevents vertical scroll fatigue while maintaining 100% backward compatibility with automated test selectors (`#theme-select`, `#export-pdf`, `#delete-slide`, `#notes`) |
+| 2026-10-24 | **Copilot streaming surfaces `ChatEvent::Thinking` for reasoning models (DeepSeek, etc.)**, with reasoning fallback on empty content turns | Dropping reasoning deltas; treating reasoning as content | Reasoning models (like DeepSeek Reasoner/Flash) stream `reasoning_content` which takes 20-40s before tools/content emit. Dropping it causes perceived freezes and false "empty response" 502 errors when tools are absent. Streaming `thinking` gives user live feedback in under 300ms, and falling back to reasoning prevents empty-response failures |
 
 ## Library Research Log
 
@@ -74,6 +81,31 @@ Candidates evaluated:
 Files kept: `Geist-Variable.woff2`, `Geist-Italic-Variable.woff2`, `GeistMono-Variable.woff2`, `GeistMono-Italic-Variable.woff2`, plus `LICENSE-Geist.txt`. The package was extracted from the npm tarball (not a random mirror), so the license and the binaries come from the same release.
 
 Risks / things to revisit: the repo grows by ~293 KB; the sandbox CSP must keep `font-src 'self' data:` and the sandbox router must mount `/fonts` or slides silently fall back; if Geist ever becomes unavailable, the documented fallback stack (Inter, system-ui) keeps the product usable.
+
+### In-app copilot transport — DECIDED 2026-10-24 (direct `reqwest`, no vendor SDKs)
+
+Candidates evaluated:
+
+| Option | Fit with the Rust-first server | Key safety | Streaming/tool control | Added footprint | Verdict |
+|---|---|---|---|---|---|
+| **`reqwest` 0.12 + rustls, hand-parsed SSE** | Native, one client for every provider | Keys stay server-side | Full control of request shape, tool loop and cancellation | Moderate; already needed for MCP HTTP, rustls avoids OpenSSL | **Chosen** |
+| Official SDK per vendor (OpenAI, Anthropic, Google, xAI, Groq…) | Fragmented, overlapping HTTP stacks, uneven streaming APIs | Same | Tied to each SDK's abstraction | High and volatile | Rejected: seven moving targets for one thin wire |
+| One multi-provider crate / gateway | Convenient surface | Same | Often hides usage/stream quirks | Unknown maturity and license risk | Rejected: the two wire shapes are small enough to own |
+| Browser calls providers directly | No Rust transport | **Unacceptable**: keys in the page | Browser owns streaming and tools | Minimal | Rejected on security and because deck mutation must go through the server |
+
+Why direct HTTP wins: the OpenAI-compatible shape covers seven of eight
+providers, and Anthropic's Messages protocol is a small, well-documented
+exception. A single `reqwest::Client` gives per-request timeouts, connection
+reuse and an abortable stream (dropping the response when the SSE receiver
+closes). It keeps the public contract typed and testable without adopting an SDK
+whose API may drift. Risks: vendor-specific tool quirks (NVIDIA/Gemini) must be
+verified against real keys; a provider can change its SSE shape, so transport
+tests pin the known fragmentations.
+
+Attachments: `pdf-extract` 0.12 (MIT, pure Rust, pulls `lopdf`) for PDF text;
+the existing `zip` 2.6.1 with `deflate` disabled on write but enabled for reads
+to open DOCX/PPTX containers; no OCR and no image analysis beyond sending the
+image to a vision model. `base64` 0.22 is the standard, well-maintained codec.
 
 ### PPTX export — OPEN, not yet decided
 
@@ -135,6 +167,18 @@ MIT and the license is compatible with a commercial product.
 - The reduced-motion blanket rule must set `animation-iteration-count: 1 !important`, not only a tiny duration. Otherwise an `infinite` ambient animation (such as the chip shimmer) runs an enormous number of cycles per second and burns CPU while claiming to respect the preference.
 - Keep the AI chip and live announcer outside the storyboard/inspector/stage containers that `state_changed` re-renders. If they live inside a re-rendered subtree, a fast state update can replace the node mid-animation and lose the activity state.
 - The UI follows an agent-written slide only on the `done` event, never on the active event. Following active would load the old slide version, then reload it on `state_changed` (double iframe load and a visible flash). Following done also guarantees the target slide exists and is the final version.
+- **Anthropic requires all `tool_result` blocks for one assistant turn in a single user message.** The first implementation emitted one user message per parallel tool result, which the API rejects. `anthropic_messages` now groups consecutive `Turn::Tool` entries before pushing.
+- OpenAI streams tool calls in fragments: `id`/`name` may arrive once, `arguments` arrives as JSON string chunks, and parallel calls are interleaved by `index`. Accumulate by index and parse the full arguments only at `finish_reason`, never per chunk.
+- Provider model lists are not chat lists. OpenAI and Gemini return embeddings, TTS, image and moderation models; normalizing must filter by known non-chat id families and shape, then dedupe and sort. The Free flag is explicit (`pricing.prompt/completion == 0` or a `:free` id), never inferred from provider tier.
+- Gemini model discovery uses the native `GET /v1beta/models?key=…`; its chat uses the OpenAI-compatible base with a bearer token. Mixing those two auth styles fails in opposite directions.
+- API keys are validated before persistence and must be non-empty ASCII graphic characters (max 1024). This prevents header injection through a pasted newline and rejects accidental prose before spending a network call.
+- The copilot SSE stream is a POST, so native `EventSource` cannot be used. `api.js` parses `data:` frames from `ReadableStream` and ignores keep-alives; the server sends `Cache-Control: no-cache`, `X-Accel-Buffering: no` and keep-alive comments.
+- The chat thread must stay `aria-live="off"` and announce only completion/error through a separate polite region. Token-by-token announcements make a screen reader unusable.
+- Tool statuses are localized from tool names; provider error text is localized from stable codes. Never render model- or provider-supplied strings in the thread.
+- Stop sends an `AbortController` abort from the browser; the server notices the closed SSE receiver on the next delta and returns `Cancelled`, dropping the upstream response. There is no separate cancel endpoint.
+- Copilot E2E tests mock `/api/copilot/config`, `/key` and `/chat` with CDP `Fetch.fulfillRequest`. This covers streaming, tool rows and focus without a real key, and avoids any vendor network dependency. The fake SSE body is delivered as one chunk, so the parser must handle multiple events per read.
+- The composer textarea autosizes by setting `height: 0`, reading `scrollHeight`, then adding 2px; without the extra pixels Chrome shows scrollbar arrow buttons on an exact-fit placeholder. The scrollbar chrome is also themed to hide the arrow buttons.
+- The copilot is a desktop-panel surface: below 1100px the right panel (and the empty-state "Ask the copilot" CTA) is hidden. Do not focus a composer the user cannot see.
 
 ## Design System Reference
 
@@ -145,8 +189,9 @@ MIT and the license is compatible with a commercial product.
 - Type: Geist Sans (bundled variable woff2; fallback Inter), mono only in Developer Mode. Base 15px, `display` 56, sentence case, no all-caps labels.
 - Accessibility baseline: `--ink-subtle` was darkened to `#6F6B73` (light) / `#908D95` (dark) to clear AA on both panel surfaces; the E2E suite measures six text/token pairs per mode and fails under 4.5:1.
 - Motion: 120/180/260/420/700ms with `--ease-out: cubic-bezier(.16,1,.3,1)` and `--ease-in-out: cubic-bezier(.65,0,.35,1)`; transform/opacity only; exits at 0.7×; reduced-motion degrades to opacity.
-- AI activity timing: active phase holds ≥1000ms, done confirmation holds 2600ms, errors hold 4200ms; the chip enters in 180ms, the canvas sheen fades in over 200ms and the 700ms sweep runs only for `upsert_slide` on the visible slide. A `thinking` phase is understood by the UI but only a future explicit generation channel should emit it.
+- AI activity timing: active phase holds ≥1000ms, done confirmation holds 2600ms, errors hold 4200ms; the chip enters in 180ms, the canvas sheen fades in over 200ms and the 700ms sweep runs only for `upsert_slide` on the visible slide. The `thinking` phase is emitted by the copilot's explicit SSE channel on request start and between tool rounds; external MCP agents never emit it.
 - The single signature moment: generation sweep + one anchored micro-label + 40ms staggered reveal. No spinner for generation, ever. The implemented inferred-activity sweep is a 16% soft warm band led by a bright coral edge, not a bare 1px line, so it reads on dark slides.
+- Copilot surface: 352px right panel with accessible **Inspector** / **Copilot** tabs; thread is `aria-live="off"` with a separate polite announcer; provider sheet covers the panel only; model picker is searchable with a `Free` toggle; errors are localized from stable codes. Active panel state persists in `localStorage`; model selection persists separately (`slyde.copilot.selection`).
 
 ## Superseded Decisions
 

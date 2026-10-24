@@ -352,11 +352,28 @@ mod tests {
     #[test]
     fn inserts_at_index_and_keeps_order() {
         let mut s = state();
-        s.upsert_slide(0, Some("a".into()), "<h1>A</h1>".into(), TemplateType::Hero, vec![])
-            .unwrap();
-        s.upsert_slide(0, Some("b".into()), "<h1>B</h1>".into(), TemplateType::Bullet, vec![])
-            .unwrap();
-        let ids: Vec<_> = s.presentation().slides.iter().map(|x| x.id.as_str()).collect();
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        s.upsert_slide(
+            0,
+            Some("b".into()),
+            "<h1>B</h1>".into(),
+            TemplateType::Bullet,
+            vec![],
+        )
+        .unwrap();
+        let ids: Vec<_> = s
+            .presentation()
+            .slides
+            .iter()
+            .map(|x| x.id.as_str())
+            .collect();
         assert_eq!(ids, vec!["b", "a"]);
         assert_eq!(s.revision(), 2);
     }
@@ -377,10 +394,22 @@ mod tests {
     #[test]
     fn updating_by_id_ignores_index_and_is_idempotent() {
         let mut s = state();
-        s.upsert_slide(0, Some("a".into()), "<h1>A</h1>".into(), TemplateType::Hero, vec![])
-            .unwrap();
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
         let outcome = s
-            .upsert_slide(7, Some("a".into()), "<h1>A2</h1>".into(), TemplateType::Chart, vec![step(".t")])
+            .upsert_slide(
+                7,
+                Some("a".into()),
+                "<h1>A2</h1>".into(),
+                TemplateType::Chart,
+                vec![step(".t")],
+            )
             .unwrap();
         assert!(!outcome.inserted);
         assert_eq!(outcome.index, 0);
@@ -422,7 +451,10 @@ mod tests {
         let err = small
             .upsert_slide(0, None, "0123456789".into(), TemplateType::Code, vec![])
             .unwrap_err();
-        assert!(matches!(err, CoreError::CodeTooLarge { actual: 10, max: 8 }));
+        assert!(matches!(
+            err,
+            CoreError::CodeTooLarge { actual: 10, max: 8 }
+        ));
     }
 
     #[test]
@@ -447,8 +479,14 @@ mod tests {
     #[test]
     fn undo_and_redo_restore_content_and_bump_revision() {
         let mut s = state();
-        s.upsert_slide(0, Some("a".into()), "<h1>A</h1>".into(), TemplateType::Code, vec![])
-            .unwrap();
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Code,
+            vec![],
+        )
+        .unwrap();
         let after_insert = s.revision();
         s.set_title("Renamed").unwrap();
 
@@ -471,10 +509,22 @@ mod tests {
     #[test]
     fn new_mutation_clears_the_redo_branch() {
         let mut s = state();
-        s.upsert_slide(0, Some("a".into()), "<h1>A</h1>".into(), TemplateType::Code, vec![])
-            .unwrap();
-        s.upsert_slide(1, Some("b".into()), "<h1>B</h1>".into(), TemplateType::Code, vec![])
-            .unwrap();
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Code,
+            vec![],
+        )
+        .unwrap();
+        s.upsert_slide(
+            1,
+            Some("b".into()),
+            "<h1>B</h1>".into(),
+            TemplateType::Code,
+            vec![],
+        )
+        .unwrap();
         s.undo().unwrap();
         assert!(s.can_redo());
 
@@ -511,11 +561,22 @@ mod tests {
     fn move_reorders_slides() {
         let mut s = state();
         for (i, id) in ["a", "b", "c"].iter().enumerate() {
-            s.upsert_slide(i, Some((*id).into()), format!("<h1>{id}</h1>"), TemplateType::Code, vec![])
-                .unwrap();
+            s.upsert_slide(
+                i,
+                Some((*id).into()),
+                format!("<h1>{id}</h1>"),
+                TemplateType::Code,
+                vec![],
+            )
+            .unwrap();
         }
         s.move_slide(0, 2).unwrap();
-        let ids: Vec<_> = s.presentation().slides.iter().map(|x| x.id.as_str()).collect();
+        let ids: Vec<_> = s
+            .presentation()
+            .slides
+            .iter()
+            .map(|x| x.id.as_str())
+            .collect();
         assert_eq!(ids, vec!["b", "c", "a"]);
         assert!(matches!(
             s.move_slide(0, 9),
@@ -527,8 +588,14 @@ mod tests {
     fn remove_then_undo_restores_the_slide_at_its_original_index() {
         let mut s = state();
         for (i, id) in ["a", "b"].iter().enumerate() {
-            s.upsert_slide(i, Some((*id).into()), format!("<h1>{id}</h1>"), TemplateType::Code, vec![])
-                .unwrap();
+            s.upsert_slide(
+                i,
+                Some((*id).into()),
+                format!("<h1>{id}</h1>"),
+                TemplateType::Code,
+                vec![],
+            )
+            .unwrap();
         }
         assert_eq!(s.remove_slide("a").unwrap(), 0);
         assert_eq!(s.presentation().slides.len(), 1);
@@ -576,7 +643,9 @@ mod tests {
         assert!(s.can_undo());
 
         let mut loaded = Presentation::new("Loaded", Theme::paper(), AspectRatio::R4x3);
-        loaded.slides.push(Slide::new("sld_1".into(), "<h1>L</h1>".into()));
+        loaded
+            .slides
+            .push(Slide::new("sld_1".into(), "<h1>L</h1>".into()));
         s.replace(loaded).unwrap();
 
         assert_eq!(s.presentation().title, "Loaded");
