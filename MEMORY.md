@@ -14,6 +14,8 @@
 | 2026-10-24 | **MCP server is a thin HTTP proxy** into the running studio (`/api/agent`), auto-spawning `slyde app` when no healthy runtime exists | MCP server owning its own `PresentationState`; MCP writing files the app watches | One state, one code path. The agent and the human see the same deck, undo/redo works across both, and there is no sync protocol to get wrong. Auto-spawn keeps `slyde mcp` usable from a bare MCP client config |
 | 2026-10-24 | **Hand-rolled JSON-RPC 2.0 stdio loop and hand-written JSON Schema** for the 7 tools, instead of the `rmcp` SDK | `rmcp` (official Rust SDK); `mcp-core`; writing a generic schema generator | The tool surface is a public, versioned contract (§12) and is small and stable. Hand-written schemas are readable, reviewable and independent of an SDK whose API was not verified for the exact protocol revision. Migration to `rmcp` stays open behind the same dispatch function |
 | 2026-10-24 | **Export drives the Chrome CLI** (`--print-to-pdf`, `--screenshot`) rather than CDP | CDP `Page.printToPDF` / `Page.captureScreenshot`; a PDF crate | No CDP client, no WebSocket dependency, no protocol version drift: one process spawn per export. `@page { size: 1280px 720px; margin: 0 }` makes the page size exact (verified: 960×540 pt). CDP remains the fallback if per-page control is ever needed |
+| 2026-10-24 | **`.slyde` is plain, versioned JSON** (`slydecore`, version 1) holding the whole presentation | ZIP container with assets; MessagePack; SQLite | A deck is text (HTML/CSS per slide), so JSON keeps it diffable, inspectable and repairable without a tool. A ZIP only pays off once slides can embed image assets, which the sandbox CSP currently forbids anyway (`img-src data: blob:`) |
+| 2026-10-24 | **Persistence = autosave to app-data + explicit download/upload**, not a native save dialog | Native file dialog via a desktop shell; only autosave; File System Access API | The studio is a web page inside Chrome, so the browser-native primitives are a download link (`GET /api/deck`) and a file input (`POST /api/deck/open`). They work on every platform and need no shell. Autosave is always on, so the common case (close and reopen) never asks the user to save |
 
 ## Library Research Log
 
@@ -79,6 +81,10 @@ Why Chrome wins, concretely:
 - On this machine the MSVC target cannot link (Windows SDK missing, `LNK1181: kernel32.lib`). Build with `cargo +stable-x86_64-pc-windows-gnu`. Revisit once the SDK is installed, since GNU is not the shipping target.
 - `cargo build` fails with "Acceso denegado (os error 5)" while `slyde.exe` is running: the debug binary is locked. Stop the server before rebuilding.
 - PowerShell `Set-Content -Encoding utf8` writes a BOM and re-encodes piped native output as UTF-16. Use `[IO.File]::WriteAllText` with `UTF8Encoding($false)` and `cmd /c "... > file"` when testing the MCP stdio stream.
+- **Never autosave over a deck file that failed to open.** If the saved file exists but does not validate, disable autosave for that session and report it; otherwise the first edit silently destroys the user's recoverable work.
+- Deck saves are atomic (write `*.slyde.tmp`, then rename). `std::fs::rename` replaces an existing file on Windows as well as Unix, so no delete-before-rename dance is needed.
+- `Content-Disposition` header values must be ASCII: use the RFC 5987 `filename*=UTF-8''<percent-encoded>` form for real deck names and keep a plain ASCII `filename` fallback.
+- `axum`'s default body limit is 2 MB; the `.slyde` upload route sets its own `DefaultBodyLimit` because a legitimate deck can exceed that.
 
 ## Design System Reference
 
