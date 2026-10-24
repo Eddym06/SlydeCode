@@ -8,6 +8,7 @@ dist/
 exports/
 .shots/
 *.log
+slyde-run.*
 mcp-in.jsonl
 mcp-out.jsonl
 .DS_Store
