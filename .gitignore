@@ -1,0 +1,17 @@
+target/
+**/*.rs.bk
+node_modules/
+dist/
+.env
+.env.*
+*.slyde
+exports/
+.shots/
+*.log
+mcp-in.jsonl
+mcp-out.jsonl
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+runtime.json
