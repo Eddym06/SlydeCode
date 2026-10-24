@@ -33,6 +33,14 @@ impl RuntimeInfo {
 /// `%APPDATA%\SlydeCode`, `~/Library/Application Support/SlydeCode`, or
 /// `$XDG_DATA_HOME/slydecode`.
 pub fn app_data_dir() -> PathBuf {
+    // Explicit override: test runners and power users get an isolated profile
+    // (runtime file, decks, Chrome profile) without touching the real one.
+    if let Ok(dir) = std::env::var("SLYDE_DATA_DIR") {
+        if !dir.trim().is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {

@@ -16,6 +16,7 @@
 | 2026-10-24 | **Export drives the Chrome CLI** (`--print-to-pdf`, `--screenshot`) rather than CDP | CDP `Page.printToPDF` / `Page.captureScreenshot`; a PDF crate | No CDP client, no WebSocket dependency, no protocol version drift: one process spawn per export. `@page { size: 1280px 720px; margin: 0 }` makes the page size exact (verified: 960×540 pt). CDP remains the fallback if per-page control is ever needed |
 | 2026-10-24 | **`.slyde` is plain, versioned JSON** (`slydecore`, version 1) holding the whole presentation | ZIP container with assets; MessagePack; SQLite | A deck is text (HTML/CSS per slide), so JSON keeps it diffable, inspectable and repairable without a tool. A ZIP only pays off once slides can embed image assets, which the sandbox CSP currently forbids anyway (`img-src data: blob:`) |
 | 2026-10-24 | **Persistence = autosave to app-data + explicit download/upload**, not a native save dialog | Native file dialog via a desktop shell; only autosave; File System Access API | The studio is a web page inside Chrome, so the browser-native primitives are a download link (`GET /api/deck`) and a file input (`POST /api/deck/open`). They work on every platform and need no shell. Autosave is always on, so the common case (close and reopen) never asks the user to save |
+| 2026-10-24 | **Typefaces are self-hosted.** Variable Geist Sans/Mono woff2 files live in `assets/fonts/` and are served at `/fonts` on the app origin **and** the sandbox origin | Google Fonts CDN; system font stack only; loading the npm package at runtime | Offline determinism and brand fidelity: no third-party request from a `127.0.0.1` app, no FOUT caused by a CDN, and slide exports embed the same face the editor shows. Serving from the sandbox origin lets every slide iframe share one cached copy instead of inlining ~70 KB per document |
 
 ## Library Research Log
 
@@ -57,6 +58,21 @@ Why Chrome wins, concretely:
 - If native app identity (own icon, dock behaviour, no browser process in the taskbar) becomes a product blocker, add a Wry shell **behind the existing HTTP boundary** — core, tools and UI stay untouched.
 - The 100MB RAM budget applies to SlydeCode's own processes; Chrome's memory is the user's browser and is explicitly out of scope (documented in the charter, §9).
 
+### Typography — DECIDED 2026-10-24 (bundled variable Geist)
+
+Candidates evaluated:
+
+| Option | Offline / privacy | Determinism in export | Footprint | License | Verdict |
+|---|---|---|---|---|---|
+| System font stack only | Yes | No — each OS renders differently | 0 | n/a | Rejected: breaks brand and WYSIWYG |
+| Google Fonts CDN `<link>` | No, requires network | No — first paint may use fallback | 0 locally | OFL | Rejected: a localhost studio should not call a third party, and offline demos must work |
+| **`geist` npm 1.8.2, self-hosted woff2** | Yes | Yes | ~293 KB for four variable faces | SIL OFL 1.1 | **Chosen** |
+| Inter variable from `rsms/inter` | Yes | Yes | Similar | SIL OFL 1.1 | Fallback only; loses the current brand face |
+
+Files kept: `Geist-Variable.woff2`, `Geist-Italic-Variable.woff2`, `GeistMono-Variable.woff2`, `GeistMono-Italic-Variable.woff2`, plus `LICENSE-Geist.txt`. The package was extracted from the npm tarball (not a random mirror), so the license and the binaries come from the same release.
+
+Risks / things to revisit: the repo grows by ~293 KB; the sandbox CSP must keep `font-src 'self' data:` and the sandbox router must mount `/fonts` or slides silently fall back; if Geist ever becomes unavailable, the documented fallback stack (Inter, system-ui) keeps the product usable.
+
 ### PPTX export — OPEN, not yet decided
 
 - Candidates: `ppt-rs` 0.2.37 (Oct 2026, ~100k downloads, active) — most promising; `pptx` 0.1.0 (Feb 2026, single release, low adoption); `office_oxide` (multi-format, commercial-ish positioning).
@@ -85,6 +101,11 @@ Why Chrome wins, concretely:
 - Deck saves are atomic (write `*.slyde.tmp`, then rename). `std::fs::rename` replaces an existing file on Windows as well as Unix, so no delete-before-rename dance is needed.
 - `Content-Disposition` header values must be ASCII: use the RFC 5987 `filename*=UTF-8''<percent-encoded>` form for real deck names and keep a plain ASCII `filename` fallback.
 - `axum`'s default body limit is 2 MB; the `.slyde` upload route sets its own `DefaultBodyLimit` because a legitimate deck can exceed that.
+- **Fonts need both origins.** A slide document is served from the sandbox listener, so `/fonts` is mounted on the app router *and* the sandbox router, and the sandbox CSP must include `font-src 'self' data:`. If either is missing, the deck still renders but silently falls back to system fonts — no error, just a brand regression.
+- **`outline: none` in any `:focus` rule beats the global `:focus-visible` ring** because of specificity. Text fields and selects keep their border change *and* the ring; never re-add `outline: none` without an equally visible replacement.
+- `document.fonts.check()` can report `false` before `await document.fonts.ready`; the UI E2E test waits for readiness before asserting the face loaded. `fonts.check()` only covers fonts the document actually requested, so check a family the page uses.
+- The UI E2E suite is dependency-free: Node's built-in test runner plus a tiny CDP client (`scripts/lib/cdp.mjs`). Run it with `node --test "tests/ui/*.test.mjs"`; a bare directory argument is treated as a module path by Node 24. It spawns the built binary with `SLYDE_DATA_DIR` pointing at a temp dir, so it never touches the user's real deck or Chrome profile.
+- Tab order in a browser continues from the last focused element, not from the top of the document. Tests that assert focus must focus a known control first; `document.body.focus()` after blurring is not a reliable reset.
 
 ## Design System Reference
 
@@ -92,7 +113,8 @@ Why Chrome wins, concretely:
 - Core tokens: `--bg`/`--surface`/`--ink` neutrals per mode, `--brand` `#7C3AED` (dark: `#9B6BFF`), `--accent` `#FF6B4A` (dark: `#FF8265`).
 - Signature gradient: `linear-gradient(135deg in oklch, #7C3AED, #FF6B4A)`. Decorative only: logo, AI chip, sweep, rings, display type ≥24px. Never behind small text (`#FF6B4A` on white is ~2.8:1).
 - Primary buttons use `--gradient-action` (`#6D28D9 → #7C3AED`, white text ≥5.7:1); coral appears only in hover glow.
-- Type: Geist Sans (fallback Inter), mono only in Developer Mode. Base 15px, `display` 56, sentence case, no all-caps labels.
+- Type: Geist Sans (bundled variable woff2; fallback Inter), mono only in Developer Mode. Base 15px, `display` 56, sentence case, no all-caps labels.
+- Accessibility baseline: `--ink-subtle` was darkened to `#6F6B73` (light) / `#908D95` (dark) to clear AA on both panel surfaces; the E2E suite measures six text/token pairs per mode and fails under 4.5:1.
 - Motion: 120/180/260/420/700ms with `--ease-out: cubic-bezier(.16,1,.3,1)`; transform/opacity only; exits at 0.7×; reduced-motion degrades to opacity.
 - The single signature moment: generation sweep + one anchored micro-label + 40ms staggered reveal. No spinner for generation, ever.
 
