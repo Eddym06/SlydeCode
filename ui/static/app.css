@@ -640,6 +640,27 @@ select.select:focus {
   margin-top: 8px;
 }
 
+.export-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.export-status {
+  margin-top: 8px;
+  min-height: 38px;
+}
+
+.file-btn:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.file-btn:disabled:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
 details.dev {
   border-top: 1px solid var(--border);
   padding-top: 14px;

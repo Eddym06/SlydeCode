@@ -12,6 +12,7 @@
 pub mod agent;
 pub mod chrome;
 pub mod error;
+pub mod export_api;
 pub mod http;
 pub mod rendezvous;
 pub mod routes;
@@ -82,10 +83,7 @@ impl RunningServer {
     }
 
     pub fn present_url(&self) -> String {
-        format!(
-            "http://127.0.0.1:{}/present?t={}",
-            self.port, self.token
-        )
+        format!("http://127.0.0.1:{}/present?t={}", self.port, self.token)
     }
 
     pub fn runtime_info(&self) -> RuntimeInfo {
@@ -252,6 +250,9 @@ mod tests {
     async fn missing_ui_dir_is_reported() {
         let state = PresentationState::new("D", Theme::studio(), AspectRatio::R16x9);
         let config = ServerConfig::new("definitely/not/here", state);
-        assert!(matches!(start(config).await, Err(ServerError::UiMissing(_))));
+        assert!(matches!(
+            start(config).await,
+            Err(ServerError::UiMissing(_))
+        ));
     }
 }

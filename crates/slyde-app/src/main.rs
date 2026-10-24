@@ -6,6 +6,8 @@
 //! `slyde mcp`        run the MCP server over stdio
 //! `slyde export`     export the deck (PDF/PNG)
 
+mod export_cli;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -46,10 +48,10 @@ fn main() -> ExitCode {
 
     let result = match command {
         "app" | "studio" => runtime.block_on(run_app(&args[1..])),
-        "mcp" => runtime.block_on(async {
-            slyde_mcp::run_stdio().await.map_err(|err| err.to_string())
-        }),
-        "export" => runtime.block_on(async { slyde_export::run_cli(&args[1..]).await.map_err(|e| e.to_string()) }),
+        "mcp" => {
+            runtime.block_on(async { slyde_mcp::run_stdio().await.map_err(|err| err.to_string()) })
+        }
+        "export" => runtime.block_on(export_cli::run(&args[1..])),
         "version" | "--version" | "-V" => {
             println!("slyde {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -175,7 +177,9 @@ async fn run_app(raw_args: &[String]) -> Result<(), String> {
     // change, and Ctrl+C would otherwise drop it.
     if persist {
         let deck = server.state.core.read().await.presentation().clone();
-        if let Err(err) = slyde_server::storage::save(&slyde_server::storage::current_path(), &deck).await {
+        if let Err(err) =
+            slyde_server::storage::save(&slyde_server::storage::current_path(), &deck).await
+        {
             eprintln!("slyde: could not save the deck on exit: {err}");
         }
     }
@@ -210,7 +214,10 @@ fn open_window(url: &str, present: bool, no_open: bool) -> Result<(), String> {
     match browser.launch(url, mode, &profile) {
         Ok(_child) => Ok(()),
         Err(err) => {
-            println!("Could not launch {}. Open this URL manually: {url}", browser.path.display());
+            println!(
+                "Could not launch {}. Open this URL manually: {url}",
+                browser.path.display()
+            );
             Err(format!("browser launch failed: {err}"))
         }
     }
@@ -225,11 +232,8 @@ fn load_state() -> (PresentationState, bool) {
     let path = slyde_server::storage::current_path();
     match slyde_server::storage::load(&path) {
         Ok(Some(deck)) => {
-            let mut state = PresentationState::new(
-                deck.title.clone(),
-                deck.theme.clone(),
-                deck.aspect_ratio,
-            );
+            let mut state =
+                PresentationState::new(deck.title.clone(), deck.theme.clone(), deck.aspect_ratio);
             match state.replace(deck) {
                 Ok(()) => {
                     println!("Restored deck from {}", path.display());
@@ -237,7 +241,10 @@ fn load_state() -> (PresentationState, bool) {
                 }
                 Err(err) => {
                     eprintln!("slyde: saved deck is invalid: {err}");
-                    eprintln!("slyde: keeping {} untouched; autosave is off", path.display());
+                    eprintln!(
+                        "slyde: keeping {} untouched; autosave is off",
+                        path.display()
+                    );
                     (seed_state(), false)
                 }
             }

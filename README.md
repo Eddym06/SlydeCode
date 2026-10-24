@@ -34,7 +34,9 @@ mode, `app --no-open` prints the session URL instead.
 | `slyde version` / `slyde help` | Version and usage. |
 
 `export` requires a running studio instance, located through the runtime file
-in the OS app-data directory.
+in the OS app-data directory. The same pipeline is available inside the studio:
+the inspector's **Export** section renders a PDF, or a ZIP with one PNG per
+slide, and downloads it with the deck's name.
 
 ## Tests
 
@@ -46,8 +48,8 @@ node --test "tests/ui/*.test.mjs"
 The UI suite spawns the built binary with an isolated `SLYDE_DATA_DIR`, launches
 headless Chrome and drives the real interface over CDP. It covers fonts,
 sandbox isolation, storyboard keyboard navigation, runtime i18n, theme toggle,
-notes autosave, `.slyde` export, sandbox slide rendering, presenter progress and
-the accessibility baseline.
+notes autosave, `.slyde` export, in-app PDF/PNG export with a real download,
+sandbox slide rendering, presenter progress and the accessibility baseline.
 
 ## Environment
 

@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 slyde-core.workspace = true
+slyde-export.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -15,6 +16,9 @@ axum.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 futures-util.workspace = true
+# Store-only ZIP for the per-slide PNG bundle. PNGs are already compressed, so
+# deflate would burn CPU for no size win; default features stay off.
+zip = { version = "2", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

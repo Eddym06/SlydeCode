@@ -73,6 +73,22 @@ function waitForAppUrl(child) {
   });
 }
 
+async function waitForFile(path, timeout) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    if (existsSync(path)) {
+      const bytes = readFileSync(path);
+      // A finished download is stable; wait a beat so Chrome is done writing.
+      if (bytes.length > 0) {
+        await sleep(250);
+        return readFileSync(path);
+      }
+    }
+    await sleep(200);
+  }
+  throw new Error(`download did not appear: ${path}`);
+}
+
 before(async () => {
   assert.ok(
     binary,
@@ -231,6 +247,83 @@ test("autosaves speaker notes and exports a valid .slyde file", async () => {
   const deck = await page.evaluate(`fetch("/api/deck?t=${token}").then((r) => r.json())`);
   assert.equal(deck.format, "slydecore");
   assert.equal(deck.presentation.slides.length, 2);
+});
+
+test("exports a PDF and a PNG bundle from the inspector with the deck name", async () => {
+  await page.evaluate(`(() => {
+    const input = document.getElementById("deck-title");
+    input.value = "Q3 Review";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(900); // title debounce + autosave
+
+  const downloads = mkdtempSync(join(tmpdir(), "slyde-downloads-"));
+  try {
+    await page.send("Page.setDownloadBehavior", {
+      behavior: "allow",
+      downloadPath: downloads,
+    });
+
+    const labels = await page.evaluate(`({
+      busy: document.getElementById("export-section").getAttribute("aria-busy"),
+      pdf: document.getElementById("export-pdf").textContent,
+      png: document.getElementById("export-png").textContent,
+      hint: document.getElementById("export-status").textContent
+    })`);
+    assert.equal(labels.busy, "false");
+    assert.equal(labels.pdf, "PDF");
+    assert.equal(labels.png, "Imágenes PNG");
+    assert.match(labels.hint, /ZIP/);
+
+    const busy = await page.evaluate(`(() => {
+      document.getElementById("export-pdf").click();
+      return {
+        busy: document.getElementById("export-section").getAttribute("aria-busy"),
+        disabled: document.getElementById("export-png").disabled,
+        status: document.getElementById("export-status").textContent
+      };
+    })()`);
+    assert.equal(busy.busy, "true", "the section exposes its busy state");
+    assert.equal(busy.disabled, true, "both buttons are disabled while exporting");
+    assert.ok(busy.status.length > 0, "progress is announced");
+
+    const pdf = await waitForFile(join(downloads, "q3-review.pdf"), 45000);
+    assert.equal(pdf.subarray(0, 5).toString("ascii"), "%PDF-");
+    await page.waitFor(
+      `document.getElementById("export-section").getAttribute("aria-busy") === "false"`
+    );
+
+    const pngBusy = await page.evaluate(`(() => {
+      document.getElementById("export-png").click();
+      return document.getElementById("export-status").textContent;
+    })()`);
+    assert.match(pngBusy, /Exportando 1 de 2/);
+    // The second label change can only come from a WebSocket progress event.
+    await page.waitFor(
+      `/Exportando 2 de 2/.test(document.getElementById("export-status").textContent)`,
+      { timeout: 45000 }
+    );
+
+    const zip = await waitForFile(join(downloads, "q3-review.zip"), 90000);
+    assert.equal(zip.subarray(0, 4).toString("latin1"), "PK\x03\x04");
+
+    const names = [
+      ...new Set(
+        [...zip.toString("latin1").matchAll(/\d{2}-sld_[a-z0-9]+\.png/g)].map(
+          (match) => match[0]
+        )
+      ),
+    ];
+    assert.equal(names.length, 2, "one PNG per slide");
+  } finally {
+    await page.send("Page.setDownloadBehavior", { behavior: "default" }).catch(() => {});
+    try {
+      rmSync(downloads, { recursive: true, force: true });
+    } catch {
+      /* Chrome may still hold a file; the temp cleaner will get it. */
+    }
+  }
 });
 
 test("renders slides from the sandbox origin with bundled fonts", async () => {

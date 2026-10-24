@@ -88,6 +88,13 @@ pub enum ServerEvent {
         step_index: usize,
         step: AnimationStep,
     },
+    /// Progress for an export started from the UI. The HTTP response still
+    /// carries the finished file; this only powers the progress label.
+    ExportProgress {
+        format: String,
+        completed: usize,
+        total: usize,
+    },
 }
 
 /// Commands the UI can send. Deliberately narrow: everything that changes the
@@ -95,16 +102,35 @@ pub enum ServerEvent {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum UiCommand {
-    SetTitle { title: String },
-    SetTheme { theme_id: String },
-    SetAspectRatio { ratio: String },
-    SetNotes { slide_id: String, notes: Option<String> },
-    AddSlide { template: String },
-    MoveSlide { from: usize, to: usize },
-    RemoveSlide { slide_id: String },
+    SetTitle {
+        title: String,
+    },
+    SetTheme {
+        theme_id: String,
+    },
+    SetAspectRatio {
+        ratio: String,
+    },
+    SetNotes {
+        slide_id: String,
+        notes: Option<String>,
+    },
+    AddSlide {
+        template: String,
+    },
+    MoveSlide {
+        from: usize,
+        to: usize,
+    },
+    RemoveSlide {
+        slide_id: String,
+    },
     Undo,
     Redo,
-    TriggerAnimation { slide_id: String, step_index: usize },
+    TriggerAnimation {
+        slide_id: String,
+        step_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -181,9 +207,27 @@ mod tests {
     }
 
     #[test]
+    fn export_progress_uses_the_shared_event_envelope() {
+        let event = ServerEvent::ExportProgress {
+            format: "png".into(),
+            completed: 1,
+            total: 2,
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "export_progress");
+        assert_eq!(json["format"], "png");
+        assert_eq!(json["completed"], 1);
+        assert_eq!(json["total"], 2);
+    }
+
+    #[test]
     fn origin_check_allows_missing_origin_and_rejects_unknown() {
         let state = AppState::new(
-            PresentationState::new("D", slyde_core::Theme::studio(), slyde_core::AspectRatio::R16x9),
+            PresentationState::new(
+                "D",
+                slyde_core::Theme::studio(),
+                slyde_core::AspectRatio::R16x9,
+            ),
             "tok".into(),
             PathBuf::from("."),
             vec!["http://127.0.0.1:4321".into()],

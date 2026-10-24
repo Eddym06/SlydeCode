@@ -32,6 +32,7 @@ function boot(sessionToken) {
   let notesTimer = null;
   let titleTimer = null;
   let resizeTimer = null;
+  let exportJob = null;
 
   $("app").hidden = false;
   syncThemeToggle();
@@ -291,6 +292,14 @@ function boot(sessionToken) {
         </div>
         <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
         <input type="file" id="deck-file" accept=".slyde,application/json" hidden>
+      </section>
+      <section class="field" id="export-section" aria-busy="false">
+        <span class="field-label">${escapeHtml(t("export.section"))}</span>
+        <div class="export-actions">
+          <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
+          <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
+        </div>
+        <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
       </section>`;
 
     if (!current) {
@@ -422,6 +431,78 @@ function boot(sessionToken) {
         file.value = "";
       });
     }
+
+    const exportPdf = $("export-pdf");
+    if (exportPdf) exportPdf.addEventListener("click", () => startExport("pdf"));
+    const exportPng = $("export-png");
+    if (exportPng) exportPng.addEventListener("click", () => startExport("png"));
+    syncExportUi();
+  }
+
+  /// Renders and packages the deck with headless Chrome. The HTTP call only
+  /// resolves when the file is ready; progress events keep the label honest.
+  async function startExport(format) {
+    if (exportJob) return;
+    const slides = deck();
+    exportJob = {
+      format,
+      completed: 0,
+      total: format === "pdf" ? 1 : slides ? slides.slides.length : 0,
+    };
+    syncExportUi();
+
+    try {
+      const { blob, filename } = await client.exportDeck(format);
+      saveBlob(blob, filename || (format === "pdf" ? "deck.pdf" : "deck.zip"));
+      toast(t(format === "pdf" ? "toast.exportedPdf" : "toast.exportedPng"));
+    } catch (error) {
+      console.error("export failed", error);
+      toast(exportErrorText(error));
+    } finally {
+      exportJob = null;
+      syncExportUi();
+    }
+  }
+
+  function syncExportUi() {
+    const section = $("export-section");
+    if (!section) return;
+
+    const busy = Boolean(exportJob);
+    section.setAttribute("aria-busy", String(busy));
+    ["export-pdf", "export-png"].forEach((id) => {
+      const button = $(id);
+      if (button) button.disabled = busy;
+    });
+
+    const status = $("export-status");
+    if (!status) return;
+    if (!busy) {
+      status.textContent = t("export.hint");
+    } else if (exportJob.format === "pdf" || exportJob.total < 1) {
+      status.textContent = t("export.preparing");
+    } else {
+      const done = Math.min(exportJob.completed + 1, exportJob.total);
+      status.textContent = t("export.progress", { done, total: exportJob.total });
+    }
+  }
+
+  function exportErrorText(error) {
+    if (error.code === "browser_not_found") return t("export.noBrowser");
+    if (error.code === "empty_deck") return t("export.empty");
+    return t("export.failed");
+  }
+
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Give the browser a beat to start the download before releasing the blob.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ---------- events ----------
@@ -429,6 +510,14 @@ function boot(sessionToken) {
   function handleEvent(event) {
     if (event.type === "state_changed") {
       applyView(event.view);
+      return;
+    }
+    if (event.type === "export_progress") {
+      if (exportJob && exportJob.format === event.format) {
+        exportJob.completed = event.completed;
+        exportJob.total = event.total;
+        syncExportUi();
+      }
       return;
     }
     if (event.type === "animation") {

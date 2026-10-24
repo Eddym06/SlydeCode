@@ -5,126 +5,67 @@
 //! No second layout engine means no WYSIWYG drift.
 //!
 //! PDF is one document with one page per slide (`@page` sized to the deck
-//! aspect ratio). PNG is one file per slide at 1x.
+//! aspect ratio). PNG is one file per slide at 1280px wide.
+//!
+//! This crate knows nothing about the server, the CLI or the app data layout:
+//! callers hand it a browser executable, fully built URLs and output paths.
+//! That keeps it usable from the running server (the UI export buttons) and
+//! from the `slyde export` command alike.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use slyde_server::http::get_json;
-use slyde_server::{RuntimeInfo, discover_browser, read_runtime};
+use slyde_core::AspectRatio;
 use thiserror::Error;
+use tokio::sync::mpsc::UnboundedSender;
 
 const CHROME_TIMEOUT: Duration = Duration::from_secs(90);
+const SLIDE_WIDTH: u32 = 1280;
 
 #[derive(Debug, Error)]
 pub enum ExportError {
-    #[error("SlydeCode is not running. Open the app first, then export.")]
-    NotRunning,
-    #[error("no supported browser found; install Google Chrome or set SLYDE_BROWSER")]
-    BrowserNotFound,
+    #[error("the deck has no slides to export")]
+    EmptyDeck,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("request failed: {0}")]
-    Http(#[from] slyde_server::http::HttpError),
     #[error("chrome exited with {status}: {details}")]
     Chrome { status: String, details: String },
-    #[error("chrome produced no output at {0}")]
-    NoOutput(String),
-    #[error("invalid argument: {0}")]
-    InvalidArgument(String),
 }
 
+/// One slide URL plus the id used to name its PNG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlideTarget {
+    pub id: String,
+    pub url: String,
+}
+
+/// Emitted before the first slide and after every written file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    Pdf,
-    Png,
+pub struct ExportProgress {
+    pub completed: usize,
+    pub total: usize,
 }
 
-impl Format {
-    fn parse(raw: &str) -> Result<Self, ExportError> {
-        match raw.to_ascii_lowercase().as_str() {
-            "pdf" => Ok(Self::Pdf),
-            "png" | "images" => Ok(Self::Png),
-            other => Err(ExportError::InvalidArgument(format!(
-                "unsupported format: {other} (use pdf or png)"
-            ))),
-        }
-    }
-}
+/// Prints the whole deck as one paginated PDF.
+pub async fn export_pdf(
+    chrome: &Path,
+    print_url: &str,
+    output: &Path,
+    progress: Option<&UnboundedSender<ExportProgress>>,
+) -> Result<PathBuf, ExportError> {
+    report(progress, 0, 1);
 
-/// Entry point for `slyde export`.
-pub async fn run_cli(args: &[String]) -> Result<(), ExportError> {
-    let mut format = Format::Pdf;
-    let mut output: Option<PathBuf> = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--format" | "-f" => {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| ExportError::InvalidArgument("--format needs a value".into()))?;
-                format = Format::parse(value)?;
-            }
-            "--out" | "-o" => {
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or_else(|| ExportError::InvalidArgument("--out needs a path".into()))?;
-                output = Some(PathBuf::from(value));
-            }
-            other => {
-                return Err(ExportError::InvalidArgument(format!(
-                    "unknown option: {other}"
-                )));
-            }
-        }
-        index += 1;
-    }
-
-    let runtime = read_runtime().ok_or(ExportError::NotRunning)?;
-    if !slyde_server::probe_health(runtime.port, Duration::from_millis(600)).await {
-        return Err(ExportError::NotRunning);
-    }
-
-    match format {
-        Format::Pdf => {
-            let path = output.unwrap_or_else(|| default_pdf_path(&runtime));
-            let written = export_pdf(&runtime, &path).await?;
-            println!("{}", written.display());
-        }
-        Format::Png => {
-            let dir = output.unwrap_or_else(|| PathBuf::from("exports").join("slides"));
-            let files = export_png(&runtime, &dir).await?;
-            for file in files {
-                println!("{}", file.display());
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub async fn export_pdf(runtime: &RuntimeInfo, output: &Path) -> Result<PathBuf, ExportError> {
     // Chrome resolves `--print-to-pdf` against its own working directory, not
     // always ours, so hand it an absolute path.
     let output = std::path::absolute(output)?;
-    let url = format!(
-        "http://127.0.0.1:{}/print?t={}",
-        runtime.sandbox_port, runtime.token
-    );
-
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _ = std::fs::remove_file(&output);
 
     let profile = export_profile_dir("pdf");
-    let browser = discover_browser().map_err(|_| ExportError::BrowserNotFound)?;
-
-    let mut command = tokio::process::Command::new(&browser.path);
+    let mut command = tokio::process::Command::new(chrome);
     command
         .arg("--headless=new")
         .arg("--disable-gpu")
@@ -136,77 +77,81 @@ pub async fn export_pdf(runtime: &RuntimeInfo, output: &Path) -> Result<PathBuf,
         .arg("--virtual-time-budget=5000")
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(format!("--print-to-pdf={}", output.display()))
-        .arg(&url)
+        .arg(print_url)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        // A timeout drops the future; without this, Chrome would outlive the
+        // failed export and keep the profile directory locked.
+        .kill_on_drop(true);
 
-    run_chrome(command, &output).await?;
+    let outcome = run_chrome(command, &output).await;
+    let _ = std::fs::remove_dir_all(&profile);
+    outcome?;
+
+    report(progress, 1, 1);
     Ok(output)
 }
 
-pub async fn export_png(runtime: &RuntimeInfo, dir: &Path) -> Result<Vec<PathBuf>, ExportError> {
+/// Renders one PNG per slide into `dir`, in deck order.
+pub async fn export_png(
+    chrome: &Path,
+    slides: &[SlideTarget],
+    aspect_ratio: AspectRatio,
+    dir: &Path,
+    progress: Option<&UnboundedSender<ExportProgress>>,
+) -> Result<Vec<PathBuf>, ExportError> {
+    if slides.is_empty() {
+        return Err(ExportError::EmptyDeck);
+    }
+
     let dir = std::path::absolute(dir)?;
     std::fs::create_dir_all(&dir)?;
 
-    let state = get_json(
-        &format!("http://127.0.0.1:{}/api/state?t={}", runtime.port, runtime.token),
-        Duration::from_secs(5),
-    )
-    .await?;
-
-    let slides = state
-        .pointer("/view/presentation/slides")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let ratio = state
-        .pointer("/view/presentation/aspect_ratio")
-        .and_then(|value| value.as_str())
-        .unwrap_or("16:9");
-    let (width, height) = ratio
-        .split_once(':')
-        .and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?)))
-        .map(|(w, h)| {
-            let scale = 1280.0 / w as f64;
-            (1280u32, (h as f64 * scale).round() as u32)
-        })
-        .unwrap_or((1280, 720));
-
-    let browser = discover_browser().map_err(|_| ExportError::BrowserNotFound)?;
+    let (width, height) = png_dimensions(aspect_ratio);
     let profile = export_profile_dir("png");
-    let mut written = Vec::new();
+    let total = slides.len();
+    let mut written = Vec::with_capacity(total);
 
-    for (index, slide) in slides.iter().enumerate() {
-        let Some(id) = slide.get("id").and_then(|value| value.as_str()) else {
-            continue;
-        };
-        let file = dir.join(format!("{:02}-{}.png", index + 1, safe_id(id)));
-        let _ = std::fs::remove_file(&file);
+    report(progress, 0, total);
 
-        let url = format!(
-            "http://127.0.0.1:{}/s/{}?static=1",
-            runtime.sandbox_port, id
-        );
+    let outcome: Result<(), ExportError> = async {
+        for (index, slide) in slides.iter().enumerate() {
+            let file = dir.join(format!("{:02}-{}.png", index + 1, safe_id(&slide.id)));
+            let _ = std::fs::remove_file(&file);
 
-        let mut command = tokio::process::Command::new(&browser.path);
-        command
-            .arg("--headless=new")
-            .arg("--disable-gpu")
-            .arg("--hide-scrollbars")
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg(format!("--window-size={width},{height}"))
-            .arg(format!("--screenshot={}", file.display()))
-            .arg(&url)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+            let mut command = tokio::process::Command::new(chrome);
+            command
+                .arg("--headless=new")
+                .arg("--disable-gpu")
+                .arg("--hide-scrollbars")
+                .arg("--no-first-run")
+                .arg("--no-default-browser-check")
+                .arg(format!("--user-data-dir={}", profile.display()))
+                .arg(format!("--window-size={width},{height}"))
+                .arg(format!("--screenshot={}", file.display()))
+                .arg(&slide.url)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
 
-        run_chrome(command, &file).await?;
-        written.push(file);
+            run_chrome(command, &file).await?;
+            written.push(file);
+            report(progress, index + 1, total);
+        }
+        Ok(())
     }
+    .await;
 
+    let _ = std::fs::remove_dir_all(&profile);
+    outcome?;
     Ok(written)
+}
+
+/// Pixels for a screenshot at a fixed 1280px width, matching the print scale.
+pub fn png_dimensions(aspect_ratio: AspectRatio) -> (u32, u32) {
+    let (base_w, base_h) = aspect_ratio.size_px();
+    let height = (SLIDE_WIDTH as f64 * base_h as f64 / base_w as f64).round() as u32;
+    (SLIDE_WIDTH, height.max(1))
 }
 
 async fn run_chrome(
@@ -229,31 +174,46 @@ async fn run_chrome(
     if !exists {
         return Err(ExportError::Chrome {
             status: output.status.to_string(),
-            details: String::from_utf8_lossy(&output.stderr).chars().take(600).collect(),
+            details: String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(600)
+                .collect(),
         });
     }
 
     Ok(())
 }
 
+fn report(progress: Option<&UnboundedSender<ExportProgress>>, completed: usize, total: usize) {
+    if let Some(tx) = progress {
+        // A closed channel only means nobody is watching (CLI, tests).
+        let _ = tx.send(ExportProgress { completed, total });
+    }
+}
+
+/// A profile per export attempt: two exports at once must never fight over the
+/// same Chrome profile lock.
 fn export_profile_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("slyde-export-{tag}-{}", std::process::id()));
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir =
+        std::env::temp_dir().join(format!("slyde-export-{tag}-{}-{nanos}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
 fn safe_id(raw: &str) -> String {
     raw.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
-}
-
-fn default_pdf_path(_runtime: &RuntimeInfo) -> PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    PathBuf::from("exports").join(format!("deck-{stamp}.pdf"))
 }
 
 #[cfg(test)]
@@ -261,11 +221,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_parsing_accepts_aliases_and_rejects_unknown() {
-        assert_eq!(Format::parse("PDF").unwrap(), Format::Pdf);
-        assert_eq!(Format::parse("png").unwrap(), Format::Png);
-        assert_eq!(Format::parse("images").unwrap(), Format::Png);
-        assert!(Format::parse("pptx").is_err());
+    fn png_width_is_fixed_and_height_follows_the_ratio() {
+        assert_eq!(png_dimensions(AspectRatio::R16x9), (1280, 720));
+        assert_eq!(png_dimensions(AspectRatio::R4x3), (1280, 960));
+        assert_eq!(png_dimensions(AspectRatio::R9x16), (1280, 2276));
     }
 
     #[test]
@@ -275,11 +234,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cli_requires_a_running_instance() {
-        // No runtime file in a clean test env means a clear, actionable error.
-        if slyde_server::read_runtime().is_none() {
-            let err = run_cli(&[]).await.unwrap_err();
-            assert!(matches!(err, ExportError::NotRunning));
-        }
+    async fn exporting_an_empty_deck_fails_before_launching_chrome() {
+        let dir = std::env::temp_dir().join(format!("slyde-export-empty-{}", std::process::id()));
+        let err = export_png(Path::new("chrome"), &[], AspectRatio::R16x9, &dir, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExportError::EmptyDeck));
     }
 }

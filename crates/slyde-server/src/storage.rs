@@ -32,7 +32,8 @@ pub fn current_path() -> PathBuf {
 pub fn load(path: &Path) -> Result<Option<Presentation>, ServerError> {
     match std::fs::read_to_string(path) {
         Ok(raw) => {
-            let file = ProjectFile::from_json(&raw).map_err(|err| ServerError::Deck(err.to_string()))?;
+            let file =
+                ProjectFile::from_json(&raw).map_err(|err| ServerError::Deck(err.to_string()))?;
             Ok(Some(file.presentation))
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -53,11 +54,17 @@ pub async fn save(path: &Path, deck: &Presentation) -> Result<(), ServerError> {
     Ok(())
 }
 
-/// A safe download name derived from the deck title.
+/// Directory where export jobs stage their files before they are handed to the
+/// browser. Always inside app data, never the repository.
+pub fn exports_dir() -> PathBuf {
+    crate::rendezvous::app_data_dir().join("exports")
+}
+
+/// A safe, readable file stem derived from the deck title.
 ///
-/// Keeps the file name readable in a downloads folder while guaranteeing it is
-/// valid on Windows, macOS and Linux.
-pub fn file_name_for(title: &str) -> String {
+/// Every export format builds its own name from this (`q3-review.pdf`,
+/// `q3-review.zip`), so the name the user downloads always matches the deck.
+pub fn file_stem_for(title: &str) -> String {
     let mut slug: String = title
         .chars()
         .map(|ch| {
@@ -73,8 +80,15 @@ pub fn file_name_for(title: &str) -> String {
     }
     let slug = slug.trim_matches('-');
     let stem = if slug.is_empty() { "deck" } else { slug };
-    let capped: String = stem.chars().take(64).collect();
-    format!("{capped}.{}", slyde_core::FILE_EXTENSION)
+    stem.chars().take(64).collect()
+}
+
+/// A safe download name derived from the deck title.
+///
+/// Keeps the file name readable in a downloads folder while guaranteeing it is
+/// valid on Windows, macOS and Linux.
+pub fn file_name_for(title: &str) -> String {
+    format!("{}.{}", file_stem_for(title), slyde_core::FILE_EXTENSION)
 }
 
 /// Saves to a caller-chosen path (used by tests and future CLI save flows).
@@ -105,7 +119,8 @@ mod tests {
 
     fn deck() -> Presentation {
         let mut deck = Presentation::new("Landing <v2>", Theme::studio(), AspectRatio::R16x9);
-        deck.slides.push(Slide::new("sld_a".into(), "<h1>A</h1>".into()));
+        deck.slides
+            .push(Slide::new("sld_a".into(), "<h1>A</h1>".into()));
         deck
     }
 
@@ -163,5 +178,12 @@ mod tests {
         assert_eq!(file_name_for("../../etc/passwd"), "etc-passwd.slyde");
         assert_eq!(file_name_for("Diseño 2026"), "diseño-2026.slyde");
         assert_eq!(file_name_for(&"x".repeat(200)).len(), 64 + ".slyde".len());
+    }
+
+    #[test]
+    fn export_stems_are_shared_across_formats() {
+        assert_eq!(file_stem_for("Q3 Review"), "q3-review");
+        assert_eq!(file_stem_for("  "), "deck");
+        assert_eq!(file_stem_for(&"x".repeat(200)).len(), 64);
     }
 }

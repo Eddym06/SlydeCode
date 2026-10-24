@@ -38,6 +38,7 @@ pub fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/state", get(api_state))
         .route("/api/command", post(api_command))
         .route("/api/agent", post(api_agent))
+        .route("/api/export", post(crate::export_api::api_export))
         .route("/api/deck", get(api_deck_download))
         .route(
             "/api/deck/open",
@@ -75,11 +76,7 @@ async fn present_page(State(state): State<Arc<AppState>>) -> Response {
 
 async fn serve_ui_file(state: &AppState, file: &str) -> Response {
     match tokio::fs::read_to_string(state.ui_dir.join(file)).await {
-        Ok(html) => (
-            [(header::CACHE_CONTROL, "no-store")],
-            Html(html),
-        )
-            .into_response(),
+        Ok(html) => ([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Html(missing_ui_page(&state.ui_dir, &err.to_string())),
@@ -124,7 +121,8 @@ async fn api_command(
     headers: HeaderMap,
     Query(auth): Query<AuthQuery>,
     Json(command): Json<UiCommand>,
-) -> Response {    if !origin_allowed(&state, &headers) {
+) -> Response {
+    if !origin_allowed(&state, &headers) {
         return forbidden();
     }
     if !is_authorized(&state, &headers, &auth) {
@@ -323,7 +321,8 @@ fn bad_request(message: &str) -> Response {
 async fn print_document(
     State(state): State<Arc<AppState>>,
     Query(auth): Query<AuthQuery>,
-) -> Response {    if !is_authorized(&state, &HeaderMap::new(), &auth) {
+) -> Response {
+    if !is_authorized(&state, &HeaderMap::new(), &auth) {
         return unauthorized();
     }
 
@@ -339,7 +338,8 @@ async fn print_document(
     response
 }
 
-async fn sandbox_slide(    State(state): State<Arc<AppState>>,
+async fn sandbox_slide(
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(query): Query<SandboxQuery>,
 ) -> Response {
@@ -568,8 +568,7 @@ mod tests {
         let state = test_state();
         let app = app_router(state.clone());
 
-        let mut incoming =
-            PresentationState::new("Opened", Theme::paper(), AspectRatio::R4x3);
+        let mut incoming = PresentationState::new("Opened", Theme::paper(), AspectRatio::R4x3);
         incoming
             .upsert_slide(
                 0,
@@ -630,7 +629,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_serves_the_slide_with_csp() {        let app = sandbox_router(test_state());
+    async fn sandbox_serves_the_slide_with_csp() {
+        let app = sandbox_router(test_state());
         let res = app
             .oneshot(Request::get("/s/sld_a").body(Body::empty()).unwrap())
             .await

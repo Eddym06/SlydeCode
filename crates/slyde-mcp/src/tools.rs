@@ -140,11 +140,7 @@ pub fn definitions() -> Value {
 #[derive(Debug)]
 pub struct ToolFailure(pub String);
 
-pub async fn call(
-    runtime: &RuntimeInfo,
-    name: &str,
-    args: &Value,
-) -> Result<String, ToolFailure> {
+pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<String, ToolFailure> {
     match name {
         "create_presentation" => {
             let title = require_str(args, "title")?;
@@ -198,12 +194,19 @@ pub async fn call(
             let upsert = response.get("upsert").cloned().unwrap_or(Value::Null);
             Ok(format!(
                 "{} slide {} at index {}.\n{}",
-                if upsert.get("inserted").and_then(Value::as_bool).unwrap_or(false) {
+                if upsert
+                    .get("inserted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     "Inserted"
                 } else {
                     "Updated"
                 },
-                upsert.get("slide_id").and_then(Value::as_str).unwrap_or("?"),
+                upsert
+                    .get("slide_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("?"),
                 upsert.get("index").and_then(Value::as_u64).unwrap_or(index),
                 serde_json::to_string_pretty(&upsert).unwrap_or_default()
             ))
@@ -261,21 +264,76 @@ pub async fn call(
         }
 
         "export_presentation" => {
-            let format = optional_str(args, "format").unwrap_or("pdf").to_ascii_lowercase();
+            let format = optional_str(args, "format")
+                .unwrap_or("pdf")
+                .to_ascii_lowercase();
             let output = optional_str(args, "output_path").map(PathBuf::from);
+
+            let state = get_json(
+                &format!(
+                    "http://127.0.0.1:{}/api/state?t={}",
+                    runtime.port, runtime.token
+                ),
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .map_err(|err| ToolFailure(format!("could not read the deck: {err}")))?;
+            let deck = state
+                .pointer("/view/presentation")
+                .ok_or_else(|| ToolFailure("the studio returned no deck".into()))?;
+            let title = deck.get("title").and_then(Value::as_str).unwrap_or("deck");
+            let aspect_ratio = deck
+                .get("aspect_ratio")
+                .and_then(Value::as_str)
+                .and_then(slyde_core::AspectRatio::parse)
+                .unwrap_or_default();
+            let slides: Vec<slyde_export::SlideTarget> = deck
+                .get("slides")
+                .and_then(Value::as_array)
+                .map(|slides| {
+                    slides
+                        .iter()
+                        .filter_map(|slide| slide.get("id").and_then(Value::as_str))
+                        .map(|id| slyde_export::SlideTarget {
+                            id: id.to_string(),
+                            url: format!(
+                                "http://127.0.0.1:{}/s/{}?static=1",
+                                runtime.sandbox_port, id
+                            ),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if slides.is_empty() {
+                return Err(ToolFailure("the deck has no slides to export".into()));
+            }
+
+            let browser = slyde_server::discover_browser().map_err(|_| {
+                ToolFailure(
+                    "no supported browser found; install Google Chrome or set SLYDE_BROWSER".into(),
+                )
+            })?;
+            let stem = slyde_server::storage::file_stem_for(title);
+
             match format.as_str() {
                 "pdf" => {
-                    let path = output.unwrap_or_else(default_pdf);
-                    let written = slyde_export::export_pdf(runtime, &path)
+                    let path = output
+                        .unwrap_or_else(|| PathBuf::from("exports").join(format!("{stem}.pdf")));
+                    let url = format!(
+                        "http://127.0.0.1:{}/print?t={}",
+                        runtime.sandbox_port, runtime.token
+                    );
+                    let written = slyde_export::export_pdf(&browser.path, &url, &path, None)
                         .await
                         .map_err(|err| ToolFailure(err.to_string()))?;
                     Ok(format!("Exported PDF to {}", written.display()))
                 }
                 "png" => {
-                    let dir = output.unwrap_or_else(|| PathBuf::from("exports").join("slides"));
-                    let files = slyde_export::export_png(runtime, &dir)
-                        .await
-                        .map_err(|err| ToolFailure(err.to_string()))?;
+                    let dir = output.unwrap_or_else(|| PathBuf::from("exports").join(&stem));
+                    let files =
+                        slyde_export::export_png(&browser.path, &slides, aspect_ratio, &dir, None)
+                            .await
+                            .map_err(|err| ToolFailure(err.to_string()))?;
                     Ok(format!(
                         "Exported {} PNG files to {}\n{}",
                         files.len(),
@@ -331,14 +389,6 @@ fn require_u64(args: &Value, key: &str) -> Result<u64, ToolFailure> {
     args.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| ToolFailure(format!("missing required integer argument: {key}")))
-}
-
-fn default_pdf() -> PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    PathBuf::from("exports").join(format!("deck-{stamp}.pdf"))
 }
 
 #[cfg(test)]

@@ -26,7 +26,9 @@ export function createClient(token) {
     }
     if (!response.ok || !payload || payload.ok === false) {
       const message = payload && payload.error ? payload.error : `HTTP ${response.status}`;
-      throw new Error(message);
+      const error = new Error(message);
+      error.code = payload && payload.code ? payload.code : "request_failed";
+      throw error;
     }
     return payload;
   }
@@ -53,6 +55,34 @@ export function createClient(token) {
         headers: { "content-type": "application/json" },
         body: text,
       });
+    },
+
+    /**
+     * Renders the deck with headless Chrome and returns the finished file.
+     * Progress arrives over the WebSocket as `export_progress` events.
+     */
+    async exportDeck(format) {
+      const response = await fetch(
+        `/api/export?format=${encodeURIComponent(format)}&${query}`,
+        { method: "POST" }
+      );
+      if (!response.ok) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
+        }
+        const error = new Error(
+          payload && payload.error ? payload.error : `HTTP ${response.status}`
+        );
+        error.code = payload && payload.code ? payload.code : "export_failed";
+        throw error;
+      }
+      return {
+        blob: await response.blob(),
+        filename: filenameFromDisposition(response.headers.get("content-disposition")),
+      };
     },
 
     /**
@@ -108,4 +138,19 @@ export function createClient(token) {
       };
     },
   };
+}
+
+/// Prefers the RFC 5987 UTF-8 name, which preserves accents in deck titles.
+function filenameFromDisposition(header) {
+  if (!header) return null;
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      return null;
+    }
+  }
+  const plain = /filename="([^"]+)"/i.exec(header);
+  return plain ? plain[1] : null;
 }

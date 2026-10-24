@@ -17,6 +17,7 @@
 | 2026-10-24 | **`.slyde` is plain, versioned JSON** (`slydecore`, version 1) holding the whole presentation | ZIP container with assets; MessagePack; SQLite | A deck is text (HTML/CSS per slide), so JSON keeps it diffable, inspectable and repairable without a tool. A ZIP only pays off once slides can embed image assets, which the sandbox CSP currently forbids anyway (`img-src data: blob:`) |
 | 2026-10-24 | **Persistence = autosave to app-data + explicit download/upload**, not a native save dialog | Native file dialog via a desktop shell; only autosave; File System Access API | The studio is a web page inside Chrome, so the browser-native primitives are a download link (`GET /api/deck`) and a file input (`POST /api/deck/open`). They work on every platform and need no shell. Autosave is always on, so the common case (close and reopen) never asks the user to save |
 | 2026-10-24 | **Typefaces are self-hosted.** Variable Geist Sans/Mono woff2 files live in `assets/fonts/` and are served at `/fonts` on the app origin **and** the sandbox origin | Google Fonts CDN; system font stack only; loading the npm package at runtime | Offline determinism and brand fidelity: no third-party request from a `127.0.0.1` app, no FOUT caused by a CDN, and slide exports embed the same face the editor shows. Serving from the sandbox origin lets every slide iframe share one cached copy instead of inlining ~70 KB per document |
+| 2026-10-24 | **Exports run in-process from the studio**: `POST /api/export` snapshots the deck and drives headless Chrome through `slyde-export`. PDF returns bytes; PNG returns a store-only ZIP with one image per slide. Progress is pushed over the existing WS event stream | Shelling out to `slyde export`; browser-side ZIP (`CompressionStream`); N separate PNG downloads | One pipeline shared by UI, CLI and MCP; no self-spawn or path guessing; the browser gets exactly one download per format, named after the deck. Snapshotting the deck before rendering means an export never holds the state lock while Chrome runs |
 
 ## Library Research Log
 
@@ -79,6 +80,22 @@ Risks / things to revisit: the repo grows by ~293 KB; the sandbox CSP must keep 
 - Not validated yet: none of these guarantees fidelity for our generated layouts, and PowerPoint/Keynote are the judge, not the crate's test suite.
 - Plan: ship PDF first (`Page.printToPDF`), then add PPTX behind an `Exporter` trait and validate real files in PowerPoint, Keynote and Google Slides before promising it.
 
+### PNG bundling — DECIDED 2026-10-24 (`zip` 2.6.1, store-only)
+
+Candidates evaluated:
+
+| Option | Correctness risk | Added footprint | Verdict |
+|---|---|---|---|
+| `zip` 2.6.1 with `default-features = false` | Low — battle-tested CRC-32 and central directory | ~4 small crates (`crc32fast`, `indexmap`, `hashbrown`, `equivalent`); no codec pulled in | **Chosen** |
+| Hand-rolled store-only ZIP writer | Real: CRC table, offsets, ZIP64 edges and a format nobody wants to maintain | 0 crates | Rejected: savings are not worth a generated-file bug |
+| Browser `CompressionStream` + JS ZIP | Duplicates packaging outside the pipeline and needs N fetches | 0 Rust crates | Rejected: splits the export contract across two languages |
+| Multiple PNG downloads | Chrome blocks N automatic downloads after the first | 0 | Rejected: unreliable UX |
+
+`zip` 7.x exists but needs a newer Rust than the workspace MSRV (1.85); Cargo
+resolves 2.6.1 automatically. Stored mode is deliberate: PNG is already
+compressed, so deflate would add CPU and latency for no size win. The crate is
+MIT and the license is compatible with a commercial product.
+
 ## Known Gotchas & Constraints
 
 - `CLAUDE.md` is a generated mirror of `AGENTS.md`. Edit `AGENTS.md` first, then regenerate the mirror; never edit both by hand.
@@ -106,6 +123,12 @@ Risks / things to revisit: the repo grows by ~293 KB; the sandbox CSP must keep 
 - `document.fonts.check()` can report `false` before `await document.fonts.ready`; the UI E2E test waits for readiness before asserting the face loaded. `fonts.check()` only covers fonts the document actually requested, so check a family the page uses.
 - The UI E2E suite is dependency-free: Node's built-in test runner plus a tiny CDP client (`scripts/lib/cdp.mjs`). Run it with `node --test "tests/ui/*.test.mjs"`; a bare directory argument is treated as a module path by Node 24. It spawns the built binary with `SLYDE_DATA_DIR` pointing at a temp dir, so it never touches the user's real deck or Chrome profile.
 - Tab order in a browser continues from the last focused element, not from the top of the document. Tests that assert focus must focus a known control first; `document.body.focus()` after blurring is not a reliable reset.
+- **Export must never hold the core lock.** Snapshot title, aspect ratio and slide ids under a short read lock, release it, then let Chrome take seconds per slide. Holding the lock freezes the editor, autosave and MCP writes for the whole export.
+- Each export job stages files in a unique directory under `app_data/exports/` (timestamp + pid + atomic counter) and every Chrome process gets its own profile directory. Sharing either one makes two simultaneous exports fail with a profile lock or overwrite each other's PNGs. Chrome commands use `kill_on_drop`, so an export timeout cannot orphan the process and keep the profile locked.
+- PNG export spawns one headless Chrome per slide (~1–2 s each). Acceptable for decks of this size; if it becomes a bottleneck, reuse one Chrome via CDP `Page.captureScreenshot` rather than parallelising processes (which would fight for CPU and memory).
+- The UI triggers downloads with a `blob:` URL and a `download` attribute; the E2E suite uses CDP `Page.setDownloadBehavior` with a temp directory and waits for the final (renamed) file. Chrome never exposes a "download finished" DOM event, so polling the file is the reliable signal.
+- Export progress travels over the existing WebSocket as `export_progress` events, not as a streaming HTTP response: the final HTTP response still carries the file, so the browser can use a normal blob download and one request per export.
+- **`slyde-export` must stay transport-agnostic** (no `slyde-server` dependency): `slyde-server` depends on it for `/api/export`, while the CLI lives in `slyde-app` and MCP builds its own URLs. Inverting this creates a crate cycle.
 
 ## Design System Reference
 
