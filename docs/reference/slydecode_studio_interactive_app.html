@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="es" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SlydeCode — Canva se encontró con un compilador</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter (UI/Geist proxy), Plus Jakarta Sans (Display), JetBrains Mono (Dev Mode) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+                        display: ['Plus Jakarta Sans', 'Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            violet: '#7C3AED',
+                            coral: '#FF6B4A',
+                        },
+                        light: {
+                            bg: '#FAFAFA',
+                            surface: '#FFFFFF',
+                            border: '#E6E6EA',
+                            text: '#1A1A1E',
+                            muted: '#6E6E77'
+                        },
+                        dark: {
+                            bg: '#121214',
+                            surface: '#1A1A1E',
+                            elevated: '#202024',
+                            border: '#2E2E33',
+                            text: '#F4F4F6',
+                            muted: '#9A9AA2'
+                        }
+                    },
+                    boxShadow: {
+                        'soft': '0 4px 20px -2px rgba(26, 26, 30, 0.05), 0 1px 3px -1px rgba(26, 26, 30, 0.03)',
+                        'stage': '0 24px 60px -12px rgba(18, 18, 20, 0.14), 0 4px 16px -4px rgba(18, 18, 20, 0.06)',
+                        'glow': '0 0 28px -4px rgba(124, 58, 237, 0.45), 0 0 12px -2px rgba(255, 107, 74, 0.35)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --slyde-gradient: linear-gradient(135deg, #7C3AED 0%, #C026D3 48%, #FF6B4A 100%);
+            --slyde-gradient-soft: linear-gradient(135deg, rgba(124, 58, 237, 0.12) 0%, rgba(255, 107, 74, 0.12) 100%);
+        }
+
+        body {
+            user-select: none;
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+
+        .slyde-gradient-bg {
+            background: var(--slyde-gradient);
+        }
+
+        .slyde-gradient-text {
+            background: var(--slyde-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .slyde-border-gradient {
+            position: relative;
+        }
+        .slyde-border-gradient::before {
+            content: "";
+            position: absolute;
+            inset: -1.5px;
+            border-radius: inherit;
+            padding: 1.5px;
+            background: var(--slyde-gradient);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        /* Spring Easing Transitions */
+        .spring-transition {
+            transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        /* AI Live Generation Light Sweep Overlay */
+        @keyframes lightSweep {
+            0% {
+                transform: translateX(-120%) skewX(-18deg);
+                opacity: 0;
+            }
+            20% {
+                opacity: 1;
+            }
+            80% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(220%) skewX(-18deg);
+                opacity: 0;
+            }
+        }
+
+        .ai-sweep-bar {
+            background: linear-gradient(90deg, 
+                transparent 0%, 
+                rgba(124, 58, 237, 0.18) 35%, 
+                rgba(255, 107, 74, 0.38) 50%, 
+                rgba(124, 58, 237, 0.18) 65%, 
+                transparent 100%
+            );
+            animation: lightSweep 1.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+        }
+
+        @keyframes pulseDot {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.7; }
+        }
+        .pulse-dot {
+            animation: pulseDot 2s infinite ease-in-out;
+        }
+
+        /* Custom Scrollbars */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(150, 150, 160, 0.25);
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(150, 150, 160, 0.45);
+        }
+
+        /* Canvas Selectable Elements */
+        .slyde-node {
+            position: relative;
+            transition: outline 0.15s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+            cursor: pointer;
+        }
+        .slyde-node:hover {
+            outline: 1.5px dashed rgba(124, 58, 237, 0.55);
+            outline-offset: 4px;
+        }
+        .slyde-node.selected-node {
+            outline: 2px solid #7C3AED;
+            outline-offset: 5px;
+        }
+        .slyde-node.selected-node::after {
+            content: attr(data-node-label);
+            position: absolute;
+            top: -24px;
+            left: -2px;
+            background: linear-gradient(135deg, #7C3AED, #FF6B4A);
+            color: white;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            padding: 1px 7px;
+            border-radius: 4px;
+            letter-spacing: 0.02em;
+            pointer-events: none;
+            white-space: nowrap;
+            box-shadow: 0 2px 6px rgba(124, 58, 237, 0.3);
+        }
+
+        /* Alignment Guides */
+        .guide-line-v {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            width: 1px;
+            border-left: 1px dashed rgba(255, 107, 74, 0.55);
+            pointer-events: none;
+        }
+        .guide-line-h {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 50%;
+            height: 1px;
+            border-top: 1px dashed rgba(124, 58, 237, 0.55);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-light-bg dark:bg-dark-bg text-light-text dark:text-dark-text font-sans h-screen w-screen flex flex-col spring-transition">
+
+    <!-- ==========================================
+         1. TOP BAR (Creative Studio Header)
+         ========================================== -->
+    <header class="h-14 px-4 bg-light-surface dark:bg-dark-surface border-b border-light-border dark:border-dark-border flex items-center justify-between z-30 shrink-0">
+        
+        <!-- Left: Brand + Inline Editable Project Title + Visual Theme Pill -->
+        <div class="flex items-center gap-3">
+            <!-- SlydeCode Brand Logo -->
+            <div class="flex items-center gap-2.5 group cursor-pointer" onclick="triggerHeroSparkle()">
+                <div class="w-8 h-8 rounded-xl slyde-gradient-bg flex items-center justify-center shadow-glow spring-transition group-hover:scale-105">
+                    <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </div>
+                <div class="flex flex-col">
+                    <div class="flex items-center gap-1.5">
+                        <span class="font-display font-bold text-sm tracking-tight">SlydeCode</span>
+                        <span class="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-500/10 text-brand-violet dark:bg-purple-500/20 dark:text-purple-300">.slyde</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="h-4 w-[1px] bg-light-border dark:bg-dark-border mx-1"></div>
+
+            <!-- Editable Project Title -->
+            <div class="flex items-center gap-1.5">
+                <input 
+                    id="projectTitleInput"
+                    type="text" 
+                    value="Lanzamiento Q4: Arquitectura Neuronal" 
+                    class="bg-transparent hover:bg-black/5 dark:hover:bg-white/5 focus:bg-white dark:focus:bg-dark-elevated focus:ring-2 focus:ring-brand-violet/40 rounded-lg px-2.5 py-1 text-sm font-medium outline-none transition-all w-64 truncate"
+                    aria-label="Nombre del proyecto"
+                />
+            </div>
+
+            <!-- Visual Theme Gallery Trigger -->
+            <div class="relative" id="themeSelectorContainer">
+                <button onclick="toggleThemeGallery()" class="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet/50 text-xs font-medium bg-light-bg/60 dark:bg-dark-elevated/60 spring-transition">
+                    <span id="activeThemeSwatch" class="w-3.5 h-3.5 rounded-full slyde-gradient-bg inline-block"></span>
+                    <span id="activeThemeName">Studio Daylight</span>
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-light-muted dark:text-dark-muted"></i>
+                </button>
+
+                <!-- Visual Theme Gallery Popover (Not a plain text dropdown) -->
+                <div id="themeGalleryPopover" class="hidden absolute left-0 mt-2 w-72 p-3 rounded-2xl bg-light-surface dark:bg-dark-elevated border border-light-border dark:border-dark-border shadow-stage z-50">
+                    <div class="text-[11px] font-semibold uppercase tracking-wider text-light-muted dark:text-dark-muted mb-2 px-1">Galería de Temas Visuales</div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="applyDeckTheme('daylight')" class="p-2 rounded-xl border-2 border-brand-violet bg- #FAFAFA text-left group transition-all">
+                            <div class="h-10 rounded-lg bg-gradient-to-br from-white to-purple-50 border border-gray-200 p-1.5 flex items-end justify-between mb-1.5">
+                                <span class="w-6 h-1.5 rounded bg-brand-violet"></span>
+                                <span class="w-3 h-3 rounded-full bg-brand-coral"></span>
+                            </div>
+                            <p class="text-xs font-semibold text-gray-900 dark:text-white">Studio Daylight</p>
+                            <p class="text-[10px] text-gray-500">Editorial & Cálido</p>
+                        </button>
+                        <button onclick="applyDeckTheme('obsidian')" class="p-2 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet text-left group transition-all">
+                            <div class="h-10 rounded-lg bg-gradient-to-br from-zinc-900 to-zinc-800 border border-zinc-700 p-1.5 flex items-end justify-between mb-1.5">
+                                <span class="w-6 h-1.5 rounded bg-purple-400"></span>
+                                <span class="w-3 h-3 rounded-full bg-orange-400"></span>
+                            </div>
+                            <p class="text-xs font-semibold">Linear Obsidian</p>
+                            <p class="text-[10px] text-light-muted dark:text-dark-muted">Alto Contraste</p>
+                        </button>
+                        <button onclick="applyDeckTheme('sunset')" class="p-2 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet text-left group transition-all">
+                            <div class="h-10 rounded-lg slyde-gradient-bg p-1.5 flex items-end justify-between mb-1.5">
+                                <span class="w-6 h-1.5 rounded bg-white"></span>
+                                <span class="w-3 h-3 rounded-full bg-amber-200"></span>
+                            </div>
+                            <p class="text-xs font-semibold">Aurora Coral</p>
+                            <p class="text-[10px] text-light-muted dark:text-dark-muted">Keynote Vibrante</p>
+                        </button>
+                        <button onclick="applyDeckTheme('minimal')" class="p-2 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet text-left group transition-all">
+                            <div class="h-10 rounded-lg bg-stone-100 border border-stone-300 p-1.5 flex items-end justify-between mb-1.5">
+                                <span class="w-6 h-1.5 rounded bg-stone-800"></span>
+                                <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+                            </div>
+                            <p class="text-xs font-semibold">Swiss Paper</p>
+                            <p class="text-[10px] text-light-muted dark:text-dark-muted">Arquitectura Limpia</p>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: AI Co-Pilot Status Pill (Human Language, Never Raw JSON-RPC) -->
+        <div class="flex items-center gap-2">
+            <div id="aiStatusChip" onclick="simulateAICoPilotMutation()" title="Haz clic para pedirle a la IA que rediseñe o mejore la diapositiva en vivo" class="cursor-pointer slyde-border-gradient rounded-full px-4 py-1.5 bg-light-surface dark:bg-dark-elevated flex items-center gap-2.5 shadow-soft hover:shadow-glow spring-transition">
+                <span id="aiStatusIcon" class="w-2 h-2 rounded-full slyde-gradient-bg pulse-dot"></span>
+                <span id="aiStatusText" class="text-xs font-medium tracking-tight">✦ Copiloto listo · <span class="slyde-gradient-text font-semibold">Haz clic para mutar en vivo</span></span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-light-muted dark:text-dark-muted font-medium">⌘K</span>
+            </div>
+        </div>
+
+        <!-- Right: Studio Actions (Theme Mode, Undo/Redo, Share, Export, Presenter) -->
+        <div class="flex items-center gap-2">
+            <!-- Undo / Redo Snapshot Buttons -->
+            <div class="flex items-center bg-light-bg dark:bg-dark-elevated rounded-xl p-0.5 border border-light-border dark:border-dark-border">
+                <button onclick="undoSnapshot()" id="undoBtn" class="p-1.5 rounded-lg hover:bg-white dark:hover:bg-dark-surface text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white transition-colors" title="Deshacer snapshot (.slyde history)">
+                    <i data-lucide="undo-2" class="w-4 h-4"></i>
+                </button>
+                <button onclick="redoSnapshot()" id="redoBtn" class="p-1.5 rounded-lg hover:bg-white dark:hover:bg-dark-surface text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white transition-colors" title="Rehacer snapshot">
+                    <i data-lucide="redo-2" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- Dark/Light Warm Studio Toggle -->
+            <button onclick="toggleAppColorMode()" class="p-2 rounded-xl border border-light-border dark:border-dark-border hover:bg-black/5 dark:hover:bg-white/5 text-light-muted dark:text-dark-muted transition-colors" title="Alternar Modo Claro / Oscuro Cálido">
+                <i data-lucide="moon" class="w-4 h-4 block dark:hidden"></i>
+                <i data-lucide="sun" class="w-4 h-4 hidden dark:block text-amber-400"></i>
+            </button>
+
+            <!-- Export Modal Button -->
+            <button onclick="openExportModal()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet/40 bg-light-surface dark:bg-dark-elevated text-xs font-semibold transition-all">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Exportar</span>
+            </button>
+
+            <!-- Presenter Mode CTA (Signature Gradient) -->
+            <button onclick="enterPresenterMode()" class="flex items-center gap-1.5 px-4 py-1.5 rounded-xl slyde-gradient-bg text-white text-xs font-semibold shadow-glow hover:opacity-95 active:scale-95 spring-transition">
+                <i data-lucide="play" class="w-3.5 h-3.5 fill-current"></i>
+                <span>Presentar</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- ==========================================
+         2. MAIN STUDIO WORKSPACE (3-Column Layout)
+         ========================================== -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- ------------------------------------------
+             2.1 LEFT PANEL: Storyboard Filmstrip & Optional Dev Mode
+             ------------------------------------------ -->
+        <aside id="leftSidebar" class="w-64 bg-light-surface dark:bg-dark-surface border-r border-light-border dark:border-dark-border flex flex-col justify-between z-20 shrink-0 select-none">
+            
+            <!-- Top header of Left Panel -->
+            <div class="p-3 border-b border-light-border dark:border-dark-border flex items-center justify-between">
+                <span id="leftPanelTitle" class="text-xs font-semibold tracking-tight text-light-muted dark:text-dark-muted uppercase">Storyboard</span>
+                <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-light-bg dark:bg-dark-elevated text-light-muted dark:text-dark-muted" id="slideCountBadge">4 diapositivas</span>
+            </div>
+
+            <!-- Standard Mode: Visual Filmstrip Thumbnails -->
+            <div id="storyboardView" class="flex-1 overflow-y-auto p-3 space-y-3">
+                <!-- Rendered dynamically by JS -->
+            </div>
+
+            <!-- Hidden-by-Default Developer Mode View (MCP Inspector & State Tree) -->
+            <div id="devModePanelView" class="hidden flex-1 overflow-y-auto p-3 space-y-3 font-mono text-[11px] bg-zinc-950 text-zinc-300">
+                <div class="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800">
+                    <div class="flex items-center justify-between text-purple-400 font-semibold mb-1">
+                        <span>MCP STDIO TRANSPORT</span>
+                        <span class="text-[10px] px-1.5 py-0.2 bg-emerald-500/20 text-emerald-300 rounded">CONNECTED</span>
+                    </div>
+                    <p class="text-zinc-400 text-[10px]"> Engine: Wry WebView + Rust 1.82 Tokio</p>
+                    <p class="text-zinc-400 text-[10px]"> State: Arc&lt;RwLock&lt;PresentationState&gt;&gt;</p>
+                </div>
+
+                <!-- Live JSON-RPC Stream Log -->
+                <div>
+                    <div class="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 flex items-center justify-between">
+                        <span>JSON-RPC 2.0 Stream</span>
+                        <button onclick="simulateMCPCommandFromExternalAgent()" class="text-[10px] text-brand-coral hover:underline">+ Simular RPC</button>
+                    </div>
+                    <div id="mcpRpcLogContainer" class="space-y-2 max-h-80 overflow-y-auto pr-1">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Controls of Left Panel: + New Slide with AI Suggestions + Discrete Developer Mode Toggle -->
+            <div class="p-3 border-t border-light-border dark:border-dark-border space-y-2.5 bg-light-surface dark:bg-dark-surface">
+                
+                <!-- Proactive AI Slide Suggestion Popover Trigger -->
+                <div class="relative">
+                    <button onclick="toggleAISuggestionsPopover()" class="w-full py-2 px-3 rounded-xl slyde-border-gradient bg-light-bg dark:bg-dark-elevated hover:bg-purple-500/5 text-xs font-semibold flex items-center justify-center gap-2 spring-transition">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-brand-violet"></i>
+                        <span>+ Nueva con Copiloto IA</span>
+                    </button>
+
+                    <!-- Proactive Suggestions Menu (suggest_next_slide tool representation) -->
+                    <div id="aiSuggestionsMenu" class="hidden absolute bottom-12 left-0 right-0 p-2.5 rounded-2xl bg-light-surface dark:bg-dark-elevated border border-light-border dark:border-dark-border shadow-stage z-40 space-y-1.5">
+                        <div class="flex items-center justify-between px-1 pb-1">
+                            <span class="text-[10px] font-bold uppercase tracking-wider slyde-gradient-text">Sugerencias del Copiloto</span>
+                            <button onclick="toggleAISuggestionsPopover()" class="text-light-muted hover:text-light-text"><i data-lucide="x" class="w-3 h-3"></i></button>
+                        </div>
+                        <button onclick="addAISuggestedSlide('metric_chart')" class="w-full text-left p-2 rounded-xl hover:bg-purple-500/10 transition-colors flex items-start gap-2">
+                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-brand-violet shrink-0 mt-0.5"></i>
+                            <div>
+                                <div class="text-xs font-semibold">Comparativa de Latencia (Chart)</div>
+                                <div class="text-[10px] text-light-muted dark:text-dark-muted">Muestra por qué Wry consume 82% menos RAM</div>
+                            </div>
+                        </button>
+                        <button onclick="addAISuggestedSlide('architecture_diagram')" class="w-full text-left p-2 rounded-xl hover:bg-purple-500/10 transition-colors flex items-start gap-2">
+                            <i data-lucide="network" class="w-4 h-4 text-brand-coral shrink-0 mt-0.5"></i>
+                            <div>
+                                <div class="text-xs font-semibold">Diagrama Flujo MCP → Rust</div>
+                                <div class="text-[10px] text-light-muted dark:text-dark-muted">Esquema visual en vivo con nodos SVG</div>
+                            </div>
+                        </button>
+                        <button onclick="addAISuggestedSlide('closing_hero')" class="w-full text-left p-2 rounded-xl hover:bg-purple-500/10 transition-colors flex items-start gap-2">
+                            <i data-lucide="rocket" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>
+                            <div>
+                                <div class="text-xs font-semibold">Diapositiva de Cierre & Q&A</div>
+                                <div class="text-[10px] text-light-muted dark:text-dark-muted">Call to action con gradiente firma</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Discrete Sub-Toggle: Developer Mode (Hidden under the hood by default) -->
+                <div class="pt-1 flex items-center justify-between text-[11px] text-light-muted dark:text-dark-muted">
+                    <span class="flex items-center gap-1.5">
+                        <i data-lucide="terminal" class="w-3.5 h-3.5"></i>
+                        <span>Developer Mode</span>
+                    </span>
+                    <button 
+                        id="devModeSwitch"
+                        onclick="toggleDeveloperMode()" 
+                        role="switch" 
+                        aria-checked="false"
+                        class="w-8 h-4.5 bg-gray-200 dark:bg-zinc-700 rounded-full p-0.5 transition-colors duration-200 flex items-center"
+                    >
+                        <span id="devModeKnob" class="w-3.5 h-3.5 rounded-full bg-white shadow transform transition-transform duration-200"></span>
+                    </button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ------------------------------------------
+             2.2 CENTER AREA: High-Refresh Stage / Canvas + AI Prompt Bar
+             ------------------------------------------ -->
+        <main class="flex-1 flex flex-col items-center justify-between p-6 overflow-hidden relative bg-[#F3F3F7] dark:bg-[#0E0E11]">
+            
+            <!-- Top Canvas Controls: Aspect Ratio Lock + Alignment Guides Toggle + Live AI Trigger -->
+            <div class="w-full max-w-4xl flex items-center justify-between z-10">
+                <!-- Aspect Ratio Selector -->
+                <div class="flex items-center gap-1 bg-light-surface dark:bg-dark-surface p-1 rounded-xl border border-light-border dark:border-dark-border shadow-soft text-xs">
+                    <button onclick="setAspectRatio('16:9')" id="ratio-16-9" class="px-2.5 py-1 rounded-lg font-semibold bg-brand-violet text-white transition-all">16:9</button>
+                    <button onclick="setAspectRatio('4:3')" id="ratio-4-3" class="px-2.5 py-1 rounded-lg font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white transition-all">4:3</button>
+                    <button onclick="setAspectRatio('9:16')" id="ratio-9-16" class="px-2.5 py-1 rounded-lg font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white transition-all">9:16 Social</button>
+                </div>
+
+                <!-- Template Type Badge + Smart Alignment Guides Toggle -->
+                <div class="flex items-center gap-2">
+                    <button onclick="toggleAlignmentGuides()" id="guidesBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border text-xs font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white shadow-soft transition-all">
+                        <i data-lucide="grid" class="w-3.5 h-3.5"></i>
+                        <span>Guías Smart</span>
+                    </button>
+                    <button onclick="triggerSlideStepAnimation()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border text-xs font-medium text-brand-violet hover:bg-purple-500/5 shadow-soft transition-all">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+                        <span>Probar Animación</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- THE STAGE (Real HTML/CSS/SVG Slide Rendered by AI) -->
+            <div class="flex-1 w-full flex items-center justify-center my-3 overflow-hidden">
+                <div id="stageWrapper" class="relative w-full max-w-4xl aspect-video rounded-2xl shadow-stage overflow-hidden border border-black/10 dark:border-white/10 spring-transition bg-white dark:bg-zinc-900">
+                    
+                    <!-- Optional Smart Alignment Guides (Figma/Canva style) -->
+                    <div id="alignmentGuidesOverlay" class="hidden inset-0 absolute z-20 pointer-events-none">
+                        <div class="guide-line-v"></div>
+                        <div class="guide-line-h"></div>
+                        <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-brand-coral text-white text-[9px] font-mono px-1.5 py-0.5 rounded">CENTER 960px</div>
+                    </div>
+
+                    <!-- AI LIVE GENERATION LIGHT SWEEP OVERLAY (2.2 Spec) -->
+                    <div id="aiLiveSweepOverlay" class="hidden absolute inset-0 z-30 pointer-events-none overflow-hidden bg-purple-950/10 backdrop-blur-[1px]">
+                        <div class="ai-sweep-bar absolute inset-y-0 w-1/2"></div>
+                        <!-- Floating Micro-Label showing human-friendly progress -->
+                        <div class="absolute top-5 right-5 flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-zinc-900/90 text-white shadow-glow border border-purple-500/40">
+                            <span class="w-2 h-2 rounded-full slyde-gradient-bg pulse-dot"></span>
+                            <span id="aiFloatingMicroCopy" class="text-xs font-medium">Escribiendo geometría visual...</span>
+                        </div>
+                    </div>
+
+                    <!-- Dynamic Slide Content Target -->
+                    <div id="slideCanvasRoot" class="w-full h-full relative overflow-hidden select-none">
+                        <!-- Injected dynamically from the active slide's clean HTML/Tailwind/SVG code -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Floating Collaborative AI Co-pilot Prompt Bar (Natural Language Mutation) -->
+            <div class="w-full max-w-2xl z-20">
+                <form onsubmit="handleNaturalLanguagePrompt(event)" class="relative flex items-center bg-light-surface dark:bg-dark-surface rounded-2xl p-1.5 shadow-stage border border-light-border dark:border-dark-border focus-within:border-brand-violet transition-all">
+                    <div class="pl-3 pr-2 text-brand-violet">
+                        <i data-lucide="wand-2" class="w-4 h-4"></i>
+                    </div>
+                    <input 
+                        id="aiPromptInput"
+                        type="text" 
+                        placeholder="Pídele al copiloto: 'Cambia el título a un tono más audaz', 'Añade métricas de impacto'..."
+                        class="flex-1 bg-transparent text-xs sm:text-sm outline-none px-1 py-1.5 placeholder:text-light-muted dark:placeholder:text-dark-muted"
+                    />
+                    <div class="flex items-center gap-1.5 pr-1">
+                        <button type="button" onclick="quickPrompt('Transforma las tarjetas a estilo cristal con acento coral')" class="hidden sm:inline-block text-[11px] px-2.5 py-1 rounded-lg bg-light-bg dark:bg-dark-elevated text-light-muted dark:text-dark-muted hover:text-brand-violet transition-colors">
+                            ✦ Estilo Cristal
+                        </button>
+                        <button type="submit" class="px-3.5 py-1.5 rounded-xl slyde-gradient-bg text-white text-xs font-semibold shadow-sm hover:opacity-95 transition-opacity flex items-center gap-1">
+                            <span>Mutar</span>
+                            <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </main>
+
+        <!-- ------------------------------------------
+             2.3 RIGHT PANEL: Contextual Visual Inspector + Optional Code Tab
+             ------------------------------------------ -->
+        <aside class="w-80 bg-light-surface dark:bg-dark-surface border-l border-light-border dark:border-dark-border flex flex-col z-20 shrink-0">
+            
+            <!-- Inspector Mode Tabs: "Diseño Visual" (Default) vs "Código Vivo" (Pro/Optional) -->
+            <div class="p-2.5 border-b border-light-border dark:border-dark-border flex items-center gap-1 bg-light-bg/50 dark:bg-dark-elevated/40">
+                <button onclick="switchInspectorTab('visual')" id="tabVisualBtn" class="flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-white flex items-center justify-center gap-1.5 transition-all">
+                    <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5 text-brand-violet"></i>
+                    <span>Diseño Visual</span>
+                </button>
+                <button onclick="switchInspectorTab('code')" id="tabCodeBtn" class="flex-1 py-1.5 px-3 rounded-xl text-xs font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white flex items-center justify-center gap-1.5 transition-all">
+                    <i data-lucide="code-2" class="w-3.5 h-3.5"></i>
+                    <span>Ver Código</span>
+                </button>
+            </div>
+
+            <!-- TAB 1: VISUAL INSPECTOR (Mutates underlying slide code without user touching code) -->
+            <div id="inspectorVisualPane" class="flex-1 overflow-y-auto p-4 space-y-5">
+                
+                <!-- Selected Element Pill -->
+                <div class="p-3 rounded-2xl bg-purple-500/5 dark:bg-purple-500/10 border border-purple-500/20 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full slyde-gradient-bg"></span>
+                        <div>
+                            <div class="text-[10px] uppercase tracking-wider text-light-muted dark:text-dark-muted font-semibold">Elemento Seleccionado</div>
+                            <div id="selectedNodeTagLabel" class="text-xs font-bold text-brand-violet dark:text-purple-300">Título Principal (Hero)</div>
+                        </div>
+                    </div>
+                    <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-white dark:bg-dark-surface border border-light-border dark:border-dark-border">DOM Sync</span>
+                </div>
+
+                <!-- Direct Content Editing (Bidirectional Code Sync) -->
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-light-muted dark:text-dark-muted flex items-center justify-between">
+                        <span>Texto del Elemento</span>
+                        <span class="text-[10px] text-emerald-500 font-normal">● En vivo</span>
+                    </label>
+                    <textarea 
+                        id="visualTextEditor"
+                        rows="2"
+                        oninput="mutateSelectedElementText(this.value)"
+                        class="w-full rounded-xl p-2.5 text-xs bg-light-bg dark:bg-dark-elevated border border-light-border dark:border-dark-border focus:border-brand-violet outline-none resize-none leading-relaxed"
+                    ></textarea>
+                </div>
+
+                <!-- Color Picker Swatches (Mutates Tailwind / Inline Styles in real time) -->
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-light-muted dark:text-dark-muted">Color y Acento de Marca</label>
+                    <div class="grid grid-cols-6 gap-2">
+                        <button onclick="mutateSelectedElementColor('#1A1A1E')" class="w-8 h-8 rounded-xl bg-[#1A1A1E] border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Carbón Editorial"></button>
+                        <button onclick="mutateSelectedElementColor('#7C3AED')" class="w-8 h-8 rounded-xl bg-[#7C3AED] border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Violeta Eléctrico"></button>
+                        <button onclick="mutateSelectedElementColor('#FF6B4A')" class="w-8 h-8 rounded-xl bg-[#FF6B4A] border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Coral Cálido"></button>
+                        <button onclick="mutateSelectedElementColor('#10B981')" class="w-8 h-8 rounded-xl bg-[#10B981] border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Esmeralda"></button>
+                        <button onclick="mutateSelectedElementColor('#0EA5E9')" class="w-8 h-8 rounded-xl bg-[#0EA5E9] border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Cielo"></button>
+                        <button onclick="mutateSelectedElementColor('gradient')" class="w-8 h-8 rounded-xl slyde-gradient-bg border-2 border-white dark:border-zinc-700 shadow-sm hover:scale-110 transition-transform" title="Signature Gradient"></button>
+                    </div>
+                </div>
+
+                <!-- Typography Scale & Weight Controls -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="text-xs font-semibold text-light-muted dark:text-dark-muted">Escala Tipográfica</label>
+                        <span id="fontScaleValueLabel" class="text-xs font-mono text-brand-violet">100%</span>
+                    </div>
+                    <input 
+                        id="fontScaleSlider"
+                        type="range" 
+                        min="75" 
+                        max="135" 
+                        value="100"
+                        oninput="mutateSelectedElementScale(this.value)"
+                        class="w-full accent-brand-violet cursor-pointer"
+                    />
+                </div>
+
+                <!-- Surface & Corner Radius Controls -->
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-light-muted dark:text-dark-muted">Estilo de Bloque</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button onclick="mutateSlideCardStyle('soft')" class="p-2.5 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet text-xs font-medium flex items-center gap-2">
+                            <i data-lucide="layers" class="w-3.5 h-3.5 text-brand-violet"></i>
+                            <span>Soft Studio</span>
+                        </button>
+                        <button onclick="mutateSlideCardStyle('glass')" class="p-2.5 rounded-xl border border-light-border dark:border-dark-border hover:border-brand-violet text-xs font-medium flex items-center gap-2">
+                            <i data-lucide="sparkles" class="w-3.5 h-3.5 text-brand-coral"></i>
+                            <span>Borde Gradiente</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Animation Timeline Inspector (Maps to upsert_slide animation_timeline) -->
+                <div class="pt-2 border-t border-light-border dark:border-dark-border space-y-2.5">
+                    <div class="flex items-center justify-between">
+                        <label class="text-xs font-semibold text-light-muted dark:text-dark-muted">Secuencia de Entrada (Spring)</label>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-brand-violet font-semibold">60 FPS</span>
+                    </div>
+                    <div id="animationStepsList" class="space-y-1.5">
+                        <!-- Populated dynamically from slide's animation_timeline -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: LIVE CODE PANE (Revealed only when user clicks "Ver Código") -->
+            <div id="inspectorCodePane" class="hidden flex-1 flex flex-col p-3 bg-zinc-950 text-zinc-100">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-[11px] font-mono text-purple-400 flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        slide_dom.html (En vivo)
+                    </span>
+                    <button onclick="applyManualCodeEdit()" class="text-[11px] px-2.5 py-1 rounded-lg slyde-gradient-bg text-white font-sans font-semibold">
+                        Compilar Vista
+                    </button>
+                </div>
+                <p class="text-[11px] text-zinc-400 mb-2 font-sans">
+                    La IA escribe directamente este árbol HTML/Tailwind. Cualquier cambio aquí o en el panel visual sincroniza ambos lados al instante:
+                </p>
+                <textarea 
+                    id="rawSlideCodeEditor"
+                    spellcheck="false"
+                    class="flex-1 w-full bg-zinc-900 text-emerald-300 font-mono text-[11px] p-3 rounded-xl border border-zinc-800 focus:border-brand-violet outline-none resize-none leading-relaxed"
+                ></textarea>
+            </div>
+        </aside>
+    </div>
+
+    <!-- ==========================================
+         3. BOTTOM HUD BAR (Minimalist & Discrete)
+         ========================================== -->
+    <footer class="h-9 px-4 bg-light-surface dark:bg-dark-surface border-t border-light-border dark:border-dark-border flex items-center justify-between text-xs text-light-muted dark:text-dark-muted z-30 shrink-0">
+        
+        <!-- Left: Slide Navigator + Discrete MCP Connection Dot -->
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-1.5">
+                <button onclick="prevSlide()" class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"><i data-lucide="chevron-left" class="w-3.5 h-3.5"></i></button>
+                <span id="hudSlideCounter" class="font-semibold text-light-text dark:text-white">Diapositiva 1 de 4</span>
+                <button onclick="nextSlide()" class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></button>
+            </div>
+
+            <div class="h-3.5 w-[1px] bg-light-border dark:bg-dark-border"></div>
+
+            <!-- Subtle MCP Neural Engine Indicator (Friendly tooltip, not intimidating) -->
+            <div class="flex items-center gap-1.5 group relative cursor-help">
+                <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span class="text-[11px]">Motor Creativo IA Conectado</span>
+                <div class="hidden group-hover:block absolute bottom-7 left-0 w-64 p-2.5 rounded-xl bg-zinc-900 text-white text-[11px] shadow-lg z-50">
+                    <p class="font-semibold text-purple-300">SlydeCode MCP Server Activo</p>
+                    <p class="text-zinc-300 mt-0.5">Sincronizado vía protocolo nativo con latencia sub-milisegundo.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: Developer Mode Telemetry (STRICTLY HIDDEN in Standard User Mode per 2.2.5) -->
+        <div id="devHudMetrics" class="hidden items-center gap-4 font-mono text-[11px] text-purple-600 dark:text-purple-400">
+            <span>RENDER: Wry/WKWebView</span>
+            <span>FPS: 60.0</span>
+            <span>RAM: 46.8 MB</span>
+            <span>RPC: stdio JSON-RPC 2.0</span>
+        </div>
+
+        <!-- Right: Canvas Zoom Controls -->
+        <div class="flex items-center gap-2">
+            <button onclick="adjustCanvasZoom(-10)" class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"><i data-lucide="minus" class="w-3 h-3"></i></button>
+            <span id="zoomPercentageLabel" class="w-11 text-center font-medium text-[11px]">100%</span>
+            <button onclick="adjustCanvasZoom(10)" class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"><i data-lucide="plus" class="w-3 h-3"></i></button>
+        </div>
+    </footer>
+
+    <!-- ==========================================
+         4. FULLSCREEN PRESENTER MODE OVERLAY (2.3 Spec)
+         ========================================== -->
+    <div id="presenterOverlay" class="hidden fixed inset-0 bg-[#0B0B0E] z-50 flex flex-col justify-between p-6 select-none">
+        
+        <!-- Top Presenter Floating Bar -->
+        <div class="flex items-center justify-between text-zinc-400 text-xs">
+            <div class="flex items-center gap-3">
+                <span class="px-3 py-1 rounded-full bg-white/5 border border-white/10 font-semibold text-white" id="presenterSlideTitle">Diapositiva 1 / 4</span>
+                <!-- Timer -->
+                <span class="font-mono text-xs px-2.5 py-1 rounded-full bg-white/5" id="presenterTimer">00:00</span>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <!-- Toggleable AI Live Badge Control -->
+                <button onclick="togglePresenterAIBadge()" class="px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs flex items-center gap-1.5 transition-colors">
+                    <i data-lucide="sparkles" class="w-3.5 h-3.5 text-brand-coral"></i>
+                    <span>Sello IA en Vivo</span>
+                </button>
+                <!-- Speaker Notes Toggle -->
+                <button onclick="toggleSpeakerNotes()" class="px-3 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs flex items-center gap-1.5 transition-colors">
+                    <i data-lucide="message-square" class="w-3.5 h-3.5"></i>
+                    <span>Notas del Orador</span>
+                </button>
+                <button onclick="exitPresenterMode()" class="px-3.5 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 font-semibold">
+                    Salir (ESC)
+                </button>
+            </div>
+        </div>
+
+        <!-- Center Stage in Presenter Mode -->
+        <div class="flex-1 flex items-center justify-center my-4 relative overflow-hidden">
+            <div class="w-full max-w-6xl aspect-video rounded-3xl overflow-hidden shadow-2xl border border-white/10 relative bg-white dark:bg-zinc-900">
+                <div id="presenterStageContent" class="w-full h-full"></div>
+
+                <!-- Discrete Toggleable Stamp: "Generada con IA en vivo" -->
+                <div id="presenterAIWatermark" class="absolute bottom-5 right-6 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-zinc-900/85 backdrop-blur-md text-white text-[11px] border border-white/15 shadow-glow">
+                    <span class="w-2 h-2 rounded-full slyde-gradient-bg"></span>
+                    <span>Esta diapositiva fue generada con código IA en vivo · <strong>SlydeCode</strong></span>
+                </div>
+            </div>
+
+            <!-- Floating Speaker Notes Card (Optional) -->
+            <div id="speakerNotesCard" class="hidden absolute bottom-6 left-6 w-96 p-4 rounded-2xl bg-zinc-900/95 backdrop-blur-md border border-white/15 text-zinc-200 shadow-2xl">
+                <div class="text-[10px] uppercase tracking-wider text-brand-coral font-bold mb-1">Notas de Orador</div>
+                <p id="speakerNotesText" class="text-xs leading-relaxed text-zinc-300"></p>
+            </div>
+        </div>
+
+        <!-- Bottom Navigation Pill in Presenter Mode -->
+        <div class="flex items-center justify-center gap-3">
+            <button onclick="prevSlide()" class="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all"><i data-lucide="arrow-left" class="w-4 h-4"></i></button>
+            <button onclick="simulateAICoPilotMutation()" class="px-4 py-2 rounded-full slyde-gradient-bg text-white text-xs font-semibold shadow-glow flex items-center gap-2">
+                <i data-lucide="wand-2" class="w-3.5 h-3.5"></i>
+                <span>Rediseñar en Vivo frente a la Audiencia</span>
+            </button>
+            <button onclick="nextSlide()" class="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all"><i data-lucide="arrow-right" class="w-4 h-4"></i></button>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         5. EXPORT PIPELINE MODAL (PDF Vectorial, PPTX Shapes, PNG/SVG)
+         ========================================== -->
+    <div id="exportModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div class="w-full max-w-md rounded-3xl bg-light-surface dark:bg-dark-surface border border-light-border dark:border-dark-border shadow-stage p-6 space-y-5">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl slyde-gradient-bg flex items-center justify-center text-white">
+                        <i data-lucide="file-output" class="w-5 h-5"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-display font-bold text-base">Exportar Presentación</h3>
+                        <p class="text-xs text-light-muted dark:text-dark-muted">Pipeline nativo en Rust (`export_presentation`)</p>
+                    </div>
+                </div>
+                <button onclick="closeExportModal()" class="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <div class="space-y-2.5">
+                <button onclick="triggerExport('pdf')" class="w-full p-3.5 rounded-2xl border border-light-border dark:border-dark-border hover:border-brand-violet flex items-center justify-between group transition-all text-left">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-500 flex items-center justify-center font-bold text-xs">PDF</div>
+                        <div>
+                            <div class="text-xs font-bold group-hover:text-brand-violet">PDF Vectorial de Alta Fidelidad</div>
+                            <div class="text-[11px] text-light-muted dark:text-dark-muted">Curvas Bézier puras, tipografía incrustada y enlaces</div>
+                        </div>
+                    </div>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-light-muted"></i>
+                </button>
+
+                <button onclick="triggerExport('pptx')" class="w-full p-3.5 rounded-2xl border border-light-border dark:border-dark-border hover:border-brand-violet flex items-center justify-between group transition-all text-left">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center font-bold text-xs">PPTX</div>
+                        <div>
+                            <div class="text-xs font-bold group-hover:text-brand-violet">PowerPoint Estructural Editable (.pptx)</div>
+                            <div class="text-[11px] text-light-muted dark:text-dark-muted">Mapea nodos DOM a Shapes OpenXML y cajas de texto reales</div>
+                        </div>
+                    </div>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-light-muted"></i>
+                </button>
+
+                <button onclick="triggerExport('svg')" class="w-full p-3.5 rounded-2xl border border-light-border dark:border-dark-border hover:border-brand-violet flex items-center justify-between group transition-all text-left">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-xl bg-purple-500/10 text-brand-violet flex items-center justify-center font-bold text-xs">SVG</div>
+                        <div>
+                            <div class="text-xs font-bold group-hover:text-brand-violet">Secuencia PNG / SVG + Archivo .slyde</div>
+                            <div class="text-[11px] text-light-muted dark:text-dark-muted">Paquete MessagePack con historial de snapshots</div>
+                        </div>
+                    </div>
+                    <i data-lucide="chevron-right" class="w-4 h-4 text-light-muted"></i>
+                </button>
+            </div>
+
+            <div id="exportFeedbackBanner" class="hidden p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-300 text-xs font-medium"></div>
+        </div>
+    </div>
+
+    <!-- ==========================================
+         6. APPLICATION STATE & LIVE COMPILER ENGINE
+         ========================================== -->
+    <script>
+        // Initial Presentation State (Mirrors Rust PresentationState struct)
+        const presentationState = {
+            title: "Lanzamiento Q4: Arquitectura Neuronal",
+            theme: "daylight",
+            aspectRatio: "16:9",
+            currentSlideIndex: 0,
+            selectedElementId: "node-title",
+            devMode: false,
+            guidesVisible: false,
+            zoom: 100,
+            historyUndoStack: [],
+            historyRedoStack: [],
+            slides: [
+                {
+                    id: "slide-01",
+                    title: "Portada: Canva + Compilador",
+                    templateType: "hero",
+                    speakerNotes: "Enfatizar que el usuario nunca ve una terminal intimidante, sino una herramienta cálida donde la IA construye el DOM real.",
+                    animationTimeline: [
+                        { step: 1, target: "#node-badge", effect: "Spring Fade Up (180ms)" },
+                        { step: 2, target: "#node-title", effect: "Gradient Reveal (320ms)" },
+                        { step: 3, target: "#node-cards", effect: "Staggered Scale (450ms)" }
+                    ],
+                    code: `<div class="w-full h-full p-10 flex flex-col justify-between bg-gradient-to-br from-white via-[#FAF8FF] to-[#FFF5F2] text-[#1A1A1E] relative overflow-hidden">
+    <div class="absolute -top-24 -right-24 w-80 h-80 rounded-full bg-purple-500/10 blur-3xl pointer-events-none"></div>
+    <div class="flex items-center justify-between">
+        <span id="node-badge" data-node-label="Insignia Superior" class="slyde-node inline-flex items-center gap-2 px-3.5 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-[#7C3AED]">
+            ✦ SlydeCode Native Studio · v2.4
+        </span>
+        <span class="text-xs font-medium text-gray-400">01 / ARQUITECTURA DE PRODUCTO</span>
+    </div>
+    <div class="my-auto max-w-2xl space-y-4">
+        <h1 id="node-title" data-node-label="Título Principal (Hero)" class="slyde-node selected-node font-display text-4xl sm:text-5xl font-extrabold tracking-tight leading-[1.12] text-[#1A1A1E]">
+            Canva se encontró con un compilador en vivo.
+        </h1>
+        <p id="node-subtitle" data-node-label="Subtítulo Editorial" class="slyde-node text-base sm:text-lg text-gray-600 leading-relaxed">
+            Aquí la IA no rellena plantillas rígidas: escribe y muta directamente la geometría HTML, CSS Grid y SVG de tu diapositiva en tiempo real.
+        </p>
+    </div>
+    <div id="node-cards" data-node-label="Bloque de Métricas" class="slyde-node grid grid-cols-3 gap-4 pt-2">
+        <div class="p-4 rounded-2xl bg-white/90 border border-gray-200/80 shadow-sm">
+            <div class="text-xs text-gray-500 font-medium">Consumo Base RAM</div>
+            <div class="text-2xl font-display font-bold text-[#7C3AED] mt-0.5">46.8 MB</div>
+            <div class="text-[11px] text-emerald-600 font-medium mt-1">Motor Nativo Wry + Rust</div>
+        </div>
+        <div class="p-4 rounded-2xl bg-white/90 border border-gray-200/80 shadow-sm">
+            <div class="text-xs text-gray-500 font-medium">Protocolo Neuronal</div>
+            <div class="text-2xl font-display font-bold text-[#FF6B4A] mt-0.5">MCP Stdio</div>
+            <div class="text-[11px] text-gray-500 font-medium mt-1">Claude, Cursor & LangChain</div>
+        </div>
+        <div class="p-4 rounded-2xl bg-white/90 border border-gray-200/80 shadow-sm">
+            <div class="text-xs text-gray-500 font-medium">Exportación Nativa</div>
+            <div class="text-2xl font-display font-bold text-gray-900 mt-0.5">PDF & PPTX</div>
+            <div class="text-[11px] text-gray-500 font-medium mt-1">Shapes & Texto 100% Editables</div>
+        </div>
+    </div>
+</div>`
+                },
+                {
+                    id: "slide-02",
+                    title: "Motor Híbrido: Visual + Código",
+                    templateType: "diagram",
+                    speakerNotes: "Explicar cómo el usuario edita desde controles tipo Canva en el panel derecho mientras el motor Rust actualiza el AST del código.",
+                    animationTimeline: [
+                        { step: 1, target: "#node-title", effect: "Spring Slide In" },
+                        { step: 2, target: "#node-diagram", effect: "SVG Path Draw" }
+                    ],
+                    code: `<div class="w-full h-full p-10 flex flex-col justify-between bg-white text-[#1A1A1E]">
+    <div class="flex items-center justify-between">
+        <span id="node-badge" data-node-label="Categoría" class="slyde-node text-xs font-bold uppercase tracking-wider text-[#FF6B4A]">Sincronización Bidireccional</span>
+        <span class="text-xs text-gray-400">02 / PUENTE VISUAL-AST</span>
+    </div>
+    <div class="space-y-2">
+        <h2 id="node-title" data-node-label="Título de Diapositiva" class="slyde-node font-display text-3xl font-bold tracking-tight">
+            Edita como en Canva. Compila como en Rust.
+        </h2>
+        <p id="node-subtitle" data-node-label="Descripción" class="slyde-node text-sm text-gray-500 max-w-xl">
+            Cada cambio en el inspector visual reescribe limpiamente el nodo DOM sin romper las animaciones creadas por el copiloto IA.
+        </p>
+    </div>
+    <div id="node-diagram" data-node-label="Diagrama Arquitectónico" class="slyde-node grid grid-cols-3 gap-5 items-center my-auto py-4">
+        <div class="p-5 rounded-2xl bg-purple-50/70 border border-purple-200 space-y-2">
+            <div class="w-8 h-8 rounded-lg bg-[#7C3AED] text-white flex items-center justify-center font-bold text-xs">01</div>
+            <h3 class="font-bold text-sm">Agente MCP Externo</h3>
+            <p class="text-xs text-gray-600">Envía <code class="text-[#7C3AED] font-mono">upsert_slide</code> con layout CSS Grid y SVG a medida.</p>
+        </div>
+        <div class="p-5 rounded-2xl bg-gradient-to-br from-[#7C3AED] to-[#FF6B4A] text-white space-y-2 shadow-lg">
+            <div class="w-8 h-8 rounded-lg bg-white/20 text-white flex items-center justify-center font-bold text-xs">02</div>
+            <h3 class="font-bold text-sm">Estado Rust Seguro</h3>
+            <p class="text-xs text-white/90">Guarda snapshot en <code class="font-mono">Arc&lt;RwLock&gt;</code> y emite barrido de luz a 60 FPS.</p>
+        </div>
+        <div class="p-5 rounded-2xl bg-orange-50/70 border border-orange-200 space-y-2">
+            <div class="w-8 h-8 rounded-lg bg-[#FF6B4A] text-white flex items-center justify-center font-bold text-xs">03</div>
+            <h3 class="font-bold text-sm">Edición Humana</h3>
+            <p class="text-xs text-gray-600">El diseñador ajusta colores o textos sin ver ni una línea de JSON-RPC.</p>
+        </div>
+    </div>
+    <div class="text-xs text-gray-400 flex items-center justify-between border-t border-gray-100 pt-3">
+        <span>Filosofía Zero-Intimidation UI</span>
+        <span class="text-[#7C3AED] font-semibold">100% Nativo · Sin Electron</span>
+    </div>
+</div>`
+                },
+                {
+                    id: "slide-03",
+                    title: "Rendimiento & Memoria (Chart)",
+                    templateType: "chart",
+                    speakerNotes: "Comparativa real de huella de memoria frente a soluciones basadas en Chromium empaquetado.",
+                    animationTimeline: [
+                        { step: 1, target: "#node-title", effect: "Fade Up" },
+                        { step: 2, target: "#node-bars", effect: "Bar Grow Spring" }
+                    ],
+                    code: `<div class="w-full h-full p-10 flex flex-col justify-between bg-[#FAFAFA] text-[#1A1A1E]">
+    <div class="flex items-center justify-between">
+        <span class="text-xs font-bold uppercase tracking-wider text-[#7C3AED]">Benchmark de Ingeniería</span>
+        <span class="text-xs text-gray-400">03 / RENDIMIENTO NATIVO</span>
+    </div>
+    <div>
+        <h2 id="node-title" data-node-label="Título Benchmark" class="slyde-node font-display text-3xl font-bold">
+            Huella de RAM <span class="text-[#7C3AED]">10x más ligera</span> que Electron
+        </h2>
+        <p id="node-subtitle" data-node-label="Subtítulo" class="slyde-node text-sm text-gray-500 mt-1">
+            Uso de memoria en frío con una presentación de 25 diapositivas vectoriales activas.
+        </p>
+    </div>
+    <div id="node-bars" data-node-label="Gráfico Comparativo" class="slyde-node space-y-4 my-auto bg-white p-6 rounded-2xl border border-gray-200/80 shadow-sm">
+        <div class="space-y-1.5">
+            <div class="flex justify-between text-xs font-semibold">
+                <span class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#FF6B4A]"></span> SlydeCode (Rust + Wry WebView Nativo)</span>
+                <span class="text-[#7C3AED] font-bold">46.8 MB</span>
+            </div>
+            <div class="w-full h-3.5 bg-gray-100 rounded-full overflow-hidden">
+                <div class="h-full rounded-full bg-gradient-to-r from-[#7C3AED] to-[#FF6B4A]" style="width: 12%"></div>
+            </div>
+        </div>
+        <div class="space-y-1.5">
+            <div class="flex justify-between text-xs font-medium text-gray-500">
+                <span>Herramienta Web tradicional en Electron</span>
+                <span>485.0 MB</span>
+            </div>
+            <div class="w-full h-3.5 bg-gray-100 rounded-full overflow-hidden">
+                <div class="h-full rounded-full bg-gray-300" style="width: 88%"></div>
+            </div>
+        </div>
+    </div>
+    <div class="flex items-center justify-between text-xs text-gray-500">
+        <span>Verificado en macOS (WKWebView), Windows (WebView2) y Linux (WebKitGTK)</span>
+        <span class="font-semibold text-emerald-600">● Objetivo &lt; 100 MB cumplido</span>
+    </div>
+</div>`
+                },
+                {
+                    id: "slide-04",
+                    title: "Pipeline de Exportación PPTX/PDF",
+                    templateType: "bullet",
+                    speakerNotes: "Detallar cómo el exportador PPTX convierte nodos flex/grid en shapes editables de PowerPoint.",
+                    animationTimeline: [
+                        { step: 1, target: "#node-title", effect: "Spring In" }
+                    ],
+                    code: `<div class="w-full h-full p-10 flex flex-col justify-between bg-gradient-to-br from-[#121214] to-[#1E1B2E] text-white">
+    <div class="flex items-center justify-between">
+        <span class="px-3 py-1 rounded-full bg-white/10 text-xs font-semibold text-[#FF6B4A]">Exportación Sin Pérdida</span>
+        <span class="text-xs text-zinc-400">04 / INTEROPERABILIDAD</span>
+    </div>
+    <div class="space-y-2">
+        <h2 id="node-title" data-node-label="Título Oscuro" class="slyde-node font-display text-3xl sm:text-4xl font-bold">
+            Tus diapositivas nunca quedan atrapadas.
+        </h2>
+        <p id="node-subtitle" data-node-label="Descripción" class="slyde-node text-sm text-zinc-300 max-w-xl">
+            Nuestro motor en Rust traduce el árbol de diseño a formatos ejecutivos estándar manteniendo vectores y textos editables.
+        </p>
+    </div>
+    <div id="node-cards" data-node-label="Tarjetas de Exportación" class="slyde-node grid grid-cols-2 gap-4">
+        <div class="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
+            <div class="text-xs font-bold text-purple-300">EXPORTACIÓN PPTX ESTRUCTURAL</div>
+            <p class="text-xs text-zinc-300 leading-relaxed">Cada bloque HTML se transpila a <code class="text-amber-300 font-mono">p:sp</code> (Shape) y <code class="text-amber-300 font-mono">a:t</code> (Text Run) nativos de OpenXML.</p>
+        </div>
+        <div class="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-1.5">
+            <div class="text-xs font-bold text-orange-300">ARCHIVO .SLYDE VERSIONABLE</div>
+            <p class="text-xs text-zinc-300 leading-relaxed">Empaquetado MessagePack con snapshots instantáneos para deshacer/rehacer y trabajo en equipo.</p>
+        </div>
+    </div>
+</div>`
+                }
+            ],
+            mcpLogs: [
+                { time: "10:24:02", method: "init_presentation", summary: "title: 'Lanzamiento Q4', ratio: '16:9'" },
+                { time: "10:24:03", method: "upsert_slide", summary: "index: 0, slide_id: 'slide-01', template: 'hero'" },
+                { time: "10:24:04", method: "generate_thumbnail", summary: "slide_id: 'slide-01' -> WebP 24KB" }
+            ]
+        };
+
+        // Save snapshot for Undo/Redo
+        function pushSnapshot() {
+            const snapshot = JSON.stringify(presentationState.slides);
+            presentationState.historyUndoStack.push(snapshot);
+            if (presentationState.historyUndoStack.length > 25) {
+                presentationState.historyUndoStack.shift();
+            }
+            presentationState.historyRedoStack = [];
+        }
+
+        function undoSnapshot() {
+            if (presentationState.historyUndoStack.length === 0) return;
+            const current = JSON.stringify(presentationState.slides);
+            presentationState.historyRedoStack.push(current);
+            const previous = presentationState.historyUndoStack.pop();
+            presentationState.slides = JSON.parse(previous);
+            renderEverything();
+            updateAIStatusChip("↺ Snapshot restaurado", false);
+        }
+
+        function redoSnapshot() {
+            if (presentationState.historyRedoStack.length === 0) return;
+            const current = JSON.stringify(presentationState.slides);
+            presentationState.historyUndoStack.push(current);
+            const next = presentationState.historyRedoStack.pop();
+            presentationState.slides = JSON.parse(next);
+            renderEverything();
+            updateAIStatusChip("↻ Snapshot reaplicado", false);
+        }
+
+        // Render Left Filmstrip Thumbnails (Live Miniature Previews)
+        function renderStoryboardFilmstrip() {
+            const container = document.getElementById('storyboardView');
+            document.getElementById('slideCountBadge').textContent = `${presentationState.slides.length} diapositivas`;
+
+            container.innerHTML = presentationState.slides.map((slide, idx) => {
+                const isActive = idx === presentationState.currentSlideIndex;
+                return `
+                <div 
+                    onclick="selectSlide(${idx})"
+                    draggable="true"
+                    ondragstart="handleDragStart(event, ${idx})"
+                    ondragover="handleDragOver(event)"
+                    ondrop="handleDrop(event, ${idx})"
+                    class="group cursor-pointer rounded-2xl p-2 transition-all ${isActive ? 'bg-purple-500/10 dark:bg-purple-500/15 ring-2 ring-brand-violet' : 'hover:bg-black/5 dark:hover:bg-white/5'}"
+                >
+                    <div class="flex items-center justify-between text-[11px] font-semibold mb-1.5 px-1">
+                        <span class="${isActive ? 'text-brand-violet font-bold' : 'text-light-muted dark:text-dark-muted'}">0${idx + 1} · ${slide.title.slice(0, 18)}</span>
+                        <span class="text-[9px] uppercase px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-light-muted dark:text-dark-muted">${slide.templateType}</span>
+                    </div>
+                    <!-- Live Scaled-Down Thumbnail Preview -->
+                    <div class="w-full aspect-video rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-white relative shadow-xs pointer-events-none">
+                        <div class="origin-top-left transform scale-[0.23] w-[880px] h-[495px]">
+                            ${slide.code}
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Drag and Drop Reordering on Filmstrip
+        let draggedSlideIdx = null;
+        function handleDragStart(e, idx) {
+            draggedSlideIdx = idx;
+            e.dataTransfer.effectAllowed = 'move';
+        }
+        function handleDragOver(e) {
+            e.preventDefault();
+        }
+        function handleDrop(e, targetIdx) {
+            e.preventDefault();
+            if (draggedSlideIdx === null || draggedSlideIdx === targetIdx) return;
+            pushSnapshot();
+            const moved = presentationState.slides.splice(draggedSlideIdx, 1)[0];
+            presentationState.slides.splice(targetIdx, 0, moved);
+            presentationState.currentSlideIndex = targetIdx;
+            draggedSlideIdx = null;
+            renderEverything();
+        }
+
+        // Render Center Stage Canvas & Bind Clickable Visual Nodes
+        function renderStageCanvas() {
+            const activeSlide = presentationState.slides[presentationState.currentSlideIndex];
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            canvasRoot.innerHTML = activeSlide.code;
+
+            // Update code editor in right panel
+            document.getElementById('rawSlideCodeEditor').value = activeSlide.code;
+
+            // Update bottom HUD counter
+            document.getElementById('hudSlideCounter').textContent = `Diapositiva ${presentationState.currentSlideIndex + 1} de ${presentationState.slides.length}`;
+
+            // Attach interactive click listeners to .slyde-node elements inside the slide
+            const nodes = canvasRoot.querySelectorAll('.slyde-node');
+            nodes.forEach(node => {
+                node.classList.remove('selected-node');
+                if (node.id === presentationState.selectedElementId) {
+                    node.classList.add('selected-node');
+                    populateVisualInspectorFromNode(node);
+                }
+                node.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    presentationState.selectedElementId = node.id;
+                    nodes.forEach(n => n.classList.remove('selected-node'));
+                    node.classList.add('selected-node');
+                    populateVisualInspectorFromNode(node);
+                });
+            });
+
+            // Render Animation Steps in Right Panel
+            const animContainer = document.getElementById('animationStepsList');
+            animContainer.innerHTML = activeSlide.animationTimeline.map((item, i) => `
+                <div onclick="triggerSlideStepAnimation()" class="cursor-pointer p-2 rounded-xl bg-light-bg dark:bg-dark-elevated border border-light-border dark:border-dark-border hover:border-brand-violet flex items-center justify-between text-xs transition-all">
+                    <div class="flex items-center gap-2">
+                        <span class="w-5 h-5 rounded-lg slyde-gradient-bg text-white font-bold text-[10px] flex items-center justify-center">${i + 1}</span>
+                        <span class="font-medium">${item.effect}</span>
+                    </div>
+                    <span class="font-mono text-[10px] text-light-muted dark:text-dark-muted">${item.target}</span>
+                </div>
+            `).join('');
+        }
+
+        function populateVisualInspectorFromNode(nodeEl) {
+            const label = nodeEl.getAttribute('data-node-label') || nodeEl.id || 'Elemento Visual';
+            document.getElementById('selectedNodeTagLabel').textContent = label;
+            document.getElementById('visualTextEditor').value = nodeEl.innerText.trim();
+        }
+
+        // Visual Inspector Mutations -> Synchronizes back to Slide HTML Code
+        function mutateSelectedElementText(newText) {
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const target = canvasRoot.querySelector(`#${presentationState.selectedElementId}`);
+            if (!target) return;
+            target.innerText = newText;
+            syncCanvasDOMToSlideCode();
+        }
+
+        function mutateSelectedElementColor(colorValue) {
+            pushSnapshot();
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const target = canvasRoot.querySelector(`#${presentationState.selectedElementId}`);
+            if (!target) return;
+
+            if (colorValue === 'gradient') {
+                target.style.background = 'linear-gradient(135deg, #7C3AED 0%, #FF6B4A 100%)';
+                target.style.webkitBackgroundClip = 'text';
+                target.style.webkitTextFillColor = 'transparent';
+            } else {
+                target.style.background = '';
+                target.style.webkitBackgroundClip = '';
+                target.style.webkitTextFillColor = '';
+                target.style.color = colorValue;
+            }
+            syncCanvasDOMToSlideCode();
+        }
+
+        function mutateSelectedElementScale(scalePercent) {
+            document.getElementById('fontScaleValueLabel').textContent = `${scalePercent}%`;
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const target = canvasRoot.querySelector(`#${presentationState.selectedElementId}`);
+            if (!target) return;
+            target.style.transform = `scale(${scalePercent / 100})`;
+            target.style.transformOrigin = 'left center';
+            syncCanvasDOMToSlideCode();
+        }
+
+        function mutateSlideCardStyle(styleVariant) {
+            pushSnapshot();
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const cards = canvasRoot.querySelectorAll('#node-cards > div, #node-diagram > div');
+            cards.forEach(card => {
+                if (styleVariant === 'glass') {
+                    card.style.border = '1.5px solid #7C3AED';
+                    card.style.boxShadow = '0 10px 25px -5px rgba(124, 58, 237, 0.18)';
+                } else {
+                    card.style.border = '1px solid rgba(229, 231, 235, 0.9)';
+                    card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.04)';
+                }
+            });
+            syncCanvasDOMToSlideCode();
+        }
+
+        function syncCanvasDOMToSlideCode() {
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const currentSlide = presentationState.slides[presentationState.currentSlideIndex];
+            currentSlide.code = canvasRoot.innerHTML;
+            document.getElementById('rawSlideCodeEditor').value = currentSlide.code;
+            renderStoryboardFilmstrip();
+        }
+
+        function applyManualCodeEdit() {
+            pushSnapshot();
+            const newCode = document.getElementById('rawSlideCodeEditor').value;
+            presentationState.slides[presentationState.currentSlideIndex].code = newCode;
+            playAILightSweep(["Compilando árbol HTML/CSS...", "Sincronizando miniaturas..."], () => {
+                renderEverything();
+            });
+        }
+
+        // AI LIVE GENERATION LIGHT SWEEP & MICRO-COPY ENGINE (2.2 Spec)
+        function playAILightSweep(microCopySteps, onComplete) {
+            const overlay = document.getElementById('aiLiveSweepOverlay');
+            const label = document.getElementById('aiFloatingMicroCopy');
+            overlay.classList.remove('hidden');
+
+            let stepIdx = 0;
+            label.textContent = microCopySteps[0] || "Generando estructura...";
+            updateAIStatusChip(`✦ ${label.textContent}`, true);
+
+            const interval = setInterval(() => {
+                stepIdx++;
+                if (stepIdx < microCopySteps.length) {
+                    label.textContent = microCopySteps[stepIdx];
+                    updateAIStatusChip(`✦ ${microCopySteps[stepIdx]}`, true);
+                } else {
+                    clearInterval(interval);
+                    overlay.classList.add('hidden');
+                    updateAIStatusChip("✓ Diapositiva lista · Sincronizada", false);
+                    if (onComplete) onComplete();
+                }
+            }, 620);
+        }
+
+        function updateAIStatusChip(message, isWorking) {
+            const textEl = document.getElementById('aiStatusText');
+            textEl.innerHTML = message;
+        }
+
+        // Simulate Live AI Co-Pilot Mutating Current Slide
+        const creativeMutations = [
+            {
+                headline: "Diseño generativo que se siente como magia, no como código.",
+                badge: "✦ Mutación IA en Vivo · Layout Editorial",
+                accentBg: "from-[#FAF5FF] via-white to-[#FFF0ED]"
+            },
+            {
+                headline: "Del pensamiento de la IA directo al lienzo en 60 FPS.",
+                badge: "✦ Copiloto Creativo Activo · SlydeCode Studio",
+                accentBg: "from-white via-[#F5F3FF] to-[#FFF7ED]"
+            },
+            {
+                headline: "Potencia de compilador. Calidez de estudio de diseño.",
+                badge: "✦ Arquitectura Rust + MCP Nativo",
+                accentBg: "from-[#FFFDFB] via-white to-[#F3E8FF]"
+            }
+        ];
+        let mutationCounter = 0;
+
+        function simulateAICoPilotMutation() {
+            pushSnapshot();
+            const variant = creativeMutations[mutationCounter % creativeMutations.length];
+            mutationCounter++;
+
+            logMCPCommand("upsert_slide", `slide_id: '${presentationState.slides[presentationState.currentSlideIndex].id}', mutation: 'live_polish_${mutationCounter}'`);
+
+            playAILightSweep([
+                "Pensando composición visual...",
+                "Escribiendo nodos CSS Grid y tipografía...",
+                "Aplicando micro-interacciones spring..."
+            ], () => {
+                const canvasRoot = document.getElementById('slideCanvasRoot');
+                const titleEl = canvasRoot.querySelector('#node-title');
+                const badgeEl = canvasRoot.querySelector('#node-badge');
+                if (titleEl) {
+                    titleEl.innerHTML = `<span class="slyde-gradient-text">${variant.headline}</span>`;
+                }
+                if (badgeEl) {
+                    badgeEl.textContent = variant.badge;
+                }
+                syncCanvasDOMToSlideCode();
+                if (!document.getElementById('presenterOverlay').classList.contains('hidden')) {
+                    document.getElementById('presenterStageContent').innerHTML = presentationState.slides[presentationState.currentSlideIndex].code;
+                }
+            });
+        }
+
+        // Natural Language Prompt Bar Handler
+        function handleNaturalLanguagePrompt(e) {
+            e.preventDefault();
+            const input = document.getElementById('aiPromptInput');
+            const promptText = input.value.trim();
+            if (!promptText) return;
+
+            pushSnapshot();
+            logMCPCommand("upsert_slide", `prompt: "${promptText.slice(0, 32)}..."`);
+
+            playAILightSweep([
+                `Interpretando: "${promptText.slice(0, 26)}..."`,
+                "Mutando el código visual de la diapositiva...",
+                "Renderizando vista previa en vivo..."
+            ], () => {
+                const canvasRoot = document.getElementById('slideCanvasRoot');
+                const titleEl = canvasRoot.querySelector('#node-title');
+                if (titleEl) {
+                    titleEl.innerHTML = `<span class="slyde-gradient-text">${promptText}</span>`;
+                }
+                syncCanvasDOMToSlideCode();
+                input.value = "";
+            });
+        }
+
+        function quickPrompt(text) {
+            document.getElementById('aiPromptInput').value = text;
+            mutateSlideCardStyle('glass');
+            simulateAICoPilotMutation();
+        }
+
+        // Add AI Suggested Slide (Tool #7: suggest_next_slide)
+        function toggleAISuggestionsPopover() {
+            document.getElementById('aiSuggestionsMenu').classList.toggle('hidden');
+        }
+
+        function addAISuggestedSlide(suggestionType) {
+            pushSnapshot();
+            document.getElementById('aiSuggestionsMenu').classList.add('hidden');
+            const newIdx = presentationState.slides.length + 1;
+            const slideId = `slide-0${newIdx}`;
+
+            let newSlideObj = {
+                id: slideId,
+                title: "Flujo Reactivo MCP",
+                templateType: "diagram",
+                speakerNotes: "Diapositiva creada proactivamente por la herramienta suggest_next_slide del servidor MCP.",
+                animationTimeline: [
+                    { step: 1, target: "#node-title", effect: "Spring Appear (220ms)" }
+                ],
+                code: `<div class="w-full h-full p-10 flex flex-col justify-between bg-gradient-to-br from-white to-purple-50/60 text-[#1A1A1E]">
+    <div class="flex items-center justify-between">
+        <span id="node-badge" class="slyde-node px-3 py-1 rounded-full text-xs font-semibold bg-gradient-to-r from-[#7C3AED] to-[#FF6B4A] text-white">✦ Sugerida por Copiloto IA</span>
+        <span class="text-xs text-gray-400">0${newIdx} / GENERACIÓN PROACTIVA</span>
+    </div>
+    <div class="space-y-3 my-auto">
+        <h2 id="node-title" data-node-label="Título Sugerido" class="slyde-node font-display text-4xl font-extrabold tracking-tight">
+            ${suggestionType === 'metric_chart' ? 'Impacto en Velocidad de Creación: 4.8x más rápido' : suggestionType === 'architecture_diagram' ? 'Puente Directo: Agente IA → Árbol Visual DOM' : '¿Listo para transformar tus presentaciones?'}
+        </h2>
+        <p id="node-subtitle" data-node-label="Descripción" class="slyde-node text-base text-gray-600 max-w-2xl">
+            Generada en tiempo real mediante la herramienta <code class="text-[#7C3AED] font-mono">suggest_next_slide</code> analizando el contexto narrativo de tu presentación.
+        </p>
+    </div>
+    <div id="node-cards" class="slyde-node grid grid-cols-3 gap-4">
+        <div class="p-4 rounded-2xl bg-white border border-purple-200 shadow-xs">
+            <div class="text-xs font-bold text-[#7C3AED]">Cero Fricción</div>
+            <p class="text-xs text-gray-500 mt-1">Sin cajas de texto desalineadas manualmente.</p>
+        </div>
+        <div class="p-4 rounded-2xl bg-white border border-orange-200 shadow-xs">
+            <div class="text-xs font-bold text-[#FF6B4A]">Diseño Consistente</div>
+            <p class="text-xs text-gray-500 mt-1">Tokens tipográficos y radios siempre armónicos.</p>
+        </div>
+        <div class="p-4 rounded-2xl bg-white border border-emerald-200 shadow-xs">
+            <div class="text-xs font-bold text-emerald-600">100% Editable</div>
+            <p class="text-xs text-gray-500 mt-1">Ajusta cualquier detalle visual o exporta a PPTX.</p>
+        </div>
+    </div>
+</div>`
+            };
+
+            logMCPCommand("suggest_next_slide", `accepted: '${suggestionType}' -> upsert_slide(${slideId})`);
+            presentationState.slides.push(newSlideObj);
+            presentationState.currentSlideIndex = presentationState.slides.length - 1;
+
+            playAILightSweep([
+                "Diseñando nueva diapositiva...",
+                "Generando miniatura para el Storyboard..."
+            ], () => {
+                renderEverything();
+            });
+        }
+
+        // Theme Gallery Handler
+        function toggleThemeGallery() {
+            document.getElementById('themeGalleryPopover').classList.toggle('hidden');
+        }
+
+        function applyDeckTheme(themeKey) {
+            pushSnapshot();
+            document.getElementById('themeGalleryPopover').classList.add('hidden');
+            const names = {
+                daylight: "Studio Daylight",
+                obsidian: "Linear Obsidian",
+                sunset: "Aurora Coral",
+                minimal: "Swiss Paper"
+            };
+            document.getElementById('activeThemeName').textContent = names[themeKey] || "Studio Daylight";
+
+            const activeSlide = presentationState.slides[presentationState.currentSlideIndex];
+            const wrapper = document.getElementById('slideCanvasRoot').firstElementChild;
+            if (!wrapper) return;
+
+            if (themeKey === 'obsidian') {
+                wrapper.className = "w-full h-full p-10 flex flex-col justify-between bg-[#121214] text-white relative overflow-hidden";
+            } else if (themeKey === 'sunset') {
+                wrapper.className = "w-full h-full p-10 flex flex-col justify-between bg-gradient-to-br from-[#2E1065] via-[#7C3AED] to-[#FF6B4A] text-white relative overflow-hidden";
+            } else if (themeKey === 'minimal') {
+                wrapper.className = "w-full h-full p-10 flex flex-col justify-between bg-[#F5F5F4] text-[#1C1917] relative overflow-hidden";
+            } else {
+                wrapper.className = "w-full h-full p-10 flex flex-col justify-between bg-gradient-to-br from-white via-[#FAF8FF] to-[#FFF5F2] text-[#1A1A1E] relative overflow-hidden";
+            }
+
+            syncCanvasDOMToSlideCode();
+            logMCPCommand("init_presentation", `theme_mutation: '${themeKey}'`);
+        }
+
+        // Aspect Ratio Switching (16:9 | 4:3 | 9:16)
+        function setAspectRatio(ratio) {
+            presentationState.aspectRatio = ratio;
+            const stageWrapper = document.getElementById('stageWrapper');
+            ['16-9', '4-3', '9-16'].forEach(r => {
+                const btn = document.getElementById(`ratio-${r}`);
+                btn.className = "px-2.5 py-1 rounded-lg font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white transition-all";
+            });
+            const activeBtn = document.getElementById(`ratio-${ratio.replace(':', '-')}`);
+            activeBtn.className = "px-2.5 py-1 rounded-lg font-semibold bg-brand-violet text-white transition-all";
+
+            if (ratio === '16:9') {
+                stageWrapper.className = "relative w-full max-w-4xl aspect-video rounded-2xl shadow-stage overflow-hidden border border-black/10 dark:border-white/10 spring-transition bg-white dark:bg-zinc-900";
+            } else if (ratio === '4:3') {
+                stageWrapper.className = "relative w-full max-w-2xl aspect-[4/3] rounded-2xl shadow-stage overflow-hidden border border-black/10 dark:border-white/10 spring-transition bg-white dark:bg-zinc-900";
+            } else {
+                stageWrapper.className = "relative h-full max-h-[540px] aspect-[9/16] rounded-2xl shadow-stage overflow-hidden border border-black/10 dark:border-white/10 spring-transition bg-white dark:bg-zinc-900";
+            }
+        }
+
+        // Developer Mode Toggle (Transforms Left Panel & Reveals Bottom HUD Telemetry)
+        function toggleDeveloperMode() {
+            presentationState.devMode = !presentationState.devMode;
+            const switchBtn = document.getElementById('devModeSwitch');
+            const knob = document.getElementById('devModeKnob');
+            const storyboardView = document.getElementById('storyboardView');
+            const devView = document.getElementById('devModePanelView');
+            const leftTitle = document.getElementById('leftPanelTitle');
+            const devHud = document.getElementById('devHudMetrics');
+
+            if (presentationState.devMode) {
+                switchBtn.classList.replace('bg-gray-200', 'bg-brand-violet');
+                switchBtn.classList.replace('dark:bg-zinc-700', 'bg-brand-violet');
+                knob.classList.add('translate-x-3.5');
+                storyboardView.classList.add('hidden');
+                devView.classList.remove('hidden');
+                leftTitle.textContent = "MCP Inspector (Dev)";
+                devHud.classList.remove('hidden');
+                devHud.classList.add('flex');
+                renderMcpLogs();
+            } else {
+                switchBtn.classList.replace('bg-brand-violet', 'bg-gray-200');
+                knob.classList.remove('translate-x-3.5');
+                storyboardView.classList.remove('hidden');
+                devView.classList.add('hidden');
+                leftTitle.textContent = "Storyboard";
+                devHud.classList.add('hidden');
+                devHud.classList.remove('flex');
+            }
+        }
+
+        function logMCPCommand(method, summary) {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            presentationState.mcpLogs.unshift({ time: timeStr, method, summary });
+            if (presentationState.devMode) renderMcpLogs();
+        }
+
+        function renderMcpLogs() {
+            const container = document.getElementById('mcpRpcLogContainer');
+            if (!container) return;
+            container.innerHTML = presentationState.mcpLogs.map(log => `
+                <div class="p-2 rounded-lg bg-zinc-900/90 border border-zinc-800 space-y-0.5">
+                    <div class="flex items-center justify-between">
+                        <span class="text-brand-coral font-semibold">${log.method}()</span>
+                        <span class="text-zinc-500 text-[9px]">${log.time}</span>
+                    </div>
+                    <div class="text-zinc-400 text-[10px] truncate">${log.summary}</div>
+                </div>
+            `).join('');
+        }
+
+        function simulateMCPCommandFromExternalAgent() {
+            simulateAICoPilotMutation();
+        }
+
+        // Switch Right Panel Tabs (Visual vs Live Code)
+        function switchInspectorTab(tab) {
+            const visualPane = document.getElementById('inspectorVisualPane');
+            const codePane = document.getElementById('inspectorCodePane');
+            const visualBtn = document.getElementById('tabVisualBtn');
+            const codeBtn = document.getElementById('tabCodeBtn');
+
+            if (tab === 'visual') {
+                visualPane.classList.remove('hidden');
+                codePane.classList.add('hidden');
+                visualBtn.className = "flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-white flex items-center justify-center gap-1.5 transition-all";
+                codeBtn.className = "flex-1 py-1.5 px-3 rounded-xl text-xs font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white flex items-center justify-center gap-1.5 transition-all";
+            } else {
+                visualPane.classList.add('hidden');
+                codePane.classList.remove('hidden');
+                codeBtn.className = "flex-1 py-1.5 px-3 rounded-xl text-xs font-semibold bg-white dark:bg-dark-surface shadow-sm text-light-text dark:text-white flex items-center justify-center gap-1.5 transition-all";
+                visualBtn.className = "flex-1 py-1.5 px-3 rounded-xl text-xs font-medium text-light-muted dark:text-dark-muted hover:text-light-text dark:hover:text-white flex items-center justify-center gap-1.5 transition-all";
+            }
+        }
+
+        // Slide Selection & Navigation
+        function selectSlide(idx) {
+            presentationState.currentSlideIndex = idx;
+            renderEverything();
+        }
+        function prevSlide() {
+            if (presentationState.currentSlideIndex > 0) {
+                presentationState.currentSlideIndex--;
+                renderEverything();
+                updatePresenterViewIfOpen();
+            }
+        }
+        function nextSlide() {
+            if (presentationState.currentSlideIndex < presentationState.slides.length - 1) {
+                presentationState.currentSlideIndex++;
+                renderEverything();
+                updatePresenterViewIfOpen();
+            }
+        }
+
+        // Trigger Slide Step Animation (Tool #3: trigger_animation)
+        function triggerSlideStepAnimation() {
+            const canvasRoot = document.getElementById('slideCanvasRoot');
+            const nodes = canvasRoot.querySelectorAll('.slyde-node');
+            nodes.forEach((node, idx) => {
+                node.style.opacity = '0';
+                node.style.transform = 'translateY(14px)';
+                setTimeout(() => {
+                    node.style.transition = 'all 0.45s cubic-bezier(0.22, 1, 0.36, 1)';
+                    node.style.opacity = '1';
+                    node.style.transform = 'translateY(0)';
+                }, idx * 130);
+            });
+            logMCPCommand("trigger_animation", `slide_id: '${presentationState.slides[presentationState.currentSlideIndex].id}', step_index: 0`);
+        }
+
+        // Alignment Guides & Zoom
+        function toggleAlignmentGuides() {
+            presentationState.guidesVisible = !presentationState.guidesVisible;
+            document.getElementById('alignmentGuidesOverlay').classList.toggle('hidden', !presentationState.guidesVisible);
+        }
+
+        function adjustCanvasZoom(delta) {
+            presentationState.zoom = Math.min(130, Math.max(70, presentationState.zoom + delta));
+            document.getElementById('zoomPercentageLabel').textContent = `${presentationState.zoom}%`;
+            document.getElementById('stageWrapper').style.transform = `scale(${presentationState.zoom / 100})`;
+        }
+
+        // Dark / Light Warm Studio Theme Toggle
+        function toggleAppColorMode() {
+            document.documentElement.classList.toggle('dark');
+        }
+
+        // Presenter Mode (Fullscreen with Timer, Speaker Notes & Toggleable AI Live Stamp)
+        let presenterTimerInterval = null;
+        let presenterSeconds = 0;
+
+        function enterPresenterMode() {
+            const overlay = document.getElementById('presenterOverlay');
+            overlay.classList.remove('hidden');
+            presenterSeconds = 0;
+            updatePresenterViewIfOpen();
+            clearInterval(presenterTimerInterval);
+            presenterTimerInterval = setInterval(() => {
+                presenterSeconds++;
+                const mins = String(Math.floor(presenterSeconds / 60)).padStart(2, '0');
+                const secs = String(presenterSeconds % 60).padStart(2, '0');
+                document.getElementById('presenterTimer').textContent = `${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function updatePresenterViewIfOpen() {
+            const overlay = document.getElementById('presenterOverlay');
+            if (overlay.classList.contains('hidden')) return;
+            const slide = presentationState.slides[presentationState.currentSlideIndex];
+            document.getElementById('presenterStageContent').innerHTML = slide.code;
+            document.getElementById('presenterSlideTitle').textContent = `Diapositiva ${presentationState.currentSlideIndex + 1} / ${presentationState.slides.length} · ${slide.title}`;
+            document.getElementById('speakerNotesText').textContent = slide.speakerNotes;
+        }
+
+        function exitPresenterMode() {
+            document.getElementById('presenterOverlay').classList.add('hidden');
+            clearInterval(presenterTimerInterval);
+        }
+
+        function togglePresenterAIBadge() {
+            document.getElementById('presenterAIWatermark').classList.toggle('hidden');
+        }
+
+        function toggleSpeakerNotes() {
+            document.getElementById('speakerNotesCard').classList.toggle('hidden');
+        }
+
+        // Export Modal Logic
+        function openExportModal() {
+            document.getElementById('exportModal').classList.remove('hidden');
+            document.getElementById('exportFeedbackBanner').classList.add('hidden');
+        }
+        function closeExportModal() {
+            document.getElementById('exportModal').classList.add('hidden');
+        }
+        function triggerExport(format) {
+            const banner = document.getElementById('exportFeedbackBanner');
+            banner.classList.remove('hidden');
+            logMCPCommand("export_presentation", `format: '${format}', output_path: './build/deck.${format}'`);
+            banner.innerHTML = `✓ Pipeline Rust ejecutado: <strong>deck.${format}</strong> generado con éxito (Vectores y Shapes editables verificados).`;
+        }
+
+        function triggerHeroSparkle() {
+            triggerSlideStepAnimation();
+        }
+
+        // Keyboard Shortcuts (Arrows for navigation, ESC for Presenter Mode)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') exitPresenterMode();
+            if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+            if (e.key === 'ArrowRight') nextSlide();
+            if (e.key === 'ArrowLeft') prevSlide();
+        });
+
+        function renderEverything() {
+            renderStoryboardFilmstrip();
+            renderStageCanvas();
+        }
+
+        window.onload = function() {
+            lucide.createIcons();
+            renderEverything();
+        };
+    </script>
+</body>
+</html>
