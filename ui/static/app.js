@@ -1,4 +1,10 @@
 import { createClient, readToken } from "./api.js";
+import {
+  idleActivity,
+  nextTransition,
+  receiveActivity,
+  tickActivity,
+} from "./agent-activity.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 
 const $ = (id) => document.getElementById(id);
@@ -33,6 +39,15 @@ function boot(sessionToken) {
   let titleTimer = null;
   let resizeTimer = null;
   let exportJob = null;
+  let activity = idleActivity();
+  let activityTimer = null;
+  let lastInteractionAt = 0;
+  let lastSheenKey = "";
+  let sweepPending = false;
+  let lastAnnouncedLabel = "";
+  let chipHideTimer = null;
+
+  const FOLLOW_IDLE_MS = 1800;
 
   $("app").hidden = false;
   syncThemeToggle();
@@ -52,6 +67,10 @@ function boot(sessionToken) {
     toast: $("toast"),
     undo: $("undo"),
     redo: $("redo"),
+    agentChip: $("agent-chip"),
+    agentLabel: $("agent-label"),
+    agentAnnouncer: $("agent-announcer"),
+    stageScan: $("stage-scan"),
   };
 
   // ---------- helpers ----------
@@ -107,6 +126,158 @@ function boot(sessionToken) {
     els.statusText.textContent = t(key);
   }
 
+  // ---------- AI activity ----------
+
+  function activityLabel(state) {
+    if (!state) return "";
+    switch (state.phase) {
+      case "writing":
+        if (state.action === "set_notes") return t("agent.notes");
+        if (state.action === "upsert_slide") {
+          return Number.isInteger(state.slideIndex)
+            ? t("agent.writing", { n: state.slideIndex + 1 })
+            : t("agent.writingGeneric");
+        }
+        return t("agent.writingGeneric");
+      case "adjusting":
+        if (state.action === "create_presentation") return t("agent.preparing");
+        if (state.action === "remove_slide") return t("agent.removing");
+        if (state.action === "move_slide") return t("agent.moving");
+        return t("agent.adjusting");
+      case "animating":
+        return t("agent.animating");
+      case "done":
+        return state.action === "upsert_slide" ? t("agent.doneSlide") : t("agent.done");
+      case "thinking":
+        return t("agent.thinking");
+      case "error":
+        return t("agent.error");
+      default:
+        return "";
+    }
+  }
+
+  function renderAgentActivity({ announce = true } = {}) {
+    const idle = activity.phase === "idle";
+    const label = idle ? "" : activityLabel(activity);
+
+    // The chip exits with a short fade instead of disappearing between two
+    // frames; a new active event during the fade cancels it.
+    if (idle) {
+      if (!els.agentChip.hidden) {
+        if (!chipHideTimer) {
+          els.agentChip.classList.add("leaving");
+          chipHideTimer = window.setTimeout(() => {
+            chipHideTimer = null;
+            els.agentChip.hidden = true;
+            els.agentChip.classList.remove("leaving");
+            els.agentChip.dataset.phase = "idle";
+            els.agentLabel.textContent = "";
+          }, 180);
+        }
+      } else {
+        els.agentChip.classList.remove("leaving");
+        els.agentChip.dataset.phase = "idle";
+        els.agentLabel.textContent = "";
+      }
+    } else {
+      if (chipHideTimer) {
+        window.clearTimeout(chipHideTimer);
+        chipHideTimer = null;
+      }
+      els.agentChip.hidden = false;
+      els.agentChip.classList.remove("leaving");
+      els.agentChip.dataset.phase = activity.phase;
+      els.agentLabel.textContent = label;
+    }
+
+    // Live announcements follow the visual phases, not the raw events: a
+    // mutation is instant, but "Slide ready" should be heard when it appears.
+    if (idle) {
+      if (lastAnnouncedLabel) els.agentAnnouncer.textContent = "";
+      lastAnnouncedLabel = "";
+    } else if (activity.phase === "thinking") {
+      // Reserved for a future explicit generation channel; inferred calls never
+      // emit it, so it is not announced.
+    } else if (!announce) {
+      lastAnnouncedLabel = label;
+    } else if (label && label !== lastAnnouncedLabel) {
+      lastAnnouncedLabel = label;
+      els.agentAnnouncer.textContent = label;
+    }
+
+    const writingSlide =
+      activity.phase === "writing" && activity.action === "upsert_slide";
+    const targetVisible =
+      Boolean(activity.slideId) && activity.slideId === selectedId;
+    const sheen = writingSlide && targetVisible;
+
+    if (!sheen) {
+      lastSheenKey = "";
+      sweepPending = false;
+      delete els.frameWrap.dataset.agentPhase;
+      return;
+    }
+
+    els.frameWrap.dataset.agentPhase = "writing";
+    const key = `${activity.slideId}:${activity.action}`;
+    if (key !== lastSheenKey) {
+      lastSheenKey = key;
+      sweepPending = true;
+    }
+    maybeSweep();
+  }
+
+  function maybeSweep() {
+    if (!sweepPending || els.frameWrap.hidden) return;
+    sweepPending = false;
+    els.stageScan.classList.remove("run");
+    void els.stageScan.offsetWidth;
+    els.stageScan.classList.add("run");
+  }
+
+  function scheduleActivityTick() {
+    if (activityTimer) {
+      window.clearTimeout(activityTimer);
+      activityTimer = null;
+    }
+    const now = Date.now();
+    const at = nextTransition(activity, now);
+    if (!at) return;
+    activityTimer = window.setTimeout(() => {
+      activityTimer = null;
+      activity = tickActivity(activity, Date.now());
+      renderAgentActivity();
+      scheduleActivityTick();
+    }, Math.max(0, at - now) + 20);
+  }
+
+  function userIsEngaged() {
+    if (Date.now() - lastInteractionAt < FOLLOW_IDLE_MS) return true;
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable) {
+      return true;
+    }
+    // Never move the storyboard selection while keyboard focus is in it.
+    return Boolean(el.closest(".rail"));
+  }
+
+  /// Follow the slide the agent wrote only when the user is watching, not
+  /// editing. Otherwise the storyboard still updates, but selection is theirs.
+  function followAgentSlide(event) {
+    if (!event || event.phase !== "done") return;
+    if (event.action !== "upsert_slide" || !event.slide_id) return;
+    if (!view || !view.presentation.slides.some((s) => s.id === event.slide_id)) {
+      return;
+    }
+    if (selectedId === event.slide_id || userIsEngaged()) return;
+    selectedId = event.slide_id;
+    stageKey = "";
+    applyView(view);
+  }
+
   // ---------- rendering ----------
 
   function applyView(next) {
@@ -132,6 +303,8 @@ function boot(sessionToken) {
     renderStage(d);
     renderChips(d);
     renderInspector(d);
+    renderAgentActivity({ announce: false });
+    maybeSweep();
   }
 
   /// Every thumb is a button; only the selected one is in the tab order, so
@@ -512,6 +685,13 @@ function boot(sessionToken) {
       applyView(event.view);
       return;
     }
+    if (event.type === "agent_activity") {
+      activity = receiveActivity(activity, event, Date.now());
+      followAgentSlide(event);
+      renderAgentActivity();
+      scheduleActivityTick();
+      return;
+    }
     if (event.type === "export_progress") {
       if (exportJob && exportJob.format === event.format) {
         exportJob.completed = event.completed;
@@ -582,8 +762,25 @@ function boot(sessionToken) {
       thumbsKey = "";
       applyView(view);
     }
+    renderAgentActivity({ announce: false });
     if (view) setStatus(els.statusDot.dataset.state || "connecting");
   });
+
+  // Auto-follow is only for people watching, not for people editing.
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      lastInteractionAt = Date.now();
+    },
+    { capture: true }
+  );
+  document.addEventListener(
+    "keydown",
+    () => {
+      lastInteractionAt = Date.now();
+    },
+    { capture: true }
+  );
 
   document.addEventListener("keydown", (event) => {
     const tag = (event.target.tagName || "").toLowerCase();

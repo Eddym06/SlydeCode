@@ -169,12 +169,14 @@ Rules:
 ### 6.1 The generation sequence (the signature moment)
 
 1. **0ms** — AI chip enters `Writing slide 3…` (180ms, no bounce).
-2. **0ms** — Canvas dims 4%; a 1px gradient scanline sweeps top→bottom once (700ms).
+2. **0ms** — Canvas dims 4%; a warm scan band (16% tall, led by a bright coral edge) sweeps top→bottom once (700ms).
 3. **As elements land** — each block fades in and scales 0.985→1 with a 40ms stagger, in DOM order.
 4. **While active** — exactly one micro-label is visible, anchored to the element being written (`Adjusting layout…`, 12.5px, `--ink-muted`). Never two.
-5. **End** — chip settles to `Done` with a 120ms check draw; the sweep exits upward; the label fades at 180ms.
+5. **End** — chip settles to `Done` with a 120ms check draw; the sweep exits upward; the done label holds for 2.6s and fades out at 180ms.
 
 No JSON, no logs, no percentages. The user sees the slide being composed.
+
+**Implementation note — inferred activity (current).** External MCP agents do not stream tokens, so the studio infers activity from the structured `agent_activity` WebSocket events the server emits around `/api/agent`. The active phase is held for at least 1s before `Done`; the done confirmation then holds for 2.6s. There is deliberately **no synthetic “still working” tail** after a concluded call, because the agent is finished and the label would be false. The sweep runs only for `upsert_slide` when the target slide is the selected one. `Done` auto-follows the written slide only if the user has been idle for 1.8s and focus is not inside a form control or the storyboard. The `thinking` state is implemented visually but reserved for a future explicit generation channel.
 
 ---
 
@@ -191,7 +193,7 @@ No JSON, no logs, no percentages. The user sees the slide being composed.
 ## 8. Components & states
 
 - **Button:** primary (`--gradient-action`, white text, 36px tall, radius 10), secondary (surface + border), ghost (transparent, ink-muted), destructive. Icon buttons 32×32 with `aria-label` and tooltip.
-- **AI status chip:** pill, 28px tall, gradient ring at 1.5px, dot + label. States: idle, thinking, writing, adjusting, animating, done, error. `aria-live="polite"`. Clicking it replays the last generation preview (demo affordance).
+- **AI status chip:** pill, 28px tall, gradient ring at 1.5px, dot + label. States: idle, thinking, writing, adjusting, animating, done, error. A separate `role="status"` live region announces visual phase changes; the chip itself is non-interactive in the inferred-activity layer, and replaying the last generation is a later affordance.
 - **Thumbnail:** 16:9, radius 14, 1px border, live render (not a screenshot), selected state = 2px `--brand` ring + 2px offset. Drag handle appears on hover only.
 - **Inspector row:** label left (12.5px, muted), control right, 32px tall, hairline between groups. Controls mutate the generated code underneath; the UI never asks the user to type CSS.
 - **Empty state:** one line of what to do next, one primary action. No illustrations of sad robots.

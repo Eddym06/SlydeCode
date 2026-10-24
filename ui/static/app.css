@@ -85,6 +85,132 @@
   border-color: var(--border-strong);
 }
 
+/* AI activity chip: a global, non-interactive status surface. Never a
+   spinner; the label says exactly what the agent is doing. */
+.agent-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: min(280px, 42vw);
+  height: 28px;
+  padding: 0 11px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  animation: agent-chip-in 180ms var(--ease-out) both;
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+
+.agent-chip[hidden] {
+  display: none;
+}
+
+.agent-chip.leaving {
+  animation: none;
+  opacity: 0;
+  transform: translateY(-2px) scale(0.98);
+}
+
+@keyframes agent-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agent-chip::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1.5px;
+  border-radius: inherit;
+  background: var(--gradient-signature);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.agent-chip::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 55%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+  transform: translateX(-160%);
+  pointer-events: none;
+}
+
+.agent-chip[data-phase="writing"]::after,
+.agent-chip[data-phase="adjusting"]::after,
+.agent-chip[data-phase="animating"]::after {
+  animation: agent-shimmer 2.4s linear infinite;
+}
+
+.agent-dot,
+.agent-label {
+  position: relative;
+  z-index: 1;
+}
+
+.agent-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.agent-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chip[data-phase="writing"] .agent-dot,
+.agent-chip[data-phase="adjusting"] .agent-dot,
+.agent-chip[data-phase="animating"] .agent-dot {
+  background: var(--accent);
+}
+
+.agent-chip[data-phase="done"] .agent-dot {
+  background: var(--success);
+}
+
+.agent-chip[data-phase="error"] .agent-dot {
+  background: var(--danger);
+}
+
+@keyframes agent-shimmer {
+  to {
+    transform: translateX(260%);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .topbar-actions {
   display: flex;
   align-items: center;
@@ -350,6 +476,53 @@
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+/* Generation moment: a single 700ms sweep over the slide being written.
+   The sheen is anchored to the canvas, never to a panel. */
+.stage-agent {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(10, 10, 12, 0.04);
+  overflow: hidden;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.stage-frame[data-agent-phase="writing"] .stage-agent {
+  opacity: 1;
+}
+
+.stage-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 16%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(255, 107, 74, 0.04) 55%,
+    rgba(255, 107, 74, 0.12) 82%,
+    rgba(255, 107, 74, 0.52) 98%,
+    rgba(255, 175, 130, 0.72) 100%
+  );
+  transform: translateY(-120%);
+  will-change: transform;
+}
+
+.stage-scan.run {
+  animation: stage-scan 700ms var(--ease-in-out) 1 both;
+}
+
+@keyframes stage-scan {
+  from {
+    transform: translateY(-120%);
+  }
+  to {
+    transform: translateY(520%);
+  }
 }
 
 .stage-bar {
@@ -759,9 +932,14 @@ details.dev[open] summary::before {
   }
 }
 
+:root[data-theme="dark"] .agent-chip::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

@@ -38,6 +38,11 @@ in the OS app-data directory. The same pipeline is available inside the studio:
 the inspector's **Export** section renders a PDF, or a ZIP with one PNG per
 slide, and downloads it with the deck's name.
 
+External MCP activity is visible in the studio: a localized status chip shows
+what the agent is doing, a warm scanline sweeps the slide being written, and the
+stage follows the written slide when the user is idle. The signal is inferred
+from the existing `/api/agent` path, so agents do not need to change.
+
 ## Tests
 
 ```powershell
@@ -46,10 +51,11 @@ node --test "tests/ui/*.test.mjs"
 ```
 
 The UI suite spawns the built binary with an isolated `SLYDE_DATA_DIR`, launches
-headless Chrome and drives the real interface over CDP. It covers fonts,
-sandbox isolation, storyboard keyboard navigation, runtime i18n, theme toggle,
-notes autosave, `.slyde` export, in-app PDF/PNG export with a real download,
-sandbox slide rendering, presenter progress and the accessibility baseline.
+headless Chrome and drives the real interface over CDP. It covers the activity
+state machine, fonts, sandbox isolation, storyboard keyboard navigation, runtime
+i18n, theme toggle, notes autosave, `.slyde` export, in-app PDF/PNG export with a
+real download, agent activity + conditional auto-follow, sandbox slide rendering,
+presenter progress and the accessibility baseline.
 
 ## Environment
 

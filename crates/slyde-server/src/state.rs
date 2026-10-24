@@ -75,6 +75,35 @@ impl AppState {
     }
 }
 
+/// Phase of an agent command as observed by the studio.
+///
+/// The server only emits `Writing`, `Adjusting`, `Animating`, `Done` and
+/// `Error`. `Thinking` is reserved for a future explicit generation channel
+/// and is understood by the UI so the protocol stays additive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPhase {
+    Thinking,
+    Writing,
+    Adjusting,
+    Animating,
+    Done,
+    Error,
+}
+
+/// The kind of mutation an agent requested. Stable and structured: the UI
+/// localizes it, so agents never inject display strings across the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAction {
+    CreatePresentation,
+    UpsertSlide,
+    RemoveSlide,
+    MoveSlide,
+    SetNotes,
+    TriggerAnimation,
+}
+
 /// Messages pushed to every connected UI over WebSocket.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -87,6 +116,16 @@ pub enum ServerEvent {
         slide_id: String,
         step_index: usize,
         step: AnimationStep,
+    },
+    /// What an external agent is doing right now. Inferred from `/api/agent`
+    /// calls; the UI owns the timing so a fast mutation is still legible.
+    AgentActivity {
+        phase: AgentPhase,
+        action: AgentAction,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slide_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slide_index: Option<usize>,
     },
     /// Progress for an export started from the UI. The HTTP response still
     /// carries the finished file; this only powers the progress label.
@@ -204,6 +243,33 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer tok_123".parse().unwrap());
         assert_eq!(bearer_token(&headers), Some("tok_123"));
+    }
+
+    #[test]
+    fn agent_activity_serializes_structured_fields_only() {
+        let event = ServerEvent::AgentActivity {
+            phase: AgentPhase::Writing,
+            action: AgentAction::UpsertSlide,
+            slide_id: Some("sld_a".into()),
+            slide_index: Some(1),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["type"], "agent_activity");
+        assert_eq!(json["phase"], "writing");
+        assert_eq!(json["action"], "upsert_slide");
+        assert_eq!(json["slide_id"], "sld_a");
+        assert_eq!(json["slide_index"], 1);
+
+        let done = ServerEvent::AgentActivity {
+            phase: AgentPhase::Done,
+            action: AgentAction::CreatePresentation,
+            slide_id: None,
+            slide_index: None,
+        };
+        let json = serde_json::to_value(&done).unwrap();
+        assert_eq!(json["type"], "agent_activity");
+        assert!(json.get("slide_id").is_none());
+        assert!(json.get("slide_index").is_none());
     }
 
     #[test]

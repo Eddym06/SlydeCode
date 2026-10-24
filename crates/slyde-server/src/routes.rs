@@ -13,7 +13,9 @@ use tower_http::services::ServeDir;
 
 use crate::agent::{self, AgentCommand};
 use crate::sandbox;
-use crate::state::{AppState, AuthQuery, ServerEvent, UiCommand, is_authorized, origin_allowed};
+use crate::state::{
+    AgentPhase, AppState, AuthQuery, ServerEvent, UiCommand, is_authorized, origin_allowed,
+};
 
 /// Ceiling for an uploaded `.slyde` file. Core limits already cap slides and
 /// per-slide code; this stops an oversized body before it is parsed.
@@ -206,12 +208,20 @@ async fn api_agent(
         return unauthorized();
     }
 
+    let mut activity = command.activity();
+    state.broadcast(activity.event(activity.phase));
+
     match agent::handle(&state, command).await {
         Ok(outcome) => {
+            if let Some(upsert) = &outcome.upsert {
+                activity.slide_id = Some(upsert.slide_id.clone());
+                activity.slide_index = Some(upsert.index);
+            }
             if let Some(event) = outcome.animation.clone() {
                 state.broadcast(event);
             }
             state.publish_state().await;
+            state.broadcast(activity.event(AgentPhase::Done));
             Json(json!({
                 "ok": true,
                 "created": outcome.created,
@@ -221,11 +231,14 @@ async fn api_agent(
             }))
             .into_response()
         }
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "ok": false, "error": err.to_string() })),
-        )
-            .into_response(),
+        Err(err) => {
+            state.broadcast(activity.event(AgentPhase::Error));
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": err.to_string() })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -390,6 +403,8 @@ mod tests {
     use slyde_core::{PresentationState, TemplateType};
     use tower::util::ServiceExt;
 
+    use crate::state::{AgentAction, AgentPhase};
+
     fn test_state() -> Arc<AppState> {
         let mut core = PresentationState::new("Deck", Theme::studio(), AspectRatio::R16x9);
         core.upsert_slide(
@@ -414,6 +429,98 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    type ActivityRow = (AgentPhase, AgentAction, Option<String>, Option<usize>);
+
+    fn agent_activity(
+        events: &mut tokio::sync::broadcast::Receiver<ServerEvent>,
+    ) -> Vec<ActivityRow> {
+        let mut seen = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let ServerEvent::AgentActivity {
+                phase,
+                action,
+                slide_id,
+                slide_index,
+            } = event
+            {
+                seen.push((phase, action, slide_id, slide_index));
+            }
+        }
+        seen
+    }
+
+    #[tokio::test]
+    async fn agent_calls_announce_writing_and_done() {
+        let state = test_state();
+        let mut events = state.events.subscribe();
+        let app = app_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::post("/api/agent?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"upsert_slide","index":0,"slide_id":"sld_a","html_code":"<h1>New</h1>"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let seen = agent_activity(&mut events);
+        assert_eq!(seen.len(), 2, "one active event and one done event");
+        assert_eq!(seen[0].0, AgentPhase::Writing);
+        assert_eq!(seen[0].1, AgentAction::UpsertSlide);
+        assert_eq!(seen[0].2.as_deref(), Some("sld_a"));
+        assert_eq!(seen[0].3, Some(0));
+        assert_eq!(seen[1].0, AgentPhase::Done);
+        assert_eq!(seen[1].2.as_deref(), Some("sld_a"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_agent_call_announces_an_error() {
+        let state = test_state();
+        let mut events = state.events.subscribe();
+        let app = app_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::post("/api/agent?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"upsert_slide","index":0,"html_code":""}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        let seen = agent_activity(&mut events);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, AgentPhase::Writing);
+        assert_eq!(seen[1].0, AgentPhase::Error);
+    }
+
+    #[tokio::test]
+    async fn ui_commands_do_not_claim_agent_activity() {
+        let state = test_state();
+        let mut events = state.events.subscribe();
+        let app = app_router(state.clone());
+        let res = app
+            .oneshot(
+                Request::post("/api/command?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"set_notes","slide_id":"sld_a","notes":"Mine"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(agent_activity(&mut events).is_empty());
     }
 
     #[tokio::test]

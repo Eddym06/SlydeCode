@@ -33,6 +33,10 @@
       <div class="deck-meta">
         <input id="deck-title" class="deck-title" data-i18n-placeholder="deck.untitled"
                data-i18n-aria="deck.titleLabel" spellcheck="false" aria-label="Deck title">
+        <div class="agent-chip" id="agent-chip" data-phase="idle" hidden>
+          <span class="agent-dot" aria-hidden="true"></span>
+          <span class="agent-label" id="agent-label"></span>
+        </div>
       </div>
 
       <div class="topbar-actions">
@@ -82,6 +86,9 @@
         <div class="stage" id="stage">
           <div class="stage-frame" id="stage-frame" hidden>
             <iframe id="slide-frame" sandbox="allow-scripts" data-i18n-title="a11y.slideCanvas" title="Current slide"></iframe>
+            <div class="stage-agent" id="stage-agent" aria-hidden="true">
+              <span class="stage-scan" id="stage-scan"></span>
+            </div>
           </div>
           <div class="empty" id="empty" hidden>
             <div class="empty-mark" aria-hidden="true">
@@ -121,6 +128,7 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <p class="sr-only" id="agent-announcer" role="status" aria-live="polite" aria-atomic="true"></p>
 
   <script type="module" src="/static/app.js"></script>
 </body>

@@ -326,6 +326,79 @@ test("exports a PDF and a PNG bundle from the inspector with the deck name", asy
   }
 });
 
+test("shows agent activity and follows the slide it writes", async () => {
+  // Start on the second slide, then let go of the UI so the activity signal
+  // is allowed to move the stage to the slide the agent writes.
+  await page.evaluate(`(() => {
+    document.querySelectorAll(".thumb")[1].click();
+    document.activeElement.blur();
+    return true;
+  })()`);
+  await sleep(2100);
+
+  const origin = new URL(appUrl).origin;
+  const pending = fetch(`${origin}/api/agent?t=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "upsert_slide",
+      index: 0,
+      slide_id: firstSlideId,
+      html_code:
+        '<section class="slide"><h1>Written by the agent</h1></section>',
+    }),
+  });
+
+  await page.waitFor(
+    `(() => {
+      const chip = document.getElementById("agent-chip");
+      return chip && !chip.hidden && chip.dataset.phase === "writing";
+    })()`,
+    { timeout: 5000 }
+  );
+  const writing = await page.evaluate(`(() => {
+    const chip = document.getElementById("agent-chip");
+    return {
+      phase: chip.dataset.phase,
+      text: chip.textContent.trim(),
+      announced: document.getElementById("agent-announcer").textContent
+    };
+  })()`);
+  assert.equal(writing.phase, "writing");
+  assert.match(writing.text, /diapositiva 1|slide 1/i);
+  assert.match(writing.announced, /diapositiva 1|slide 1/i);
+
+  const response = await pending;
+  assert.equal(response.status, 200);
+
+  // The done event follows the written slide while the chip still holds the
+  // active phase, so the sweep is anchored to the slide that just landed.
+  await page.waitFor(
+    `(() => {
+      const current = document.querySelector('.thumb[aria-current="true"]');
+      const frame = document.getElementById("stage-frame");
+      return current && current.dataset.id === ${JSON.stringify(firstSlideId)}
+        && frame.dataset.agentPhase === "writing";
+    })()`,
+    { timeout: 5000 }
+  );
+
+  await page.waitFor(
+    `document.getElementById("agent-chip").dataset.phase === "done"`,
+    { timeout: 5000 }
+  );
+  const followed = await page.evaluate(`(() => ({
+    current: document.querySelector('.thumb[aria-current="true"]').dataset.id,
+    src: document.getElementById("slide-frame").src,
+    label: document.getElementById("agent-label").textContent,
+    announced: document.getElementById("agent-announcer").textContent
+  }))()`);
+  assert.equal(followed.current, firstSlideId);
+  assert.match(followed.src, new RegExp(firstSlideId));
+  assert.match(followed.label, /lista|ready/i);
+  assert.match(followed.announced, /lista|ready/i);
+});
+
 test("renders slides from the sandbox origin with bundled fonts", async () => {
   const slidePage = await browser.newPage(
     `${sandboxOrigin}/s/${encodeURIComponent(firstSlideId)}?static=1`

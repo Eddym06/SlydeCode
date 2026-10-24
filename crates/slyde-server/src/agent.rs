@@ -5,11 +5,9 @@
 //! UI edits, so the storyboard updates live while an agent writes.
 
 use serde::Deserialize;
-use slyde_core::{
-    AnimationStep, AspectRatio, CoreError, PresentationState, Theme, UpsertOutcome,
-};
+use slyde_core::{AnimationStep, AspectRatio, CoreError, PresentationState, Theme, UpsertOutcome};
 
-use crate::state::{AppState, ServerEvent};
+use crate::state::{AgentAction, AgentPhase, AppState, ServerEvent};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -55,6 +53,73 @@ pub struct AgentOutcome {
     pub animation: Option<ServerEvent>,
 }
 
+/// Structured descriptor of an agent command, used to announce activity before
+/// and after the mutation. It deliberately carries no free-form text: the UI
+/// owns the localized labels.
+#[derive(Debug, Clone)]
+pub struct Activity {
+    pub phase: AgentPhase,
+    pub action: AgentAction,
+    pub slide_id: Option<String>,
+    pub slide_index: Option<usize>,
+}
+
+impl Activity {
+    pub fn event(&self, phase: AgentPhase) -> ServerEvent {
+        ServerEvent::AgentActivity {
+            phase,
+            action: self.action,
+            slide_id: self.slide_id.clone(),
+            slide_index: self.slide_index,
+        }
+    }
+}
+
+impl AgentCommand {
+    pub fn activity(&self) -> Activity {
+        match self {
+            AgentCommand::CreatePresentation { .. } => Activity {
+                phase: AgentPhase::Adjusting,
+                action: AgentAction::CreatePresentation,
+                slide_id: None,
+                slide_index: None,
+            },
+            AgentCommand::UpsertSlide {
+                index, slide_id, ..
+            } => Activity {
+                phase: AgentPhase::Writing,
+                action: AgentAction::UpsertSlide,
+                slide_id: slide_id.clone(),
+                slide_index: Some(*index),
+            },
+            AgentCommand::RemoveSlide { slide_id } => Activity {
+                phase: AgentPhase::Adjusting,
+                action: AgentAction::RemoveSlide,
+                slide_id: Some(slide_id.clone()),
+                slide_index: None,
+            },
+            AgentCommand::MoveSlide { .. } => Activity {
+                phase: AgentPhase::Adjusting,
+                action: AgentAction::MoveSlide,
+                slide_id: None,
+                slide_index: None,
+            },
+            AgentCommand::SetNotes { slide_id, .. } => Activity {
+                phase: AgentPhase::Writing,
+                action: AgentAction::SetNotes,
+                slide_id: Some(slide_id.clone()),
+                slide_index: None,
+            },
+            AgentCommand::TriggerAnimation { slide_id, .. } => Activity {
+                phase: AgentPhase::Animating,
+                action: AgentAction::TriggerAnimation,
+                slide_id: Some(slide_id.clone()),
+                slide_index: None,
+            },
+        }
+    }
+}
+
 pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutcome, CoreError> {
     let mut core = state.core.write().await;
     match command {
@@ -91,7 +156,13 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
                 .as_deref()
                 .map(crate::starter::template_type)
                 .unwrap_or_default();
-            let outcome = core.upsert_slide(index, slide_id, html_code, template, animation.unwrap_or_default())?;
+            let outcome = core.upsert_slide(
+                index,
+                slide_id,
+                html_code,
+                template,
+                animation.unwrap_or_default(),
+            )?;
             Ok(AgentOutcome {
                 upsert: Some(outcome),
                 ..AgentOutcome::default()
@@ -212,5 +283,79 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("neon"));
         assert_eq!(state.core.read().await.presentation().title, "Deck");
+    }
+
+    #[test]
+    fn commands_map_to_structured_activity() {
+        let cases = [
+            (
+                AgentCommand::CreatePresentation {
+                    title: "Deck".into(),
+                    theme: None,
+                    aspect_ratio: None,
+                },
+                AgentPhase::Adjusting,
+                AgentAction::CreatePresentation,
+                None,
+                None,
+            ),
+            (
+                AgentCommand::UpsertSlide {
+                    index: 2,
+                    slide_id: Some("sld_a".into()),
+                    html_code: "<h1>Hi</h1>".into(),
+                    template: None,
+                    animation: None,
+                },
+                AgentPhase::Writing,
+                AgentAction::UpsertSlide,
+                Some("sld_a"),
+                Some(2),
+            ),
+            (
+                AgentCommand::RemoveSlide {
+                    slide_id: "sld_a".into(),
+                },
+                AgentPhase::Adjusting,
+                AgentAction::RemoveSlide,
+                Some("sld_a"),
+                None,
+            ),
+            (
+                AgentCommand::MoveSlide { from: 0, to: 1 },
+                AgentPhase::Adjusting,
+                AgentAction::MoveSlide,
+                None,
+                None,
+            ),
+            (
+                AgentCommand::SetNotes {
+                    slide_id: "sld_a".into(),
+                    notes: Some("Hi".into()),
+                },
+                AgentPhase::Writing,
+                AgentAction::SetNotes,
+                Some("sld_a"),
+                None,
+            ),
+            (
+                AgentCommand::TriggerAnimation {
+                    slide_id: "sld_a".into(),
+                    step_index: 0,
+                },
+                AgentPhase::Animating,
+                AgentAction::TriggerAnimation,
+                Some("sld_a"),
+                None,
+            ),
+        ];
+
+        for (command, phase, action, slide_id, slide_index) in cases {
+            let activity = command.activity();
+            assert_eq!(activity.phase, phase);
+            assert_eq!(activity.action, action);
+            assert_eq!(activity.slide_id.as_deref(), slide_id);
+            assert_eq!(activity.slide_index, slide_index);
+        }
     }
 }

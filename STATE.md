@@ -1,15 +1,15 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-24 13:56
+> Last updated: 2026-10-24 14:30
 
 ## Current Phase
-Phase 2: **working vertical slice with durable decks, real brand type, in-app export and an automated UI smoke suite.** The Rust workspace, local server, sandbox origin, Chrome launch, editor, presenter, PDF/PNG export (UI, CLI and MCP), MCP stdio server and `.slyde` persistence all run end to end. 91 Rust tests and 8 browser E2E tests are green. Next candidate work: the AI generation overlay, then PPTX export (needs research + approval).
+Phase 2: **working vertical slice with durable decks, real brand type, in-app export, an AI activity signal and an automated UI suite.** The Rust workspace, local server, sandbox origin, Chrome launch, editor, presenter, PDF/PNG export (UI, CLI and MCP), MCP stdio server and `.slyde` persistence all run end to end. 96 Rust tests and 17 UI tests (8 state-machine + 9 browser E2E) are green. Next candidate work: the prompt-driven in-app copilot or PPTX export (needs research + approval).
 
 ## Implemented & Working
 
-### Backend (Rust workspace, 5 crates, 91 tests green)
+### Backend (Rust workspace, 5 crates, 96 tests green)
 - `slyde-core`: `Presentation`/`Slide`/`Theme`/`AnimationStep` model, `PresentationState` with undo/redo, history limits, validation (`max_slides` 200, `max_code_bytes` 512 KiB, non-empty code, CSS-valid colors), and the `.slyde` project file (versioned JSON, validated on read). 29 tests.
-- `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`, `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin guards. Chrome discovery/launch, runtime rendezvous file, agent command handling, starter templates, atomic deck storage with debounced autosave. 47 tests.
+- `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`, `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin guards. Chrome discovery/launch, runtime rendezvous file, agent command handling, structured `agent_activity` events, starter templates, atomic deck storage with debounced autosave. 52 tests.
 - `slyde-export`: transport-agnostic Chrome pipeline. PDF via `--print-to-pdf` (960×540 pt = exact 16:9), PNG per slide at 1280×720. Unique Chrome profile per job, absolute paths, artifact verification, optional progress channel. 3 tests.
 - `slyde-mcp`: hand-rolled JSON-RPC 2.0 stdio loop, 7 tools with hand-written schemas, thin HTTP proxy into the running studio, auto-spawn when no healthy runtime exists. `export_presentation` now uses the shared pipeline and deck-based default names. 10 tests.
 - `slyde-app`: CLI (`app`, `mcp`, `export`, `version`, `help`), UI/assets dir resolution, runtime reuse, Chrome launch, welcome slide seeding. `export` CLI lives here so `slyde-export` stays free of transport dependencies. `SLYDE_DATA_DIR`, `SLYDE_UI_DIR`, `SLYDE_ASSETS_DIR` and `SLYDE_BROWSER` overrides.
@@ -17,6 +17,7 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
 - Editor: topbar, storyboard with live thumbnails, stage, inspector (theme, format, notes, animation list with per-step replay, deck file actions, **export**, delete), developer mode, EN/ES switch, dark/light toggle, undo/redo, status pill.
 - **Export from the inspector:** `PDF` and `PNG images` buttons render through headless Chrome and download with the deck's name (`q3-review.pdf`, `q3-review.zip`). Buttons enter an `aria-busy` state, show per-slide progress from WebSocket events, disable during the job and surface localized, non-technical errors (no Chrome, empty deck, generic failure).
+- **AI activity signal:** `/api/agent` broadcasts structured `agent_activity` events (active → done/error) with no free-form text. A 28px status chip shows localized writing/adjusting/animating/done/error states for at least 1s, keeps the done confirmation for 2.6s and feeds a polite live region. Writing a slide also sweeps a warm scanline over the stage when that slide is visible; after a successful `upsert_slide` the stage follows the written slide only if the user is idle and not focused in a form or the storyboard.
 - Presenter: letterboxed stage, animation playback on load, keyboard nav (←/→/space/PageUp/PageDown/Enter/Backspace), `F` fullscreen, `Esc` exit, auto-hiding HUD, progressbar with `aria-valuenow`.
 - Sandbox documents self-scale (`ResizeObserver` + translate/scale), so thumbnails, stage, presenter and print all use the same document.
 - **Bundled typography:** Geist Sans/Mono variable woff2 (1.8.2, SIL OFL 1.1) in `assets/fonts/`, served at `/fonts` on both origins, preloaded in the editor and presenter. PDF/PNG exports now embed Geist instead of falling back.
@@ -34,24 +35,23 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - `slyde.exe export --format pdf` → 1 page per slide, `/MediaBox [0 0 960 540]`; `--format png` → 1280×720 per slide, rendered with Geist.
 - In-app export: `POST /api/export?format=pdf` returned a valid PDF (`%PDF-`, correct page count); `format=png` returned a ZIP with one 1280×720 PNG per slide. Both carried the deck-based RFC 5987 filename; the staging directory under app-data was empty afterwards.
 - MCP export over stdio (`export_presentation` → `format=pdf`) produced a valid PDF through the shared pipeline.
+- AI activity: a real `/api/agent` call rendered the writing chip and announced it, followed the written slide when idle (the E2E started on another slide), and played the scanline on the followed slide; the chip then settled on `Slide ready` and the live region matched. The visual pass used a headless Chrome screenshot during the sweep.
 - Persistence: edits autosaved (2 slides → file on disk), process restarted → deck restored intact; download produced a valid `.slyde`; upload replaced the deck (4:3, 1 slide) and persisted it; a corrupt upload returned 400 and left the deck untouched.
 - Fonts: `document.fonts.check("16px Geist")` and `"16px Geist Mono"` are true in the editor **and** in a sandbox slide document; body computes to `Geist, Inter, …`.
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
-- UI E2E suite: 8 tests green (`node --test "tests/ui/*.test.mjs"`) covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, **real PDF/PNG downloads from the inspector (busy state, deck name, one PNG per slide in the ZIP)**, sandbox document, presenter progress and the accessibility audit.
+- UI suite: 17 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 9 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, **real PDF/PNG downloads from the inspector (busy state, deck name, one PNG per slide in the ZIP)**, **agent activity + conditional auto-follow**, sandbox document, presenter progress and the accessibility audit.
 
 ## In Progress
-- Nothing partially implemented.
+- None. The AI activity signal increment is complete; the next increment needs a product decision.
 
 ## Current Task
-- [x] Integrate and harden PDF/PNG export
-  - [x] Decouple `slyde-export` from the server; move the CLI to `slyde-app`
-  - [x] Add `POST /api/export` (PDF bytes, PNG ZIP), token/origin guards and deck-based names
-  - [x] Stream per-slide progress over the existing WebSocket (`export_progress`)
-  - [x] Inspector export section with busy state, localized errors and real blob download
-  - [x] Update the MCP `export_presentation` tool to the shared pipeline
-  - [x] Unit tests for formats, ZIP packaging, names and progress; E2E download test
-  - [x] Rust tests (91) and UI tests (8) green on Windows GNU
-  - [x] Docs updated (`STATE.md`, `MEMORY.md`, `README.md`)
+- [x] Add the AI activity signal (overlay for MCP agents)
+  - [x] Structured `agent_activity` WebSocket events emitted only by `/api/agent`
+  - [x] Pure UI state machine with minimum active hold, done confirmation and reserved thinking state
+  - [x] Status chip, canvas scanline and conditional auto-follow
+  - [x] EN/ES strings, reduced-motion fallback and accessible live announcements
+  - [x] Rust, state-machine and browser E2E tests
+  - [x] Docs updated (`STATE.md`, `MEMORY.md`, `README.md`, design note)
 
 ## Known Issues / Bugs
 - MSVC target cannot link on this machine (Windows SDK missing). Only `x86_64-pc-windows-gnu` is verified.
@@ -59,7 +59,7 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - PNG export launches one headless Chrome per slide (~1–2 s each, sequential). Progress is visible, but a 50-slide deck takes over a minute; reuse a single Chrome via CDP if this becomes a real workflow.
 - Slides can only reference `data:`/`blob:` images (sandbox CSP), so photo-rich decks are not possible yet.
 - Autosave keeps a single working deck; there is no deck library, recent-files list or "new deck" action.
-- The AI generation overlay (streaming/loading/error states) does not exist yet: agent edits appear when they land, with no in-product progress surface.
+- The AI activity overlay is a signal layer, not a model: it reacts to MCP tool calls, so it cannot show "thinking" before the first call or token-by-token writing. A prompt-driven in-app copilot is not implemented.
 - UI coverage is end-to-end only. There is no component-level DOM runner (adding one would mean adopting a test dependency; the E2E suite covers the critical surfaces meanwhile).
 - macOS and Linux are untested.
 
@@ -69,7 +69,7 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 - Linux: not verified (no machine).
 
 ## Backlog (Prioritized)
-1. **AI generation overlay**: streaming status, empty/loading/error states and the signature sweep, so a non-technical user sees the agent working instead of slides appearing from nowhere.
+1. **Prompt-driven in-app copilot**: the signal layer is done, but the app still has no model. A true "thinking" state needs an in-app provider or a streaming generation channel, plus a composer and cancel/retry.
 2. **PPTX export** behind an `Exporter` trait — research first (`ppt-rs` 0.2.37 unvalidated), validate real files in PowerPoint/Keynote/Google Slides.
 3. **Image asset strategy** for `.slyde` decks (sandbox CSP currently allows only `data:`/`blob:`), including a bundle format decision.
 4. **Faster PNG export**: one Chrome/CDP session for all slides, useful before decks grow beyond a handful.
@@ -78,9 +78,10 @@ Phase 2: **working vertical slice with durable decks, real brand type, in-app ex
 7. Component-level UI unit tests if a DOM runner is adopted; the E2E suite remains the contract test for core flows.
 
 ## Next Immediate Step
-- Pick the next increment with the user: the AI generation overlay (recommended, closes the product's core promise visually) or PPTX research (requires explicit approval before touching the export architecture).
+- Pick the next increment with the user: the prompt-driven copilot (new provider/channel, needs an architecture proposal) or PPTX research (requires explicit approval before touching the export architecture).
 
 ## Completed
+- [x] Add the AI activity signal for external MCP agents (structured WS events, chip, scanline, conditional follow, EN/ES, tests) — 2026-10-24
 - [x] Integrate and harden PDF/PNG export (UI + API + MCP, ZIP, progress, E2E) — 2026-10-24
 - [x] Bundle Geist + accessibility pass + dependency-free UI E2E suite — 2026-10-24
 - [x] Durable decks: `.slyde` JSON, autosave, download/upload — 2026-10-24
