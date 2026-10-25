@@ -1,0 +1,24 @@
+# `ui/src` — reserved layout
+
+The frontend that ships today is plain ES modules in `ui/static/`:
+
+| File | Responsibility |
+|---|---|
+| `api.js` | HTTP/WS client, token handling, SSE stream reader |
+| `app.js` | Studio shell: layout, storyboard, stage, inspector, presenter hooks |
+| `copilot.js` | In-app copilot panel (providers, thread, reasoning drawer) |
+| `copilot-model-sheet.js` | Provider/model picker |
+| `command-palette.js` | `⌘K` / `Ctrl+K` palette |
+| `agent-activity.js` | Activity state machine (pure, unit-tested) |
+| `i18n.js` | EN/ES dictionaries plus the `t()` layer |
+| `present.js`, `teleprompter.js` | Standalone presenter and pacing |
+| `tokens.css`, `app.css`, `present.css` | Design tokens and surfaces |
+
+These directories are the target for the split described in `STATE.md`:
+`components/` (one component per file), `features/` (storyboard, inspector,
+presenter, ai-generation), `locales/en|es` and `styles/`. They stay empty until
+that refactor lands, so nothing here should be imported yet.
+
+When moving a file out of `ui/static/`, update the `<script src>` list in
+`ui/index.html` / `ui/present.html` and the E2E suite in the same change: the UI
+has no bundler, so a path that is wrong is a blank page.

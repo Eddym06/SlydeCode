@@ -4,6 +4,7 @@ description = "SlydeCode launcher binary: desktop app shell and MCP entrypoint."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "slyde"

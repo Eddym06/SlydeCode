@@ -13,6 +13,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["SlydeCode"]
+license = "AGPL-3.0-only"
 
 [workspace.dependencies]
 slyde-core = { path = "crates/slyde-core" }
@@ -37,3 +38,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 base64 = "0.22"
 # PDF/DOCX/PPTX text extraction for copilot attachments.
 pdf-extract = "0.12"
+# OS entropy for session tokens. Tiny, audited, and already a transitive
+# dependency of `uuid`; hand-rolled entropy has no place in a session secret.
+getrandom = "0.3"

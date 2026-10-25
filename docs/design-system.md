@@ -45,14 +45,14 @@ Tokens are semantic, never raw hex in components. Both modes ship in the same re
 
 | Token | Value | Use |
 |---|---|---|
-| `--bg` | `#121214` | App background |
-| `--surface` | `#1A1A1E` | Panels |
-| `--surface-sunken` | `#0E0E10` | Canvas backdrop |
-| `--border` | `#2E2E33` | Hairlines |
-| `--border-strong` | `#3D3D44` | Inputs, selected outlines |
+| `--bg` | `#0B0B0C` | App background |
+| `--surface` | `#121214` | Panels |
+| `--surface-sunken` | `#070708` | Canvas backdrop |
+| `--border` | `rgba(255,255,255,.08)` | Hairlines |
+| `--border-strong` | `rgba(255,255,255,.16)` | Inputs, selected outlines |
 | `--ink` | `#F4F3F1` | Primary text |
 | `--ink-muted` | `#A6A3AB` | Secondary text |
-| `--ink-subtle` | `#908D95` | Placeholders, disabled (5.3:1 on surface) |
+| `--ink-subtle` | `#908D95` | Placeholders, disabled (5.2:1 on surface) |
 | `--brand` | `#9B6BFF` | Primary action (lightened for contrast) |
 | `--brand-strong` | `#B08BFF` | Hover |
 | `--brand-soft` | `#2A2140` | Selected row |
@@ -61,6 +61,8 @@ Tokens are semantic, never raw hex in components. Both modes ship in the same re
 | `--success` | `#34D399` | |
 | `--warning` | `#FBBF24` | |
 | `--danger` | `#F87171` | |
+
+`ui/static/tokens.css` is the source of truth; this table is a reference copy.
 
 ### 2.3 The signature gradient
 

@@ -126,7 +126,12 @@ async fn run_inner(
             .selected_slide_id
             .as_deref()
             .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
-        let system = prompt::system_prompt(deck, selected, request.selected_element_id.as_deref(), language);
+        let system = prompt::system_prompt(
+            deck,
+            selected,
+            request.selected_element_id.as_deref(),
+            language,
+        );
         let assistant = transport::stream(
             state.copilot.http(),
             provider,

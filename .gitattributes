@@ -1,0 +1,11 @@
+# Keep the repository's line endings stable across Windows, macOS and Linux.
+* text=auto eol=lf
+
+# Binary assets: never diff them as text.
+*.png binary
+*.ico binary
+*.woff2 binary
+
+# Vendored, minified third-party bundles: keep them out of diffs.
+assets/vendor/**/*.min.js linguist-vendored linguist-generated
+assets/vendor/**/*.min.css linguist-vendored linguist-generated

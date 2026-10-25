@@ -4,6 +4,7 @@ description = "SlydeCode local HTTP/WS server, UI host, sandbox origin and Chrom
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 slyde-core.workspace = true
@@ -19,6 +20,8 @@ futures-util.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 pdf-extract.workspace = true
+# OS entropy for the session tokens (already in the tree through `uuid`).
+getrandom.workspace = true
 # Store-only ZIP for the per-slide PNG bundle. Deflate is enabled only so the
 # copilot can read the XML inside DOCX/PPTX attachments; PNGs stay stored.
 zip = { version = "2", default-features = false, features = ["deflate"] }

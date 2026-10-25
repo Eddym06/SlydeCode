@@ -1,0 +1,7 @@
+# The workspace is built with stable Rust plus fmt and clippy, and CI enforces
+# both. Pin the components here so a fresh checkout has the same gate locally.
+# On Windows the verified target is `x86_64-pc-windows-gnu` (the MSVC target
+# needs the Windows SDK, which the development machine does not have yet).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

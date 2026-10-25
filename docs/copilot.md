@@ -109,6 +109,11 @@ therefore consistent.
   headers stay in the server logs.
 - Slide code remains untrusted and keeps rendering in the cross-origin sandbox.
   Copilot-generated code gets no extra privileges.
+- The copilot mutates the deck only through the tool surface, which is the same
+  `agent::run` path the MCP bridge uses; `mutate_element` calls are scoped to a
+  `slide_id` so a generated handle cannot edit the wrong slide.
+- A network failure keeps its cause chain (DNS, TLS, refused) in the public
+  message; a provider rejection keeps its first line. Neither path echoes keys.
 - The browser test suite mocks provider HTTP at the CDP boundary, so tests never
   require a real key or vendor network access.
 

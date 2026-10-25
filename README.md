@@ -8,10 +8,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Rust-2021-orange?logo=rust" alt="Rust 2021">
+  <img src="https://img.shields.io/badge/Rust-2024-orange?logo=rust" alt="Rust 2024">
   <img src="https://img.shields.io/badge/Chrome-CDP%20Headless-blue?logo=googlechrome" alt="Chrome CDP">
   <img src="https://img.shields.io/badge/MCP-JSON--RPC%202.0-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="AGPL-3.0">
 </p>
 
 ---
@@ -157,12 +157,49 @@ SlydeCode/
 ## Running Tests
 
 ```powershell
-# Run all 129 Rust workspace unit and integration tests
-cargo +stable-x86_64-pc-windows-gnu test --workspace
+# Rust: 161 unit and integration tests across the five crates
+cargo test --workspace
 
-# Run the dependency-free Chrome DevTools Protocol (CDP) UI test suite
+# UI: 29 end-to-end tests (28 browser flows + the activity state machine).
+# They spawn the real binary in headless Chrome over CDP and need no npm packages.
+cargo build --workspace
 node --test "tests/ui/*.test.mjs"
 ```
+
+The UI suite runs the newest `slyde` binary it finds under `target/` (`SLYDE_BIN`
+overrides it), so build before running it.
+
+### Quality gate
+
+`cargo fmt --all --check` and `cargo clippy --workspace --all-targets -D warnings`
+are both enforced in CI, together with the two suites above. Run them locally
+before pushing:
+
+```powershell
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+node --test "tests/ui/*.test.mjs"
+```
+
+---
+
+## Security model
+
+- Both servers bind `127.0.0.1` only. The editor and the slide documents are
+  served from **different origins**, and slides run in a `sandbox="allow-scripts"`
+  iframe with a `connect-src 'none'` CSP, so AI-authored slide code cannot read
+  the editor, its storage or the network.
+- Two secrets exist, and they are not interchangeable:
+  - the **session token** authorizes `/api/*` and the WebSocket. It is handed to
+    the browser once in the launch URL, kept in `sessionStorage`, and sent as
+    `Authorization: Bearer` (only navigations that cannot set headers — the WS
+    handshake and file downloads — still carry it in the query string);
+  - the **sandbox token** authorizes slide documents (`/s/{id}`) only. It is
+    embedded in every iframe URL, so a slide's own script can read it; it opens
+    no deck API.
+- Provider keys live on disk in the app-data directory (`copilot.json`, mode
+  `0600` on Unix) and are never returned to the browser.
 
 ---
 
@@ -173,3 +210,17 @@ node --test "tests/ui/*.test.mjs"
 - [`STATE.md`](./STATE.md) — Project status, implementation checklist, and active backlog.
 - [`docs/design-system.md`](./docs/design-system.md) — Design tokens, typography, motion, and contrast standards.
 - [`docs/copilot.md`](./docs/copilot.md) — Copilot protocol, reasoning streams, tool schemas, and security model.
+
+---
+
+## License
+
+SlydeCode is released under the **GNU Affero General Public License v3.0**
+(`AGPL-3.0-only`); see [`LICENSE`](./LICENSE). The crates declare the same
+license through `license.workspace = true`.
+
+The AGPL is a strong copyleft license with a network clause: if you run a
+modified SlydeCode as a service, you must offer its source to the users of that
+service. Bundled third-party assets keep their own licenses (`assets/fonts`,
+`assets/vendor` each ship their license file).
+
