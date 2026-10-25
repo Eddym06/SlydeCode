@@ -9,6 +9,7 @@ import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
+import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -47,7 +48,6 @@ function boot(sessionToken) {
   let stageKey = "";
   let thumbsKey = "";
   let pendingAnimations = [];
-  let notesTimer = null;
   let titleTimer = null;
   let resizeTimer = null;
   let exportJob = null;
@@ -115,7 +115,6 @@ function boot(sessionToken) {
     copilotPromptPills: $("copilot-prompt-pills"),
   };
 
-  let inspectorSubtab = "slide";
   const ZOOM_LEVELS = ["fit", 0.5, 0.75, 1.0, 1.25, 1.5];
   let currentZoomIdx = 0;
   let saveTimer = null;
@@ -127,18 +126,9 @@ function boot(sessionToken) {
 
   // ---------- Command palette ----------
 
-  /// Every theme the backend accepts (`slyde_core::THEME_IDS`), with the two dots
-  /// the inspector shows. Both pickers read this list, so a theme can never be
-  /// offered in one place and missing in another. `theme.<id>` must exist in both
-  /// locale files.
-  const THEME_CHOICES = [
-    { id: "studio", dots: ["#7C3AED", "#FF6B4A"] },
-    { id: "paper", dots: ["#2C2B2A", "#D97706"] },
-    { id: "night", dots: ["#9B6BFF", "#FF8265"] },
-    { id: "terminal", dots: ["#00FF66", "#00E5FF"] },
-    { id: "academic", dots: ["#111111", "#0055D4"] },
-    { id: "pitch", dots: ["#0F172A", "#38BDF8"] },
-  ];
+  // The theme list is imported from `inspector.js`: the palette and the inspector
+  // must offer exactly the same decks themes, and `theme.<id>` must exist in both
+  // locales.
   const PALETTE_THEMES = THEME_CHOICES.map((choice) => choice.id);
   const PALETTE_RATIOS = ["16:9", "4:3", "9:16"];
 
@@ -1121,7 +1111,7 @@ function boot(sessionToken) {
       commitGeometry(data.id, data.rect);
     } else if (data.type === "tree") {
       structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
-      if (view && inspectorSubtab === "slide") renderInspector(view.presentation);
+      if (view && inspector.subtab === "slide") renderInspector(view.presentation);
     }
   }
 
@@ -1162,386 +1152,23 @@ function boot(sessionToken) {
     });
   }
 
-  // ---------- Animation editor ----------
-  // The AI authors `animation` through `upsert_slide`; this is the manual
-  // counterpart, so a human can add, tune, reorder or drop steps without asking
-  // the model to rewrite the whole slide.
+  // ---------- Inspector ----------
+  // The panel lives in `inspector.js`; the studio supplies the commands and the
+  // state it renders from. Keeping the ids means the export progress handler and
+  // the E2E suite keep working unchanged.
 
-  const ANIMATION_KINDS = [
-    "fade_up",
-    "fade",
-    "scale_in",
-    "slide_in_left",
-    "slide_in_right",
-    "typewriter",
-    "spin",
-    "rotate_in",
-    "pulse",
-    "flip_up",
-    "blur_in",
-    "bounce_in",
-  ];
-  const DEFAULT_EASING = "cubic-bezier(.16,1,.3,1)";
-
-  function renderAnimationEditor(current) {
-    const rows = current.animation
-      .map(
-        (step, index) => `
-        <div class="anim-step" data-index="${index}" data-easing="${escapeHtml(step.easing || DEFAULT_EASING)}">
-          <div class="anim-step-head">
-            <span class="step-index">${index + 1}</span>
-            <select class="anim-kind" data-field="kind" aria-label="${escapeHtml(t("inspector.stepKind"))}">
-              ${ANIMATION_KINDS.map(
-                (kind) =>
-                  `<option value="${kind}"${kind === step.kind ? " selected" : ""}>${kind}</option>`
-              ).join("")}
-            </select>
-            <button type="button" class="step-play" data-play="${index}"
-                    data-i18n-title="action.play" aria-label="${escapeHtml(t("action.play"))}">▶</button>
-            <button type="button" class="anim-btn" data-move="-1"
-                    data-i18n-title="animation.moveUp" aria-label="${escapeHtml(t("animation.moveUp"))}"
-                    ${index === 0 ? "disabled" : ""}>↑</button>
-            <button type="button" class="anim-btn" data-move="1"
-                    data-i18n-title="animation.moveDown" aria-label="${escapeHtml(t("animation.moveDown"))}"
-                    ${index === current.animation.length - 1 ? "disabled" : ""}>↓</button>
-            <button type="button" class="anim-btn anim-btn-danger" data-remove="${index}"
-                    data-i18n-title="animation.remove" aria-label="${escapeHtml(t("animation.remove"))}">✕</button>
-          </div>
-          <div class="anim-step-fields">
-            <label class="anim-field anim-field-target">
-              <span>${escapeHtml(t("inspector.stepTarget"))}</span>
-              <input class="anim-input" data-field="target" value="${escapeHtml(step.target)}"
-                     spellcheck="false" autocomplete="off">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDelay"))}</span>
-              <input class="anim-input" type="number" data-field="delay" value="${step.delay_ms}"
-                     min="0" max="10000" step="10">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDuration"))}</span>
-              <input class="anim-input" type="number" data-field="duration" value="${step.duration_ms}"
-                     min="1" max="5000" step="10">
-            </label>
-          </div>
-        </div>`
-      )
-      .join("");
-
-    return `
-      <div class="anim-editor" id="anim-editor">
-        ${rows || `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`}
-        <button type="button" class="anim-add" id="anim-add">+ ${escapeHtml(t("inspector.addStep"))}</button>
-      </div>`;
-  }
-
-  function bindAnimationEditor(current) {
-    const editor = $("anim-editor");
-    if (!editor) return;
-
-    const collect = () =>
-      [...editor.querySelectorAll(".anim-step")].map((row) => ({
-        kind: row.querySelector('[data-field="kind"]').value,
-        target: row.querySelector('[data-field="target"]').value.trim(),
-        delay_ms: Math.max(0, Number(row.querySelector('[data-field="delay"]').value) || 0),
-        duration_ms: Math.max(1, Number(row.querySelector('[data-field="duration"]').value) || 520),
-        easing: row.dataset.easing || DEFAULT_EASING,
-      }));
-
-    const save = (animation) =>
-      run("set_animation", { slide_id: current.id, animation });
-
-    editor.addEventListener("change", (event) => {
-      if (!event.target.matches("[data-field]")) return;
-      save(collect());
-    });
-
-    editor.addEventListener("click", (event) => {
-      const play = event.target.closest("[data-play]");
-      if (play) {
-        run("trigger_animation", {
-          slide_id: current.id,
-          step_index: Number(play.dataset.play),
-        });
-        return;
-      }
-
-      const remove = event.target.closest("[data-remove]");
-      if (remove) {
-        const steps = collect();
-        steps.splice(Number(remove.dataset.remove), 1);
-        save(steps);
-        return;
-      }
-
-      const move = event.target.closest("[data-move]");
-      if (move) {
-        const steps = collect();
-        const from = Number(move.closest(".anim-step").dataset.index);
-        const to = from + Number(move.dataset.move);
-        if (to < 0 || to >= steps.length) return;
-        const [moved] = steps.splice(from, 1);
-        steps.splice(to, 0, moved);
-        save(steps);
-        return;
-      }
-
-      if (event.target.closest("#anim-add")) {
-        const steps = collect();
-        steps.push({
-          kind: "fade_up",
-          target: ".title",
-          delay_ms: 90,
-          duration_ms: 560,
-          easing: DEFAULT_EASING,
-        });
-        save(steps);
-      }
-    });
-  }
-
-  function renderInspector(d) {
-    const active = document.activeElement;
-    const notesFocused = active && active.classList && active.classList.contains("notes");
-    // The caret is destroyed when the textarea is rebuilt; remember it so typing
-    // in the middle of a note does not jump to the end every autosave.
-    const notesCaret =
-      notesFocused && typeof active.selectionStart === "number"
-        ? { start: active.selectionStart, end: active.selectionEnd, scroll: active.scrollTop }
-        : null;
-
-    const current = slide();
-    const themeOptions = THEME_CHOICES.map(
-      (choice) =>
-        `<option value="${choice.id}" ${d.theme.id === choice.id ? "selected" : ""}>${escapeHtml(
-          t(`theme.${choice.id}`)
-        )}</option>`
-    ).join("");
-    const themeSwatches = THEME_CHOICES.map(
-      (choice) => `
-          <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
-            d.theme.id === choice.id
-          }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
-            <span class="swatch-dots">
-              ${choice.dots
-                .map((color) => `<span class="swatch-dot" style="background:${color}"></span>`)
-                .join("")}
-            </span>
-            <span class="swatch-name">${escapeHtml(t(`theme.${choice.id}`))}</span>
-          </button>`
-    ).join("");
-    const ratioOptions = ["16:9", "4:3", "9:16"]
-      .map((ratio) => `<option value="${ratio}" ${d.aspect_ratio === ratio ? "selected" : ""}>${ratio}</option>`)
-      .join("");
-
-    const deckSection = `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.themeSwatches"))}</span>
-        <div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">
-          ${themeSwatches}
-        </div>
-      </section>
-      <section class="field">
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.theme"))}</span>
-          <select class="select" id="theme-select">${themeOptions}</select>
-        </label>
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.aspect"))}</span>
-          <select class="select" id="ratio-select">${ratioOptions}</select>
-        </label>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.file"))}</span>
-        <div class="file-actions">
-          <button type="button" class="file-btn" id="save-deck">${escapeHtml(t("inspector.saveCopy"))}</button>
-          <button type="button" class="file-btn" id="open-deck">${escapeHtml(t("inspector.open"))}</button>
-        </div>
-        <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
-        <input type="file" id="deck-file" accept=".slyde,application/json" hidden>
-      </section>
-      <section class="field" id="export-section" aria-busy="false">
-        <span class="field-label">${escapeHtml(t("export.section"))}</span>
-        <div class="export-actions">
-          <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
-          <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
-          <button type="button" class="file-btn" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
-        </div>
-        <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
-      </section>`;
-
-    if (!current) {
-      els.inspector.innerHTML = `<div id="inspector-deck-section">${deckSection}</div>`;
-      if (els.subtabSlide) els.subtabSlide.disabled = true;
-      if (els.subtabDeck) {
-        els.subtabDeck.classList.add("active");
-        els.subtabDeck.setAttribute("aria-selected", "true");
-      }
-      bindDeckControls();
-      applyI18n(els.inspector);
-      return;
-    }
-
-    if (els.subtabSlide) els.subtabSlide.disabled = false;
-
-    const steps = renderAnimationEditor(current);
-
-    const slideSection = `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.slide"))}</span>
-        <div class="field-value">${escapeHtml(t(`template.${current.template}`))}</div>
-        <div class="mono" title="${escapeHtml(current.id)}">${escapeHtml(current.id)}</div>
-        <div class="slide-quick-actions">
-          <button type="button" class="btn" id="inspector-insert-image">${escapeHtml(t("inspector.insertImage"))}</button>
-          <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-          <button type="button" class="btn" id="inspector-duplicate-slide">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            ${escapeHtml(t("inspector.duplicate"))}
-          </button>
-          <button type="button" class="danger-btn" id="delete-slide">${escapeHtml(t("action.delete"))}</button>
-        </div>
-      </section>
-      <section class="field">
-        <label class="field-label" for="notes">${escapeHtml(t("inspector.notes"))}</label>
-        <textarea class="notes" id="notes" placeholder="${escapeHtml(t("inspector.notesPlaceholder"))}">${escapeHtml(current.notes || "")}</textarea>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.animation"))}</span>
-        ${steps}
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("tree.title"))}</span>
-        ${
-          structureNodes.length
-            ? `<ul class="element-tree">${structureNodes
-                .map(
-                  (node) => `<li>
-                    <button type="button" class="element-tree-item${
-                      selectedElement && selectedElement.id === node.id ? " is-selected" : ""
-                    }" data-tree-id="${escapeHtml(node.id)}">
-                      <span class="element-tree-tag">${escapeHtml(node.tag)}</span>
-                      <span class="element-tree-id">#${escapeHtml(node.id)}</span>
-                      ${node.text ? `<span class="element-tree-text">${escapeHtml(node.text)}</span>` : ""}
-                    </button>
-                  </li>`
-                )
-                .join("")}</ul>`
-            : `<p class="hint">${escapeHtml(t("tree.empty"))}</p>`
-        }
-      </section>
-      <details class="dev">
-        <summary>${escapeHtml(t("inspector.developer"))}</summary>
-        <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
-        <pre class="dev-code">${escapeHtml(current.code)}</pre>
-      </details>`;
-
-    const showSlide = inspectorSubtab === "slide";
-    els.inspector.innerHTML = `
-      <div id="inspector-slide-section" ${showSlide ? "" : 'style="display:none"'}>
-        ${slideSection}
-      </div>
-      <div id="inspector-deck-section" ${showSlide ? 'style="display:none"' : ""}>
-        ${deckSection}
-      </div>`;
-
-    if (els.subtabSlide) {
-      els.subtabSlide.classList.toggle("active", showSlide);
-      els.subtabSlide.setAttribute("aria-selected", String(showSlide));
-    }
-    if (els.subtabDeck) {
-      els.subtabDeck.classList.toggle("active", !showSlide);
-      els.subtabDeck.setAttribute("aria-selected", String(!showSlide));
-    }
-
-    bindDeckControls();
-
-    els.inspector.querySelectorAll("[data-tree-id]").forEach((button) => {
-      button.addEventListener("click", () => selectElementById(button.dataset.treeId));
-    });
-
-    const insertImageBtn = $("inspector-insert-image");
-    const imageFile = $("inspector-image-file");
-    if (insertImageBtn && imageFile) {
-      insertImageBtn.addEventListener("click", () => imageFile.click());
-      imageFile.addEventListener("change", async () => {
-        const file = imageFile.files && imageFile.files[0];
-        imageFile.value = "";
-        if (!file) return;
+  const inspector = createInspector({
+    root: els.inspector,
+    t,
+    escapeHtml,
+    actions: {
+      command: run,
+      selectElement: selectElementById,
+      pickImage: async (file) => {
         const dataUrl = await fileToDataUrl(file);
-        insertPastedImage(dataUrl, await imageSize(dataUrl));
-      });
-    }
-
-    const dupBtn = $("inspector-duplicate-slide");
-    if (dupBtn) {
-      dupBtn.addEventListener("click", () => run("duplicate_slide", { slide_id: current.id }));
-    }
-
-    const notes = $("notes");
-    if (notes) {
-      notes.addEventListener("input", () => {
-        if (notesTimer) window.clearTimeout(notesTimer);
-        notesTimer = window.setTimeout(() => {
-          run("set_notes", { slide_id: current.id, notes: notes.value || null }, { silent: true });
-        }, 450);
-      });
-    }
-
-    bindAnimationEditor(current);
-
-    const remove = $("delete-slide");
-    if (remove) {
-      remove.addEventListener("click", async () => {
-        const ok = await run("remove_slide", { slide_id: current.id }, { silent: true });
-        if (ok) {
-          selectedId = null;
-          stageKey = "";
-          applyView(view);
-        }
-      });
-    }
-
-    if (notesFocused && notes) {
-      notes.focus();
-      if (notesCaret) {
-        try {
-          notes.setSelectionRange(notesCaret.start, notesCaret.end);
-        } catch {
-          // Browsers throw on detached nodes; focus alone is still an improvement.
-        }
-        notes.scrollTop = notesCaret.scroll;
-      }
-    }
-    applyI18n(els.inspector);
-  }
-
-  function bindDeckControls() {
-    const theme = $("theme-select");
-    if (theme) theme.addEventListener("change", () => run("set_theme", { theme_id: theme.value }));
-
-    els.inspector.querySelectorAll(".theme-swatch").forEach((swatch) => {
-      swatch.addEventListener("click", () => {
-        const themeId = swatch.dataset.theme;
-        const themeSelect = $("theme-select");
-        if (themeSelect) themeSelect.value = themeId;
-        run("set_theme", { theme_id: themeId });
-      });
-    });
-
-    const ratio = $("ratio-select");
-    if (ratio) {
-      ratio.addEventListener("change", () => {
-        stageKey = "";
-        thumbsKey = "";
-        run("set_aspect_ratio", { ratio: ratio.value });
-      });
-    }
-
-    const save = $("save-deck");
-    if (save) {
-      save.addEventListener("click", () => {
-        // A download link is the browser-native "save as": it lands in the
-        // user's downloads folder with the deck name, no extension prompt.
+        await insertPastedImage(dataUrl, await imageSize(dataUrl));
+      },
+      saveDeck: () => {
         const link = document.createElement("a");
         link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
         link.download = "";
@@ -1549,18 +1176,10 @@ function boot(sessionToken) {
         link.click();
         link.remove();
         toast(t("toast.downloaded"));
-      });
-    }
-
-    const open = $("open-deck");
-    const file = $("deck-file");
-    if (open && file) {
-      open.addEventListener("click", () => file.click());
-      file.addEventListener("change", async () => {
-        const chosen = file.files && file.files[0];
-        if (!chosen) return;
+      },
+      openDeckFile: async (text) => {
         try {
-          const payload = await client.openDeck(await chosen.text());
+          const payload = await client.openDeck(text);
           selectedId = null;
           stageKey = "";
           thumbsKey = "";
@@ -1569,17 +1188,51 @@ function boot(sessionToken) {
         } catch (error) {
           toast(`${t("toast.error")} — ${error.message}`);
         }
-        file.value = "";
-      });
-    }
+      },
+      exportDeck: (format) => startExport(format),
+      removeSlide: async (slideId) => {
+        const ok = await run("remove_slide", { slide_id: slideId }, { silent: true });
+        if (ok) {
+          selectedId = null;
+          stageKey = "";
+          applyView(view);
+        }
+      },
+      aspectRatioChanged: (ratio) => {
+        stageKey = "";
+        thumbsKey = "";
+        run("set_aspect_ratio", { ratio });
+      },
+      applyI18n,
+      onEmptyDeck: () => {
+        if (els.subtabSlide) els.subtabSlide.disabled = true;
+        if (els.subtabDeck) {
+          els.subtabDeck.classList.add("active");
+          els.subtabDeck.setAttribute("aria-selected", "true");
+        }
+      },
+      onSubtabs: (showSlide) => {
+        if (els.subtabSlide) {
+          els.subtabSlide.disabled = false;
+          els.subtabSlide.classList.toggle("active", showSlide);
+          els.subtabSlide.setAttribute("aria-selected", String(showSlide));
+        }
+        if (els.subtabDeck) {
+          els.subtabDeck.classList.toggle("active", !showSlide);
+          els.subtabDeck.setAttribute("aria-selected", String(!showSlide));
+        }
+      },
+    },
+  });
 
-    const exportPdf = $("export-pdf");
-    if (exportPdf) exportPdf.addEventListener("click", () => startExport("pdf"));
-    const exportPng = $("export-png");
-    if (exportPng) exportPng.addEventListener("click", () => startExport("png"));
-    const exportPptx = $("export-pptx");
-    if (exportPptx) exportPptx.addEventListener("click", () => startExport("pptx"));
-    syncExportUi();
+  /// Renders the inspector from the current read model.
+  function renderInspector(d) {
+    inspector.render({
+      deck: d,
+      slide: slide(),
+      selectedElement,
+      structureNodes,
+    });
   }
 
   /// Renders and packages the deck with headless Chrome. The HTTP call only
@@ -2545,14 +2198,12 @@ function boot(sessionToken) {
 
   if (els.subtabSlide) {
     els.subtabSlide.addEventListener("click", () => {
-      inspectorSubtab = "slide";
-      if (view) applyView(view);
+      inspector.showSubtabs(true);
     });
   }
   if (els.subtabDeck) {
     els.subtabDeck.addEventListener("click", () => {
-      inspectorSubtab = "deck";
-      if (view) applyView(view);
+      inspector.showSubtabs(false);
     });
   }
 
