@@ -17,6 +17,7 @@ import {
 } from "../../ui/static/presenter-core.js";
 import { formatClock, paceState, readingSeconds } from "../../ui/static/teleprompter.js";
 import { ANIMATION_KINDS, THEME_CHOICES } from "../../ui/static/inspector.js";
+import { canvasSize, placementFor } from "../../ui/static/canvas.js";
 import {
   idleActivity,
   nextTransition,
@@ -201,6 +202,36 @@ test("the inspector offers exactly the contract the backend accepts", () => {
     assert.match(choice.dots[0], /^#[0-9A-Fa-f]{6}$/);
     assert.match(choice.dots[1], /^#[0-9A-Fa-f]{6}$/);
   }
+});
+test("a pasted image is centred at 60% of the canvas, whatever its shape", () => {
+  // Landscape, portrait and a pathological panorama: the placement rule must keep
+  // the picture inside the canvas and centred, because the stored geometry is
+  // what the drag and resize operations start from.
+  for (const [ratio, label] of [
+    ["16:9", "landscape"],
+    ["9:16", "portrait"],
+    ["4:3", "classic"],
+  ]) {
+    const { w, h } = canvasSize(ratio);
+    for (const natural of [
+      { w: 1600, h: 900 },
+      { w: 900, h: 1600 },
+      { w: 4000, h: 400 },
+      { w: 0, h: 0 },
+    ]) {
+      const rect = placementFor(natural, ratio);
+      assert.ok(rect.w >= 16 && rect.h >= 16, `${label}: size stays usable`);
+      assert.ok(rect.w <= w, `${label}: width stays on the canvas`);
+      assert.ok(rect.h <= Math.round(h * 0.9) + 1, `${label}: height stays on the canvas`);
+      assert.equal(rect.x, Math.round((w - rect.w) / 2), `${label}: horizontally centred`);
+      assert.equal(rect.y, Math.round((h - rect.h) / 2), `${label}: vertically centred`);
+    }
+  }
+
+  // A landscape photo gets its own aspect ratio, not the canvas's.
+  const wide = placementFor({ w: 1600, h: 900 }, "16:9");
+  assert.ok(Math.abs(wide.w / wide.h - 1600 / 900) < 0.02, "aspect ratio is preserved");
+  assert.equal(wide.w, Math.round(1280 * 0.6));
 });
 test("speaker pacing estimates reading time and reports the pace", () => {
   assert.equal(readingSeconds(undefined), 0);
