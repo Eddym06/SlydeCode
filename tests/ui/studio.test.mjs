@@ -563,6 +563,39 @@ async function waitForSlideFrame(needle, { timeout = 5000 } = {}) {
   throw new Error(`no slide iframe matching ${needle}`);
 }
 
+/**
+ * Waits until the stage iframe has run its own script, which is what installs
+ * the selection handlers (`data-slyde-ready`). The stage document lives on the
+ * sandbox origin as an out-of-process target, so it is polled through its own
+ * CDP session; on a cold runner the slide document reloads take seconds, and a
+ * click that lands earlier selects nothing.
+ */
+async function waitForStageReady(slideId, { timeout = 20000 } = {}) {
+  const needle = new RegExp(`/s/${slideId}[^"]*edit=1`);
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const targets = await fetch(`${browser.origin}/json/list`).then((r) => r.json());
+    const target = targets.find((entry) => entry.type === "iframe" && needle.test(entry.url));
+    if (target) {
+      const cdp = connectCdp(target.webSocketDebuggerUrl);
+      try {
+        await cdp.ready;
+        await cdp.send("Runtime.enable");
+        const ready = await cdp.evaluate(
+          `document.documentElement.getAttribute("data-slyde-ready") === "1"`
+        );
+        if (ready === true) return true;
+      } catch {
+        /* the target may be mid-navigation; try again on the next tick */
+      } finally {
+        cdp.close();
+      }
+    }
+    await sleep(150);
+  }
+  throw new Error(`the stage never became ready for slide ${slideId}`);
+}
+
 test("in-studio presenter paints the slide instead of a black stage", async () => {
   // Regression: the speaker console was `display: flex` even while `hidden`, so
   // an opaque panel with a ticking clock covered the whole stage (its previews
@@ -1884,12 +1917,32 @@ test("editing a block only touches the slide that owns it", async () => {
   })()`);
 
   try {
-    // Select the second slide, then the block in the stage. The stage iframe
-    // reloads whenever state lands, so a click that fires before the reload
-    // selects nothing; drive the click until the HUD confirms a selection
-    // instead of trusting a fixed delay.
+    // Select the second slide and wait until the stage document is live. The
+    // iframe reloads whenever state lands, and its click handlers only exist
+    // once the sandbox script has run, so a fixed delay is a coin flip on a
+    // cold runner.
     await page.evaluate(`document.querySelectorAll(".thumb")[1].click(); true`);
-    await sleep(600);
+    await waitForStageReady(secondId);
+
+    // Record what the sandbox reports so a failure explains itself: a missing
+    // `select` means the click never reached the stage document, while a
+    // `fromStage: false` entry means the studio dropped a stale frame's message.
+    await page.evaluate(`(() => {
+      window.__sandboxMsgs = [];
+      window.__sandboxListener = (event) => {
+        const data = event.data;
+        if (!data || data.__slyde !== true) return;
+        const frame = document.getElementById("slide-frame");
+        window.__sandboxMsgs.push({
+          type: data.type,
+          id: data.id || "",
+          fromStage: !!frame && event.source === frame.contentWindow
+        });
+        if (window.__sandboxMsgs.length > 40) window.__sandboxMsgs.shift();
+      };
+      window.addEventListener("message", window.__sandboxListener);
+      return true;
+    })()`);
 
     const clickStageCenter = async () => {
       const point = await page.evaluate(`(() => {
@@ -1916,11 +1969,28 @@ test("editing a block only touches the slide that owns it", async () => {
         return hud.hidden ? "" : document.getElementById("element-hud-tag").textContent;
       })()`);
     }
-    assert.match(
-      String(hudTag),
-      /^#\S+$/,
-      "the stage selected the block on the second slide"
-    );
+    if (!/^#\S+$/.test(String(hudTag))) {
+      const snapshot = await page.evaluate(`(() => {
+        const frame = document.getElementById("slide-frame");
+        const rect = frame.getBoundingClientRect();
+        const hud = document.getElementById("element-hud");
+        return {
+          thumbs: [...document.querySelectorAll(".thumb")].map((node) => node.dataset.id),
+          src: frame.src,
+          frame: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height)
+          },
+          hudHidden: hud ? hud.hidden : null,
+          hudTag: document.getElementById("element-hud-tag").textContent,
+          tree: [...document.querySelectorAll("[data-tree-id]")].map((node) => node.dataset.treeId),
+          messages: window.__sandboxMsgs.slice(-12)
+        };
+      })()`);
+      assert.fail(`the stage selected nothing: ${JSON.stringify(snapshot)}`);
+    }
 
     await page.evaluate(
       `document.querySelector('[data-element-action="align-left"]').click(); true`
@@ -1958,6 +2028,11 @@ test("editing a block only touches the slide that owns it", async () => {
       if (window.__originalFetch) window.fetch = window.__originalFetch;
       delete window.__originalFetch;
       delete window.__sentCommands;
+      if (window.__sandboxListener) {
+        window.removeEventListener("message", window.__sandboxListener);
+      }
+      delete window.__sandboxListener;
+      delete window.__sandboxMsgs;
       return true;
     })()`);
   }
