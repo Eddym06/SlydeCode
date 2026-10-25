@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
@@ -30,9 +30,16 @@ function findBinary() {
     "release",
     join("x86_64-pc-windows-gnu", "release"),
   ];
-  return profiles
+  // Several target directories can exist at once (a cross build and a host
+  // build). Taking the first hit silently tested a binary from an older build,
+  // so pick the newest one and say which it is.
+  const candidates = profiles
     .map((profile) => join(repoRoot, "target", profile, name))
-    .find((path) => existsSync(path));
+    .filter((path) => existsSync(path))
+    .map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+    .sort((left, right) => right.mtime - left.mtime);
+  if (candidates.length === 0) return undefined;
+  return candidates[0].path;
 }
 
 const binary = findBinary();
@@ -44,6 +51,7 @@ let dataDir;
 let appUrl;
 let token;
 let sandboxOrigin;
+let sandboxToken = "";
 let firstSlideId;
 
 function waitForAppUrl(child) {
@@ -113,7 +121,22 @@ before(async () => {
   browser = await launchChrome({ viewport: { width: 1280, height: 800 } });
   page = await browser.newPage(appUrl);
   await page.waitFor("document.querySelectorAll('.thumb').length === 1");
+
+  // Slide documents are authenticated with their own token; tests that open a
+  // slide directly need it, and it must not be the session token.
+  const boot = await page.evaluate(`fetch("/api/state?t=${token}").then((r) => r.json())`);
+  sandboxOrigin = boot.sandbox_origin;
+  sandboxToken = boot.sandbox_token;
+  assert.ok(sandboxToken, "the server publishes a sandbox token");
+  assert.notEqual(sandboxToken, token, "slide documents use a different secret");
 });
+
+/** URL for a slide document, carrying the sandbox token. */
+function slideUrl(slideId, extra = "") {
+  const params = new URLSearchParams(extra);
+  params.set("t", sandboxToken);
+  return `${sandboxOrigin}/s/${encodeURIComponent(slideId)}?${params}`;
+}
 
 after(async () => {
   await page?.close().catch(() => {});
@@ -400,9 +423,7 @@ test("shows agent activity and follows the slide it writes", async () => {
 });
 
 test("renders slides from the sandbox origin with bundled fonts", async () => {
-  const slidePage = await browser.newPage(
-    `${sandboxOrigin}/s/${encodeURIComponent(firstSlideId)}?static=1`
-  );
+  const slidePage = await browser.newPage(slideUrl(firstSlideId, "static=1"));
   try {
     const doc = await slidePage.evaluate(`(async () => {
       await document.fonts.ready;
@@ -1510,6 +1531,108 @@ test("selects a block on the canvas and lists the slide structure", async () => 
   );
 });
 
+test("editing a block only touches the slide that owns it", async () => {
+  // Regression: generated handles are unique per slide document, not per deck, so
+  // both slides below carry `data-id="slyde-1"`. The canvas used to send only the
+  // handle and the server edited the first slide that matched.
+  const block = (label) =>
+    `<h1 style="position:absolute;inset:0;display:grid;place-items:center">${label}</h1>`;
+
+  await page.evaluate(`fetch("/api/agent?t=${token}", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "create_presentation", title: "Scoped edits" })
+  }).then((r) => r.json())`);
+  for (const [index, label] of [[0, "UNO"], [1, "DOS"]]) {
+    await page.evaluate(`fetch("/api/agent?t=${token}", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "upsert_slide",
+        index: ${index},
+        html_code: ${JSON.stringify(block(label))},
+        template: "hero"
+      })
+    }).then((r) => r.json())`);
+  }
+  const stateUrl = `/api/state?t=${token}`;
+  let state = await page.evaluate(`fetch("${stateUrl}").then((r) => r.json())`);
+  const [firstId, secondId] = state.view.presentation.slides.map((slide) => slide.id);
+  for (const slide of state.view.presentation.slides) {
+    assert.ok(
+      slide.code.includes('data-id="slyde-1"'),
+      `both slides share the generated handle: ${slide.code}`
+    );
+  }
+
+  // Record the commands the studio sends while we drive a real canvas edit.
+  await page.evaluate(`(() => {
+    window.__originalFetch = window.fetch;
+    window.__sentCommands = [];
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/api/command") && init && init.body) {
+        try { window.__sentCommands.push(JSON.parse(init.body)); } catch (error) {}
+      }
+      return window.__originalFetch(input, init);
+    };
+    return true;
+  })()`);
+
+  try {
+    // Select the second slide, then the block in the stage.
+    await page.evaluate(`document.querySelectorAll(".thumb")[1].click(); true`);
+    await sleep(900);
+    const stage = await page.evaluate(`(() => {
+      const rect = document.getElementById("slide-frame").getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: stage.x,
+        y: stage.y,
+        button: "left",
+        clickCount: 1,
+      });
+    }
+    await sleep(500);
+    await page.evaluate(
+      `document.querySelector('[data-element-action="align-left"]').click(); true`
+    );
+    await sleep(600);
+
+    const sent = await page.evaluate(`window.__sentCommands`);
+    const mutation = sent.filter((command) => command.action === "mutate_element").pop();
+    assert.ok(mutation, "the HUD sent a mutate_element command");
+    assert.equal(mutation.element_id, "slyde-1");
+    assert.equal(
+      mutation.slide_id,
+      secondId,
+      "the command names the slide the user is looking at"
+    );
+
+    state = await page.evaluate(`fetch("${stateUrl}").then((r) => r.json())`);
+    const [first, second] = state.view.presentation.slides;
+    assert.equal(first.id, firstId);
+    assert.ok(
+      !first.code.includes("text-align: left"),
+      `the first slide must stay untouched: ${first.code}`
+    );
+    assert.ok(
+      second.code.includes("text-align: left"),
+      `the edited slide carries the change: ${second.code}`
+    );
+  } finally {
+    await page.evaluate(`(() => {
+      if (window.__originalFetch) window.fetch = window.__originalFetch;
+      delete window.__originalFetch;
+      delete window.__sentCommands;
+      return true;
+    })()`);
+  }
+});
+
 test("renders code, math and diagrams inside the sandbox", async () => {
   const html = `<div class="slide tech">
     <div class="slyde-diagram">graph LR; A-->B</div>
@@ -1528,9 +1651,7 @@ test("renders code, math and diagrams inside the sandbox", async () => {
   );
   const slideId = state.view.presentation.slides[0].id;
 
-  const slidePage = await browser.newPage(
-    `${sandboxOrigin}/s/${encodeURIComponent(slideId)}?static=1`
-  );
+  const slidePage = await browser.newPage(slideUrl(slideId, "static=1"));
   try {
     await slidePage.waitFor(
       `document.documentElement.getAttribute("data-slyde-ready") === "1"`,
