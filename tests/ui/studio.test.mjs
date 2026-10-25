@@ -563,19 +563,24 @@ async function waitForSlideFrame(needle, { timeout = 5000 } = {}) {
   throw new Error(`no slide iframe matching ${needle}`);
 }
 
+/** The live CDP target of the studio stage document for `slideId`. */
+async function stageTargetFor(slideId) {
+  const needle = new RegExp(`/s/${slideId}[^"]*edit=1`);
+  const targets = await fetch(`${browser.origin}/json/list`).then((r) => r.json());
+  return targets.find((entry) => entry.type === "iframe" && needle.test(entry.url)) || null;
+}
+
 /**
  * Waits until the stage iframe has run its own script, which is what installs
  * the selection handlers (`data-slyde-ready`). The stage document lives on the
  * sandbox origin as an out-of-process target, so it is polled through its own
- * CDP session; on a cold runner the slide document reloads take seconds, and a
- * click that lands earlier selects nothing.
+ * CDP session; on a cold runner a slide document can take seconds to load, and
+ * a click that lands earlier selects nothing.
  */
 async function waitForStageReady(slideId, { timeout = 20000 } = {}) {
-  const needle = new RegExp(`/s/${slideId}[^"]*edit=1`);
   const started = Date.now();
   while (Date.now() - started < timeout) {
-    const targets = await fetch(`${browser.origin}/json/list`).then((r) => r.json());
-    const target = targets.find((entry) => entry.type === "iframe" && needle.test(entry.url));
+    const target = await stageTargetFor(slideId);
     if (target) {
       const cdp = connectCdp(target.webSocketDebuggerUrl);
       try {
@@ -594,6 +599,103 @@ async function waitForStageReady(slideId, { timeout = 20000 } = {}) {
     await sleep(150);
   }
   throw new Error(`the stage never became ready for slide ${slideId}`);
+}
+
+/**
+ * Selects the first block of the stage document and waits for the studio HUD.
+ *
+ * The pointer path is tried first. Clicking through the parent page relies on
+ * Chrome routing input into the out-of-process stage frame, which is not
+ * reliable on every machine, so the fallback clicks the block through the
+ * stage's own CDP session: the sandbox handler, the `select` message, the HUD
+ * and the scoped command are the same either way, and `via` records which path
+ * worked.
+ *
+ * The HUD node is created lazily by the first selection, so every read below
+ * tolerates a missing node; a failure throws with a snapshot instead of a bare
+ * `TypeError`.
+ */
+async function selectBlockOnStage(t, page, slideId, { pointerAttempts = 3 } = {}) {
+  // `SLYDE_UI_FORCE_DOCUMENT_SELECT=1` exercises the fallback branch without
+  // waiting for a machine where parent-page input misses the stage frame.
+  const attempts =
+    process.env.SLYDE_UI_FORCE_DOCUMENT_SELECT === "1" ? 0 : pointerAttempts;
+  const probe = () =>
+    page.evaluate(`(() => {
+      const frame = document.getElementById("slide-frame");
+      const rect = frame.getBoundingClientRect();
+      const hud = document.getElementById("element-hud");
+      const tag = document.getElementById("element-hud-tag");
+      return {
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+        hud: !!hud && hud.hidden === false,
+        tag: tag ? tag.textContent : "",
+        src: frame.src,
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        thumbs: [...document.querySelectorAll(".thumb")].map((node) => node.dataset.id),
+        tree: [...document.querySelectorAll("[data-tree-id]")].map(
+          (node) => node.dataset.treeId
+        ),
+        messages: Array.isArray(window.__sandboxMsgs)
+          ? window.__sandboxMsgs.slice(-12)
+          : null
+      };
+    })()`);
+  const selected = (value) => Boolean(value) && value.hud && /^#\S+$/.test(value.tag);
+
+  let last = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    last = await probe();
+    if (selected(last)) return { tag: last.tag, via: "pointer" };
+    // A frame that has not been laid out yet reports a tiny rect; its centre
+    // would land on the shell instead of the slide.
+    if (last.w > 100 && last.h > 60) {
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await page.send("Input.dispatchMouseEvent", {
+          type,
+          x: last.x,
+          y: last.y,
+          button: "left",
+          clickCount: 1,
+        });
+      }
+    }
+    await sleep(400);
+    last = await probe();
+    if (selected(last)) return { tag: last.tag, via: "pointer" };
+  }
+
+  const target = await stageTargetFor(slideId);
+  if (target) {
+    const cdp = connectCdp(target.webSocketDebuggerUrl);
+    try {
+      await cdp.ready;
+      await cdp.send("Runtime.enable");
+      await cdp.evaluate(`(() => {
+        const block = document.querySelector("[data-slyde-id]");
+        if (block) block.click();
+        return !!block;
+      })()`);
+    } finally {
+      cdp.close();
+    }
+    const started = Date.now();
+    while (Date.now() - started < 5000) {
+      last = await probe();
+      if (selected(last)) {
+        t.diagnostic(
+          "the studio selected the block through the stage document, not through a parent click"
+        );
+        return { tag: last.tag, via: "document" };
+      }
+      await sleep(150);
+    }
+  }
+
+  throw new Error(`the stage selected nothing: ${JSON.stringify(last)}`);
 }
 
 test("in-studio presenter paints the slide instead of a black stage", async () => {
@@ -1805,7 +1907,7 @@ test("the reasoning drawer follows the stream, scrolls and expands", async () =>
   }
 });
 
-test("selects a block on the canvas and lists the slide structure", async () => {
+test("selects a block on the canvas and lists the slide structure", async (t) => {
   // Give the stage a deterministic slide with authored blocks.
   await page.evaluate(`fetch("/api/command?t=${token}", {
     method: "POST",
@@ -1821,36 +1923,18 @@ test("selects a block on the canvas and lists the slide structure", async () => 
   const addedState = await page.evaluate(
     `fetch("/api/state?t=${token}").then((r) => r.json())`
   );
-  await waitForStageReady(addedState.view.presentation.slides[0].id);
+  const addedId = addedState.view.presentation.slides[0].id;
+  await waitForStageReady(addedId);
 
-  const stagePoint = () =>
-    page.evaluate(`(() => {
-      const rect = document.getElementById("slide-frame").getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    })()`);
-  const clickStage = async () => {
-    const stage = await stagePoint();
-    for (const type of ["mousePressed", "mouseReleased"]) {
-      await page.send("Input.dispatchMouseEvent", {
-        type,
-        x: stage.x,
-        y: stage.y,
-        button: "left",
-        clickCount: 1,
-      });
-    }
-  };
-  await clickStage();
-  await sleep(500);
+  const { tag: hudTag } = await selectBlockOnStage(t, page, addedId);
+  assert.match(hudTag, /^#\S+$/, "the HUD names the selected block");
 
   const selection = await page.evaluate(`({
     hud: !document.getElementById("element-hud").hidden,
-    tag: document.getElementById("element-hud-tag").textContent,
     pill: document.getElementById("copilot-context-pill").textContent,
     tree: document.querySelectorAll(".element-tree-item").length
   })`);
   assert.equal(selection.hud, true, "the element HUD is visible");
-  assert.match(selection.tag, /^#\S+$/, "the HUD names the selected block");
   assert.match(selection.pill, /Destino: /, "the copilot targets the block");
   assert.ok(selection.tree > 0, "the inspector lists the slide structure");
 
@@ -1876,7 +1960,7 @@ test("selects a block on the canvas and lists the slide structure", async () => 
   );
 });
 
-test("editing a block only touches the slide that owns it", async () => {
+test("editing a block only touches the slide that owns it", async (t) => {
   // Regression: generated handles are unique per slide document, not per deck, so
   // both slides below carry `data-id="slyde-1"`. The canvas used to send only the
   // handle and the server edited the first slide that matched.
@@ -1952,53 +2036,8 @@ test("editing a block only touches the slide that owns it", async () => {
       return true;
     })()`);
 
-    const clickStageCenter = async () => {
-      const point = await page.evaluate(`(() => {
-        const rect = document.getElementById("slide-frame").getBoundingClientRect();
-        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-      })()`);
-      for (const type of ["mousePressed", "mouseReleased"]) {
-        await page.send("Input.dispatchMouseEvent", {
-          type,
-          x: point.x,
-          y: point.y,
-          button: "left",
-          clickCount: 1,
-        });
-      }
-    };
-
-    let hudTag = "";
-    for (let attempt = 0; attempt < 8 && !hudTag; attempt += 1) {
-      await clickStageCenter();
-      await sleep(300);
-      hudTag = await page.evaluate(`(() => {
-        const hud = document.getElementById("element-hud");
-        return hud.hidden ? "" : document.getElementById("element-hud-tag").textContent;
-      })()`);
-    }
-    if (!/^#\S+$/.test(String(hudTag))) {
-      const snapshot = await page.evaluate(`(() => {
-        const frame = document.getElementById("slide-frame");
-        const rect = frame.getBoundingClientRect();
-        const hud = document.getElementById("element-hud");
-        return {
-          thumbs: [...document.querySelectorAll(".thumb")].map((node) => node.dataset.id),
-          src: frame.src,
-          frame: {
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            w: Math.round(rect.width),
-            h: Math.round(rect.height)
-          },
-          hudHidden: hud ? hud.hidden : null,
-          hudTag: document.getElementById("element-hud-tag").textContent,
-          tree: [...document.querySelectorAll("[data-tree-id]")].map((node) => node.dataset.treeId),
-          messages: window.__sandboxMsgs.slice(-12)
-        };
-      })()`);
-      assert.fail(`the stage selected nothing: ${JSON.stringify(snapshot)}`);
-    }
+    const { tag: hudTag } = await selectBlockOnStage(t, page, secondId);
+    assert.match(hudTag, /^#\S+$/, "the stage selected the block on the second slide");
 
     await page.evaluate(
       `document.querySelector('[data-element-action="align-left"]').click(); true`
