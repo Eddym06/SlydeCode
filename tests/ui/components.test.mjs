@@ -16,6 +16,7 @@ import {
   progressPercent,
 } from "../../ui/static/presenter-core.js";
 import { formatClock, paceState, readingSeconds } from "../../ui/static/teleprompter.js";
+import { ANIMATION_KINDS, THEME_CHOICES } from "../../ui/static/inspector.js";
 import {
   idleActivity,
   nextTransition,
@@ -182,6 +183,25 @@ test("progress is a percentage of the deck, never out of range", () => {
   assert.equal(progressPercent(0, undefined), 0);
 });
 
+test("the inspector offers exactly the contract the backend accepts", () => {
+  // These lists used to be duplicated per surface and drifted (6 of 12 kinds,
+  // 3 of 6 themes). The inspector is now the single UI source; this test is the
+  // tripwire against `slyde_core::ANIMATION_KIND_IDS` / `THEME_IDS`.
+  assert.equal(ANIMATION_KINDS.length, 12, "every animation kind is offered");
+  assert.equal(new Set(ANIMATION_KINDS).size, 12, "no duplicates");
+  assert.ok(ANIMATION_KINDS.includes("fade_up"));
+  assert.ok(ANIMATION_KINDS.includes("bounce_in"));
+
+  assert.deepEqual(
+    THEME_CHOICES.map((choice) => choice.id),
+    ["studio", "paper", "night", "terminal", "academic", "pitch"]
+  );
+  for (const choice of THEME_CHOICES) {
+    assert.equal(choice.dots.length, 2, `${choice.id} shows two palette dots`);
+    assert.match(choice.dots[0], /^#[0-9A-Fa-f]{6}$/);
+    assert.match(choice.dots[1], /^#[0-9A-Fa-f]{6}$/);
+  }
+});
 test("speaker pacing estimates reading time and reports the pace", () => {
   assert.equal(readingSeconds(undefined), 0);
   assert.equal(readingSeconds(""), 0);
