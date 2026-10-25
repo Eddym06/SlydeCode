@@ -16,3 +16,6 @@ Thumbs.db
 .vscode/
 .idea/
 runtime.json
+
+# tgrep index (local search cache)
+.tgrep/
