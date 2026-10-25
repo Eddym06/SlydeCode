@@ -191,6 +191,20 @@ async fn apply_command(
             core.set_aspect_ratio(parsed).map(|_| None)
         }
         UiCommand::SetNotes { slide_id, notes } => core.set_notes(&slide_id, notes).map(|_| None),
+        UiCommand::NewDeck { title, template } => {
+            let template = template.unwrap_or_else(|| "hero".to_string());
+            let title = title
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "Untitled presentation".to_string());
+            core.start_new_deck(
+                title,
+                crate::starter::default_code(&template),
+                crate::starter::template_type(&template),
+                crate::starter::default_animation_for(&template),
+            )
+            .map(|_| None)
+        }
         UiCommand::AddSlide { template, index } => {
             let code = crate::starter::default_code(&template);
             let target_index = index.unwrap_or_else(|| core.presentation().slides.len());

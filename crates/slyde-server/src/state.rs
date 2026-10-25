@@ -188,6 +188,12 @@ pub enum UiCommand {
         slide_id: String,
         notes: Option<String>,
     },
+    NewDeck {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        template: Option<String>,
+    },
     AddSlide {
         template: String,
         #[serde(default)]

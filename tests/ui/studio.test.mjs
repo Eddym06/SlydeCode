@@ -9,7 +9,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
@@ -1227,6 +1227,220 @@ test("a failed turn explains itself without echoing provider text", async () => 
     assert.match(invalid.text, /petición no era válida/);
     assert.ok(!invalid.thread.includes(rawLimit));
     assert.equal(chatCalls, 2);
+  } finally {
+    off();
+    await page.send("Fetch.disable").catch(() => {});
+  }
+});
+
+test("the new presentation button actually replaces the deck", async () => {
+  // Two slides first, so "replaced" cannot be mistaken for "nothing changed".
+  // Added through the UI so the storyboard is guaranteed to have re-rendered.
+  const start = await page.evaluate(`document.querySelectorAll(".thumb").length`);
+  for (let index = start; index < 2; index += 1) {
+    const expected = index + 1;
+    await page.evaluate(`document.getElementById("add-slide").click(); true`);
+    await page.waitFor(`document.querySelectorAll(".thumb").length === ${expected}`);
+  }
+
+  const before = await page.evaluate(`(() => ({
+    slides: document.querySelectorAll(".thumb").length,
+    title: document.getElementById("deck-title").value
+  }))()`);
+  assert.equal(before.slides, 2);
+
+  await page.evaluate(`(() => {
+    window.confirm = () => true;
+    document.getElementById("topbar-new-deck").click();
+    return true;
+  })()`);
+
+  await page.waitFor(`document.querySelectorAll(".thumb").length === 1`, { timeout: 8000 });
+  const after = await page.evaluate(`(() => ({
+    slides: document.querySelectorAll(".thumb").length,
+    title: document.getElementById("deck-title").value,
+    caption: document.querySelector(".thumb")?.getAttribute("aria-label") ?? "",
+    toast: document.getElementById("toast")?.textContent ?? ""
+  }))()`);
+  assert.equal(after.slides, 1, "the old slides are gone");
+  assert.match(after.title, /sin título|untitled/i);
+
+  // The command is undoable, so a stray confirmation is recoverable.
+  await page.evaluate(`(() => {
+    document.getElementById("undo")?.click();
+    return true;
+  })()`);
+  await page.waitFor(`document.querySelectorAll(".thumb").length === 2`, { timeout: 8000 });
+});
+
+test("opening a .slyde file from disk restores the deck and its title", async () => {
+  const deckJson = await page.evaluate(`fetch("/api/deck?t=${token}").then((r) => r.text())`);
+  const parsed = JSON.parse(deckJson);
+  const expectedTitle = (parsed.presentation || parsed).title;
+  const expectedSlides = await page.evaluate(`document.querySelectorAll(".thumb").length`);
+  const filePath = join(dataDir, "roundtrip.slyde");
+  writeFileSync(filePath, deckJson, "utf8");
+
+  // Rename first, so a silent no-op open cannot pass the assertion below.
+  await page.evaluate(`(() => {
+    const input = document.getElementById("deck-title");
+    input.value = "Temporary title";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  await page.waitFor(`document.getElementById("deck-title").value === "Temporary title"`);
+
+  const doc = await page.send("DOM.getDocument", { depth: 1 });
+  const node = await page.send("DOM.querySelector", {
+    nodeId: doc.root.nodeId,
+    selector: "#topbar-file-picker",
+  });
+  await page.send("DOM.setFileInputFiles", { nodeId: node.nodeId, files: [filePath] });
+
+  await page.waitFor(
+    `["Presentación abierta", "Presentation opened"].includes(document.getElementById("toast").textContent)`,
+    { timeout: 10000 }
+  );
+  const opened = await page.evaluate(`(() => ({
+    title: document.getElementById("deck-title").value,
+    slides: document.querySelectorAll(".thumb").length
+  }))()`);
+  assert.equal(opened.title, expectedTitle, "the file title wins over the edited one");
+  assert.equal(opened.slides, expectedSlides);
+  rmSync(filePath, { force: true });
+});
+
+test("the reasoning drawer follows the stream, scrolls and expands", async () => {
+  const fakeConfig = {
+    providers: [
+      { id: "openai", name: "ChatGPT", company: "OpenAI", icon: "openai", key_url: "https://platform.openai.com/api-keys", configured: true },
+    ],
+    last_provider: "openai",
+    last_model: "free-model",
+  };
+  // Enough reasoning to overflow the 180px box several times over.
+  const chunk = "Let me weigh the layout options for this cover slide. ";
+  const thinking = Array.from({ length: 90 }, (_, index) => `${index} ${chunk}`).join("");
+  const events = [
+    { type: "thinking", text: thinking },
+    { type: "delta", text: "Done." },
+    { type: "done" },
+  ];
+  const sse = `${events.map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`;
+
+  const fulfill = (requestId, payload, contentType = "application/json") =>
+    page.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "content-type", value: contentType }],
+      body: Buffer.from(
+        typeof payload === "string" ? payload : JSON.stringify(payload)
+      ).toString("base64"),
+    });
+
+  const off = page.client.on("Fetch.requestPaused", async ({ requestId, request }) => {
+    try {
+      if (request.url.includes("/api/copilot/config")) {
+        await fulfill(requestId, { ok: true, config: fakeConfig });
+      } else if (request.url.includes("/api/copilot/chat")) {
+        await fulfill(requestId, sse, "text/event-stream");
+      } else {
+        await page.send("Fetch.continueRequest", { requestId });
+      }
+    } catch {
+      /* The page may have been torn down; nothing to resume. */
+    }
+  });
+
+  await page.send("Fetch.enable", {
+    patterns: [
+      { urlPattern: "*api/copilot/config*", requestStage: "Request" },
+      { urlPattern: "*api/copilot/chat*", requestStage: "Request" },
+    ],
+  });
+
+  try {
+    const timeOrigin = await page.evaluate("performance.timeOrigin");
+    await page.evaluate(`(() => {
+      localStorage.setItem("slyde.copilot.selection", JSON.stringify({ provider: "openai", model: "free-model" }));
+      localStorage.setItem("slyde.lang", "es");
+      return true;
+    })()`);
+    await page.send("Page.reload", { ignoreCache: true });
+    await page.waitFor(
+      `performance.timeOrigin !== ${JSON.stringify(timeOrigin)} &&
+       document.getElementById("app") && !document.getElementById("app").hidden`,
+      { timeout: 15000 }
+    );
+    await page.evaluate(`document.getElementById("tab-copilot").click(); true`);
+    await page.waitFor(
+      `document.getElementById("copilot-provider-name").textContent === "ChatGPT"`
+    );
+    await page.evaluate(`(() => {
+      const input = document.getElementById("copilot-input");
+      input.value = "Piensa en voz alta";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("copilot-form").requestSubmit();
+      return true;
+    })()`);
+
+    await page.waitFor(
+      `(() => {
+        const stream = document.querySelector(".thinking-stream");
+        return stream && stream.scrollHeight > stream.clientHeight + 200;
+      })()`,
+      { timeout: 8000 }
+    );
+
+    const stuck = await page.evaluate(`(() => {
+      const stream = document.querySelector(".thinking-stream");
+      const box = stream.getBoundingClientRect();
+      return {
+        overflow: stream.scrollHeight > stream.clientHeight,
+        atTail: stream.scrollHeight - stream.scrollTop - stream.clientHeight < 8,
+        capped: box.height <= 200,
+        scrolled: stream.scrollTop > 0
+      };
+    })()`);
+    assert.equal(stuck.overflow, true, "the reasoning overflows its box");
+    assert.equal(stuck.capped, true, "the inline box keeps its height cap");
+    assert.equal(stuck.atTail, true, "the stream follows the tail while it grows");
+
+    // Double click on the header promotes the drawer to a large overlay.
+    await page.evaluate(`(() => {
+      const header = document.querySelector(".thinking-header");
+      header.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    await page.waitFor(`Boolean(document.querySelector("#thinking-layer .thinking-drawer.is-expanded"))`);
+
+    const expanded = await page.evaluate(`(() => {
+      const layer = document.getElementById("thinking-layer");
+      const drawer = layer.querySelector(".thinking-drawer");
+      const stream = drawer.querySelector(".thinking-stream");
+      const box = drawer.getBoundingClientRect();
+      return {
+        layerVisible: !layer.hidden,
+        inLayer: layer.contains(drawer),
+        stacked: document.querySelectorAll(".msg-thinking .thinking-drawer").length,
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+        roomier: stream.clientHeight > 260,
+        toggleExpanded: drawer.querySelector("[data-thinking-expand]").getAttribute("aria-expanded")
+      };
+    })()`);
+    assert.equal(expanded.layerVisible, true);
+    assert.equal(expanded.inLayer, true);
+    assert.equal(expanded.stacked, 0, "the drawer leaves the thread while expanded");
+    assert.ok(expanded.width >= 600, `expanded width is ${expanded.width}`);
+    assert.ok(expanded.height >= 400, `expanded height is ${expanded.height}`);
+    assert.equal(expanded.roomier, true, "expanded mode gives the text more room");
+    assert.equal(expanded.toggleExpanded, "true");
+
+    await page.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+    await page.waitFor(`document.getElementById("thinking-layer").hidden === true`);
+    const restored = await page.evaluate(`document.querySelectorAll(".msg-thinking .thinking-drawer").length`);
+    assert.equal(restored, 1, "the drawer returns to its message");
   } finally {
     off();
     await page.send("Fetch.disable").catch(() => {});

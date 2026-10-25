@@ -1,9 +1,11 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 05:40
+> Last updated: 2026-10-25 05:55
 
 ## Current Phase
-Phase 2.7: **Copilot loop reliability & honest failure reporting.** Rust 144 tests and 25 UI tests green. Fixed the two defects behind the repeated "provider rejected the request" reports: the system prompt was built from a deck snapshot taken before the tool loop (so after creating slides the model still counted the old deck and re-created them until the round cap), and the round cap itself was reported as an upstream failure. The loop now re-reads the deck every round, allows 20 rounds, stops early when the model repeats an identical tool call three times, and reports a dedicated `tool_limit` code the UI localizes. The chat panel no longer prints provider-authored text, keeps the reasoning drawer stable while streaming, localizes its badges and re-renders on language change.
+Phase 2.8: **Reasoning panel ergonomics + the New/Open deck actions.** Rust 146 tests and 28 UI tests green. The reasoning drawer now scrolls on its own, follows the tail while it streams, and expands to a large overlay on double click (Esc or the scrim collapses it). The topbar `Nuevo` button actually starts a new deck: it was posting the agent-only `create_presentation` command to `/api/command`, which rejected it with 422 and left the old slides untouched. `Abrir` no longer aborts halfway through with a `TypeError`.
+
+Previous phase (2.7) — Copilot loop reliability & honest failure reporting: the system prompt is rebuilt from the live deck every round (a stale snapshot made the model re-create slides until the round cap), the cap is 20 rounds, three identical tool calls stop the turn, and the cap reports as `tool_limit` instead of a fake provider rejection.
 
 ## Implemented & Working
 
@@ -48,7 +50,9 @@ Phase 2.7: **Copilot loop reliability & honest failure reporting.** Rust 144 tes
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
 - Copilot provider path: `cargo test -p slyde-server` covers catalog endpoints, model normalization/free flags, key rejection before network, attachment extraction, tool schemas, OpenAI fragmented tool calls, Anthropic streaming (including parallel tool results in one user turn) and deck-summary context.
 - Copilot browser E2E: provider config/key/model responses are mocked with CDP `Fetch.fulfillRequest`, so the suite proves the eight-provider sheet, key form focus, model search, Free filter, selection persistence, attachment chip/remove, and typed SSE text + tool rows + completion announcement without a real key or network.
-- UI suite: 25 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 17 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, the animation timeline editor, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming, the localized `tool_limit` error bubble (retry offered, raw provider text absent) and the accessibility audit.
+- UI suite: 28 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 20 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, the animation timeline editor, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming, the localized `tool_limit` bubble, `Nuevo` replacing the deck (and staying undoable), `Abrir` restoring deck and title from disk, the reasoning drawer (tail following, own scroll, double-click expand, Esc collapse) and the accessibility audit.
+- Reasoning panel: `.thinking-stream` scrolls independently (`overscroll-behavior: contain`, focusable, `tabindex="0"`), pins to the tail only while the reader has not scrolled away, and expands into a `#thinking-layer` overlay appended to `<body>` on double click or via its own button (Esc or the scrim closes it, then the drawer returns to its message).
+- Deck actions: `UiCommand::NewDeck` → `PresentationState::start_new_deck` (one starter slide, keeps the theme and ratio, one undo step), so `Nuevo` works and a stray confirmation is recoverable. `Abrir` blurs the title field before `applyView` so the file's title always wins.
 - Copilot loop: the system prompt is rebuilt from `state.view()` on every round, so tools that change the deck are visible to the model immediately. Verified by unit test that the round cap surfaces as `tool_limit` (HTTP 200) instead of `upstream`, and by E2E that a `tool_limit` SSE event renders our own copy, hides the provider payload, and offers retry.
 
 ## In Progress
@@ -74,7 +78,8 @@ Phase 2.7: **Copilot loop reliability & honest failure reporting.** Rust 144 tes
 - PPTX export is intentionally not implemented (no silent stub).
 - PNG export launches one headless Chrome per slide (~1–2 s each, sequential). Progress is visible, but a 50-slide deck takes over a minute; reuse a single Chrome via CDP if this becomes a real workflow.
 - Slides can only reference `data:`/`blob:` images (sandbox CSP), so photo-rich decks are not possible yet.
-- Autosave keeps a single working deck; there is no deck library, recent-files list or "new deck" action.
+- Autosave keeps a single working deck; there is no deck library or recent-files list. `Nuevo` is the only way to start over, and it replaces the working deck (undoable, but the file on disk is rewritten after 300 ms).
+- Killing the server with `Stop-Process -Force` skips the Ctrl+C flush; the last debounced write is what survives.
 - The activity chip reflects both MCP `/api/agent` calls and copilot chat (the copilot emits `thinking` on request start/between tool rounds). The copilot panel also has its own tab live dot and thread caret; the two signals are intentionally redundant.
 - Copilot conversation history is not persisted across reloads. Keys and the last provider/model are stored; the thread lives in the page.
 - Stop aborts the HTTP stream; there is no server-side cancel endpoint or partial-response persistence.
@@ -105,6 +110,8 @@ Phase 2.7: **Copilot loop reliability & honest failure reporting.** Rust 144 tes
 - The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] Reasoning drawer: tail-following stream with its own scroll, double-click expand to an overlay, Esc/scrim collapse, localized labels — 2026-10-25
+- [x] `Nuevo` starts a real new deck (`UiCommand::NewDeck` + `start_new_deck`, undoable) and `Abrir` no longer crashes on `renderStage()` — 2026-10-25
 - [x] Copilot loop reliability: per-round deck snapshot, 20 rounds, repeat guard, `tool_limit` error code, provider text kept out of the thread, stable reasoning drawer, localized thinking badges, re-render on language change — 2026-10-25
 - [x] Manual animation editor in the inspector: add, edit kind/target/delay/duration, reorder and remove steps (`set_animation`, validated) — 2026-10-25
 - [x] Presenter reveal steps advance one per click/arrow again (first step on slide entry); authoring contract now matches behaviour — 2026-10-25

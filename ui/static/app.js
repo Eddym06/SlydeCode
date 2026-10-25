@@ -2229,19 +2229,17 @@ function boot(sessionToken) {
   function setupDeckQuickTools() {
     if (els.topbarNewDeck) {
       els.topbarNewDeck.addEventListener("click", async () => {
-        if (confirm(t("action.confirmNewDeck"))) {
-          try {
-            await run("create_presentation", {
-              title: t("deck.untitled") || "Untitled Presentation",
-              theme: "studio",
-              aspect_ratio: "16:9",
-            });
-            await run("add_slide", { template: "hero" });
-            toast(t("toast.saved") || "Created new deck");
-          } catch (err) {
-            console.error("Failed to create new deck", err);
-          }
-        }
+        if (!confirm(t("action.confirmNewDeck"))) return;
+        // `new_deck` is a UI command: `create_presentation` belongs to the agent
+        // surface and `/api/command` rejects it, so the button used to do
+        // nothing at all.
+        const created = await run("new_deck", {
+          title: t("deck.untitled"),
+          template: "hero",
+        });
+        if (created) toast(t("toast.newDeck"));
+        els.title?.focus();
+        els.title?.select?.();
       });
     }
 
@@ -2268,11 +2266,15 @@ function boot(sessionToken) {
           const text = await file.text();
           const res = await client.openDeck(text);
           if (res && res.view) {
-            applyView(res.view);
-            selectedId = res.view.presentation.slides[0]?.id || "";
+            // `applyView` already re-renders the stage; the bare `renderStage()`
+            // that used to live here crashed on the missing deck argument and
+            // swallowed the whole open flow. Blur first: `applyView` skips the
+            // title field while it has focus, to avoid fighting the typist.
             stageKey = "";
-            renderStage();
-            toast(t("toast.saved") || "Deck loaded");
+            selectedId = res.view.presentation.slides[0]?.id || "";
+            els.title.blur();
+            applyView(res.view);
+            toast(t("toast.deckOpened"));
           }
         } catch (err) {
           console.error("Failed to open deck", err);

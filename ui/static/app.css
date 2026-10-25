@@ -1547,6 +1547,126 @@ details.dev[open] summary::before {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.thinking-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-subtle);
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+
+.thinking-expand:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+
+.thinking-expand:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.thinking-expand svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.thinking-expand-close {
+  display: none;
+}
+
+.thinking-drawer.is-expanded .thinking-expand-open {
+  display: none;
+}
+
+.thinking-drawer.is-expanded .thinking-expand-close {
+  display: block;
+}
+
+.thinking-drawer.is-expanded .thinking-expand {
+  margin-left: auto;
+}
+
+.thinking-drawer.is-expanded .thinking-arrow {
+  display: none;
+}
+
+/* The expanded drawer is moved to this layer: the thread is too narrow and a
+   transformed ancestor would trap `position: fixed`. */
+.thinking-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.thinking-layer[hidden] {
+  display: none;
+}
+
+.thinking-layer.is-active {
+  background: color-mix(in srgb, #000 52%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.thinking-layer .thinking-drawer {
+  width: min(920px, 94vw);
+  height: min(80vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.42);
+  animation: thinking-pop 180ms var(--ease-out) both;
+}
+
+.thinking-layer .thinking-header {
+  padding: 10px 14px;
+  font-size: 12.5px;
+}
+
+.thinking-layer .thinking-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 14px 14px;
+}
+
+.thinking-layer .thinking-stream {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+body.has-thinking-expanded .copilot-panel {
+  overflow: hidden;
+}
+
+@keyframes thinking-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .thinking-stream {
   margin-top: 8px;
   padding: 8px 10px;
@@ -1559,8 +1679,16 @@ details.dev[open] summary::before {
   line-height: 1.58;
   max-height: 180px;
   overflow-y: auto;
+  /* The wheel belongs to this box, not to the thread behind it. */
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.thinking-stream:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
 }
 
 .msg-typing {

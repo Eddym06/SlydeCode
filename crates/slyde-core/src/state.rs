@@ -129,6 +129,43 @@ impl PresentationState {
         Ok(())
     }
 
+    /// Starts a fresh deck with a single slide.
+    ///
+    /// The previous deck stays one step back in history: "new presentation" is
+    /// one click away from a deck the user spent an hour on, and losing that to
+    /// a stray confirmation is not worth a tidier history.
+    pub fn start_new_deck(
+        &mut self,
+        title: impl Into<String>,
+        code: String,
+        template: TemplateType,
+        animation: Vec<AnimationStep>,
+    ) -> Result<(), CoreError> {
+        if code.trim().is_empty() {
+            return Err(CoreError::EmptySlideCode);
+        }
+        if code.len() > self.limits.max_code_bytes {
+            return Err(CoreError::CodeTooLarge {
+                actual: code.len(),
+                max: self.limits.max_code_bytes,
+            });
+        }
+        validate_animation(&animation)?;
+
+        let code = crate::html::ensure_element_ids(&code);
+        let current = self.presentation();
+        let theme = current.theme.clone();
+        let aspect_ratio = current.aspect_ratio;
+        let mut presentation = Presentation::new(title, theme, aspect_ratio);
+        let mut slide = Slide::new(new_slide_id(), code);
+        slide.template = template;
+        slide.animation = animation;
+        presentation.slides.push(slide);
+
+        self.commit("new_deck", presentation);
+        Ok(())
+    }
+
     pub fn undo(&mut self) -> Result<(), CoreError> {
         if !self.can_undo() {
             return Err(CoreError::NothingToUndo);
@@ -636,6 +673,44 @@ mod tests {
             duration_ms: 400,
             easing: "ease-out".into(),
         }
+    }
+
+    #[test]
+    fn start_new_deck_drops_every_slide_and_stays_undoable() {
+        let mut s = state();
+        s.upsert_slide(0, None, "<h1>A</h1>".into(), TemplateType::Hero, vec![])
+            .unwrap();
+        s.upsert_slide(1, None, "<h1>B</h1>".into(), TemplateType::Bullet, vec![])
+            .unwrap();
+        assert_eq!(s.presentation().slides.len(), 2);
+
+        s.start_new_deck(
+            "Fresh deck",
+            "<h1>Start</h1>".into(),
+            TemplateType::Hero,
+            vec![step("h1")],
+        )
+        .unwrap();
+
+        let deck = s.presentation();
+        assert_eq!(deck.title, "Fresh deck");
+        assert_eq!(deck.slides.len(), 1, "the previous slides are gone");
+        assert!(deck.slides[0].code.contains("Start"));
+        assert_eq!(deck.slides[0].animation.len(), 1);
+        assert!(s.can_undo(), "a stray confirmation must be recoverable");
+
+        s.undo().unwrap();
+        assert_eq!(s.presentation().slides.len(), 2);
+        assert_eq!(s.presentation().title, "Deck");
+    }
+
+    #[test]
+    fn start_new_deck_rejects_empty_code() {
+        let mut s = state();
+        assert!(s
+            .start_new_deck("Nope", "   ".into(), TemplateType::Hero, vec![])
+            .is_err());
+        assert_eq!(s.presentation().title, "Deck", "a rejected reset changes nothing");
     }
 
     #[test]

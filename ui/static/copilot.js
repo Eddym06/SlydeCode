@@ -236,8 +236,104 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   // ---------- thread rendering ----------
 
+  // ---------- reasoning drawer ----------
+
+  const drawerSlots = new WeakMap();
+
+  // The expanded drawer lives in a layer attached to <body>: inside the thread
+  // it is boxed in by the panel width, and a transformed ancestor would break
+  // `position: fixed` anyway.
+  function ensureThinkingLayer() {
+    let layer = document.getElementById("thinking-layer");
+    if (!layer) {
+      layer = document.createElement("div");
+      layer.id = "thinking-layer";
+      layer.className = "thinking-layer";
+      layer.hidden = true;
+      layer.addEventListener("click", (event) => {
+        if (event.target === layer) closeExpandedThinking();
+      });
+      document.body.append(layer);
+    }
+    return layer;
+  }
+
+  function wireThinkingDrawer(drawer, slot) {
+    drawerSlots.set(drawer, slot);
+    const toggle = drawer.querySelector("[data-thinking-expand]");
+    if (toggle) {
+      toggle.addEventListener("click", (event) => {
+        // A click inside <summary> would also open/close the drawer.
+        event.preventDefault();
+        event.stopPropagation();
+        if (drawer.classList.contains("is-expanded")) collapseThinking(drawer);
+        else expandThinking(drawer);
+      });
+    }
+    const header = drawer.querySelector(".thinking-header");
+    if (header) {
+      header.addEventListener("click", (event) => {
+        // The second half of a double click would undo the first toggle.
+        if (event.detail > 1) event.preventDefault();
+      });
+      header.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        expandThinking(drawer);
+      });
+    }
+    syncThinkingToggle(drawer);
+  }
+
+  function syncThinkingToggle(drawer) {
+    const toggle = drawer.querySelector("[data-thinking-expand]");
+    if (!toggle) return;
+    const expanded = drawer.classList.contains("is-expanded");
+    const label = t(expanded ? "copilot.thinking.collapse" : "copilot.thinking.expand");
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.title = label;
+  }
+
+  function expandThinking(drawer) {
+    if (!drawer || drawer.classList.contains("is-expanded")) return;
+    const layer = ensureThinkingLayer();
+    layer.hidden = false;
+    layer.classList.add("is-active");
+    // Moving the node keeps its listeners, text and scroll offset.
+    layer.append(drawer);
+    drawer.open = true;
+    drawer.classList.add("is-expanded");
+    document.body.classList.add("has-thinking-expanded");
+    syncThinkingToggle(drawer);
+    const stream = drawer.querySelector(".thinking-stream");
+    if (stream && stream.dataset.pinned !== "false") stream.scrollTop = stream.scrollHeight;
+    drawer.querySelector("[data-thinking-expand]")?.focus();
+  }
+
+  function collapseThinking(drawer) {
+    const layer = document.getElementById("thinking-layer");
+    if (!drawer || !layer || !layer.contains(drawer)) return;
+    drawer.classList.remove("is-expanded");
+    layer.classList.remove("is-active");
+    layer.hidden = true;
+    document.body.classList.remove("has-thinking-expanded");
+    const slot = drawerSlots.get(drawer);
+    if (slot?.isConnected) slot.append(drawer);
+    else drawer.remove();
+    syncThinkingToggle(drawer);
+    drawer.querySelector("[data-thinking-expand]")?.focus();
+  }
+
+  function closeExpandedThinking() {
+    const drawer = document.getElementById("thinking-layer")?.querySelector(".thinking-drawer");
+    if (drawer) collapseThinking(drawer);
+  }
+
   function renderThread({ forceScroll = false } = {}) {
     const stick = forceScroll || nearBottom();
+    // Re-rendering the thread destroys the drawer's slot, so an expanded one
+    // would be left floating over a thread that no longer owns it.
+    closeExpandedThinking();
     els.thread.innerHTML = "";
     if (!messages.length) {
       renderEmptyState();
@@ -381,17 +477,27 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
                 <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
                 <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
                 <span class="thinking-badge"></span>
+                <button type="button" class="thinking-expand" data-thinking-expand>
+                  <svg class="thinking-expand-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H5a1 1 0 0 0-1 1v4M15 20h4a1 1 0 0 0 1-1v-4M4 15v4a1 1 0 0 0 1 1h4M20 9V5a1 1 0 0 0-1-1h-4"/></svg>
+                  <svg class="thinking-expand-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
+                </button>
                 <svg class="thinking-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
               </summary>
               <div class="thinking-body">
-                <div class="thinking-stream"></div>
+                <div class="thinking-stream" tabindex="0" role="group" aria-label="${escapeHtml(t("copilot.thinking"))}"></div>
               </div>
             </details>`;
           drawer = thinkingEl.querySelector(".thinking-drawer");
+          wireThinkingDrawer(drawer, thinkingEl);
         }
         const stream = drawer.querySelector(".thinking-stream");
         if (stream && stream.textContent !== message.thinking) {
           stream.textContent = message.thinking;
+        }
+        // The reasoning grows downward past its own max-height, so it has to
+        // follow the tail itself; the thread only ever scrolled as a whole.
+        if (stream && isStreamingThinking && stream.dataset.pinned !== "false") {
+          stream.scrollTop = stream.scrollHeight;
         }
         const badge = drawer.querySelector(".thinking-badge");
         if (badge) {
@@ -881,6 +987,33 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     const message = messages.find((item) => item.el === article);
     if (message) retry(message);
   });
+
+  // The reasoning stream scrolls on its own, so it must remember whether the
+  // reader parked it away from the tail; otherwise every token yanks it back.
+  document.addEventListener(
+    "scroll",
+    (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (!target.classList.contains("thinking-stream")) return;
+      const gap = target.scrollHeight - target.scrollTop - target.clientHeight;
+      target.dataset.pinned = gap < 24 ? "true" : "false";
+    },
+    true
+  );
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape") return;
+      const layer = document.getElementById("thinking-layer");
+      if (!layer || layer.hidden) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeExpandedThinking();
+    },
+    true
+  );
 
   document.addEventListener(
     "keydown",
