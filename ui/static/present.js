@@ -30,6 +30,10 @@ const notesFontUp = document.getElementById("notes-font-up");
 
 let view = null;
 let index = 0;
+const hashVal = parseInt(window.location.hash.replace(/[^0-9]/g, ""), 10);
+if (!isNaN(hashVal) && hashVal >= 1) {
+  index = hashVal - 1;
+}
 let sandboxOrigin = "";
 let slideKey = "";
 let hudTimer = null;
@@ -39,6 +43,7 @@ let timerRunning = false;
 let timerInterval = null;
 let notesFontSize = 18;
 let isSpeakerMode = new URLSearchParams(window.location.search).get("speaker") === "1";
+let isBlackout = false;
 
 applyI18n();
 
@@ -195,11 +200,21 @@ async function start(sessionToken) {
     if (key !== slideKey) {
       slideKey = key;
       pendingSteps = slide.animation.slice();
+      frame.style.opacity = "0.2";
       frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
     }
 
+    try {
+      history.replaceState(null, "", `#${index + 1}`);
+    } catch {}
+
     fit();
     renderSpeakerConsole();
+  }
+
+  function toggleBlackout() {
+    isBlackout = !isBlackout;
+    if (frameWrap) frameWrap.style.opacity = isBlackout ? "0" : "1";
   }
 
   function fit() {
@@ -232,8 +247,19 @@ async function start(sessionToken) {
   });
 
   frame.addEventListener("load", () => {
-    window.setTimeout(playPending, 120);
+    frame.style.opacity = "1";
+    window.setTimeout(playPending, 100);
   });
+
+  function jumpTo(targetIndex) {
+    if (!view) return;
+    const slides = view.presentation.slides;
+    const next = Math.min(slides.length - 1, Math.max(0, targetIndex));
+    if (next === index) return;
+    index = next;
+    slideKey = "";
+    applyView(view);
+  }
 
   function go(delta) {
     if (!view) return;
@@ -256,13 +282,24 @@ async function start(sessionToken) {
     } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
       event.preventDefault();
       go(-1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      jumpTo(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      if (view) jumpTo(view.presentation.slides.length - 1);
+    } else if (event.key.toLowerCase() === "b" || event.key === ".") {
+      event.preventDefault();
+      toggleBlackout();
     } else if (event.key.toLowerCase() === "s") {
       event.preventDefault();
       toggleSpeakerMode();
     } else if (event.key.toLowerCase() === "f") {
       toggleFullscreen();
     } else if (event.key === "Escape") {
-      if (isSpeakerMode) {
+      if (isBlackout) {
+        toggleBlackout();
+      } else if (isSpeakerMode) {
         toggleSpeakerMode(false);
       } else if (document.fullscreenElement) {
         document.exitFullscreen();

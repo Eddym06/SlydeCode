@@ -84,6 +84,12 @@ pub enum AnimationKind {
     SlideInLeft,
     SlideInRight,
     Typewriter,
+    Spin,
+    RotateIn,
+    Pulse,
+    FlipUp,
+    BlurIn,
+    BounceIn,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

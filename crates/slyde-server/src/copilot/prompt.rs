@@ -85,18 +85,23 @@ product launch — not a SaaS template.
 - Accessibility: text must stay legible against its surface. Prefer solid contrast over
   text on a busy gradient. Do not communicate meaning by color alone.
 
-## Motion
+## Motion and animation
 
-Motion is an entrance, not decoration. The runtime can play up to three animation steps.
+Slides come alive with smooth, high-fidelity animations. Combine continuous CSS motion graphics with stepped presentation entrances:
 
-- Use at most 3 steps, ordered by reading priority, with 0–140ms stagger.
-- Targets must be CSS selectors that exist inside the slide.
-- Allowed kinds: `fade_up`, `fade`, `scale_in`, `slide_in_left`, `slide_in_right`,
-  `typewriter`.
-- Prefer `fade_up` for headlines and `scale_in` for a chart or image plate. Use one
-  signature moment, not a parade.
-- Animated elements must be fully visible in static thumbnails (the runtime handles this).
-- Do not animate more than the focal group. Never animate body paragraphs individually.
+1. **Continuous CSS motion in `<style>`**:
+   - Write custom CSS `@keyframes` in your `<style>` block for living graphics: rotating rings, orbiting elements, pulsing glow rings, radar sweeps, floating badges, and SVG stroke-dasharray drawing paths.
+   - Example patterns:
+     `@keyframes ring-spin {{{{ to {{{{ transform: rotate(360deg); }}}} }}}}`
+     `@keyframes glow-pulse {{{{ 0%, 100% {{{{ opacity: 0.6; transform: scale(1); }}}} 50% {{{{ opacity: 1; transform: scale(1.08); }}}} }}}}`
+   - Keep continuous motion smooth, hardware-accelerated (`transform`, `opacity`), and visually polished.
+
+2. **Stepped reveal animations in `animation` array (`upsert_slide`)**:
+   - Use steps for ordered reveals during live presentation (advances step-by-step on click or Space).
+   - Allowed kinds: `fade_up`, `fade`, `scale_in`, `slide_in_left`, `slide_in_right`, `typewriter`, `spin`, `rotate_in`, `pulse`, `flip_up`, `blur_in`, `bounce_in`.
+   - Targets must be CSS selectors inside the slide.
+   - Stepped elements are automatically fully visible in static thumbnails and exports.
+   - Reveal points, metrics or cards sequentially to guide the audience's attention.
 
 ## Deck context
 

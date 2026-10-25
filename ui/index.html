@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>SlydeCode</title>
+  <link rel="icon" type="image/png" href="/static/logo-icon.png">
   <link rel="preload" href="/fonts/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/fonts.css">
   <link rel="stylesheet" href="/static/tokens.css">
@@ -22,11 +23,9 @@
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="M5 6.5h14M5 12h9M5 17.5h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
-          </svg>
+          <img src="/static/logo-icon.png" class="brand-logo-img" alt="SlydeCode">
         </span>
-        <span>SlydeCode</span>
+        <span class="brand-name">SlydeCode</span>
         <span class="brand-sub" data-i18n="brand.sub">studio</span>
       </div>
 
@@ -44,6 +43,21 @@
       </div>
 
       <div class="topbar-actions">
+        <div class="deck-quick-tools" role="group" aria-label="Deck tools">
+          <button type="button" class="btn btn-ghost btn-sm" id="topbar-new-deck" data-i18n-title="action.newDeck" title="New deck">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            <span data-i18n="action.newDeck">New</span>
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" id="topbar-open-deck" data-i18n-title="action.openDeck" title="Open file">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+            <span data-i18n="action.openDeck">Open</span>
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" id="topbar-save-deck-btn" data-i18n-title="action.saveCopy" title="Save copy">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            <span data-i18n="action.saveCopy">Save</span>
+          </button>
+          <input type="file" id="topbar-file-picker" accept=".slyde,application/json" hidden>
+        </div>
         <div class="zoom-controls" id="zoom-controls" role="group" aria-label="Canvas zoom">
           <button type="button" class="icon-btn icon-btn-sm" id="zoom-out" data-i18n-title="zoom.out" aria-label="Zoom out">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>
@@ -99,10 +113,25 @@
             </button>
           </div>
         </div>
-        <button type="button" class="btn btn-primary" id="present">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10-6.5z"/></svg>
-          <span data-i18n="action.present">Present</span>
-        </button>
+        <div class="split-btn-group" id="present-split-group">
+          <button type="button" class="btn btn-primary" id="present">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10-6.5z"/></svg>
+            <span data-i18n="action.present">Present</span>
+          </button>
+          <button type="button" class="btn btn-primary split-btn-trigger" id="present-menu-trigger" aria-haspopup="menu" aria-expanded="false" aria-label="Presentation options">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="dropdown-menu" id="present-menu" role="menu" hidden>
+            <button type="button" class="dropdown-item" id="present-fullscreen" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+              <span data-i18n="action.fullscreen">Present Slide</span>
+            </button>
+            <button type="button" class="dropdown-item" id="present-speaker" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              <span data-i18n="action.speakerConsole">Speaker Console</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 

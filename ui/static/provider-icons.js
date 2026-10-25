@@ -1,55 +1,43 @@
 // Provider marks for the copilot picker.
-//
-// These are deliberately small, geometric interpretations rather than copied
-// brand assets: they stay legible at 16px, inherit the theme, and never pull
-// remote images into the app. `providerIcon` returns trusted static SVG only.
+// Authentic vector brand marks for each supported AI provider.
 
 const ICONS = {
-  openai: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M12 3.1 19.7 7.6v8.8L12 20.9 4.3 16.4V7.6L12 3.1Z" stroke="currentColor" stroke-width="1.35"/>
-    <path d="M8.4 9.7 12 7.6l3.6 2.1v4.6L12 16.4l-3.6-2.1V9.7Z" fill="currentColor" opacity=".5"/>
+  openai: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M22.28 10.63a5.68 5.68 0 0 0-.48-4.63 5.76 5.76 0 0 0-4.04-2.73 5.76 5.76 0 0 0-5.18-2.6 5.74 5.74 0 0 0-4.8 2.58A5.76 5.76 0 0 0 3.9 6 5.75 5.75 0 0 0 1.72 10.63a5.75 5.75 0 0 0 .48 4.63 5.76 5.76 0 0 0 4.04 2.73 5.76 5.76 0 0 0 5.18 2.6 5.74 5.74 0 0 0 4.8-2.58A5.76 5.76 0 0 0 20.1 18a5.75 5.75 0 0 0 2.18-4.63 5.75 5.75 0 0 0 0-2.74zm-8.38 10.82a4.48 4.48 0 0 1-2.9-.84l.15-.09 4.82-2.78a.65.65 0 0 0 .33-.56V10.4l2.06 1.19a.06.06 0 0 1 .03.05v5.58a4.49 4.49 0 0 1-4.49 4.23zm-8.3-3.64a4.48 4.48 0 0 1-.72-2.93V9.26l4.82 2.78a.64.64 0 0 0 .65 0l5.88-3.4V11l-2.06 1.19a.06.06 0 0 0-.03.05v5.58a4.49 4.49 0 0 1-4.49 4.23 4.48 4.48 0 0 1-4.05-4.24zm-1.8-8.2a4.48 4.48 0 0 1 2.18-2.09l.15.09 4.82 2.78a.65.65 0 0 0 .65 0l5.88-3.39V3.53a4.49 4.49 0 0 1 3.75 4.9 4.48 4.48 0 0 1-2.9 3.65l-4.82-2.78a.64.64 0 0 0-.65 0l-5.88 3.4V10.3l-2.06-1.19a.06.06 0 0 1-.03-.05v.35zm12.98-2.3-4.82-2.78a.64.64 0 0 0-.65 0l-5.88 3.4V6a4.49 4.49 0 0 1 7.4-3.4 4.48 4.48 0 0 1 1.89 2.09l-.15-.09-4.82-2.78a.65.65 0 0 0-.65 0L4.85 5.2V2.8a4.49 4.49 0 0 1 7.4-3.4 4.48 4.48 0 0 1 4.54 7.91zm3.84 5.37a4.48 4.48 0 0 1 .72 2.93v5.58l-4.82-2.78a.64.64 0 0 0-.65 0l-5.88 3.4V13l2.06-1.19a.06.06 0 0 0 .03-.05V6.18a4.49 4.49 0 0 1 4.49-4.23 4.48 4.48 0 0 1 4.05 4.24zm-4.32 1.34-2.88 1.66-2.88-1.66v-3.33l2.88-1.66 2.88 1.66v3.33z"/>
   </svg>`,
-  claude: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M12 3.2v17.6M3.2 12h17.6M5.8 5.8l12.4 12.4M18.2 5.8 5.8 18.2"
-      stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-    <circle cx="12" cy="12" r="2.1" fill="currentColor"/>
+  claude: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M13.62 2.25c.34-.14.72.03.86.37l1.7 4.12 4.12 1.7c.34.14.51.52.37.86a.67.67 0 0 1-.37.37l-4.12 1.7-1.7 4.12c-.14.34-.52.51-.86.37a.67.67 0 0 1-.37-.37l-1.7-4.12-4.12-1.7c-.34-.14-.51-.52-.37-.86a.67.67 0 0 1 .37-.37l4.12-1.7 1.7-4.12c.14-.34.52-.51.86-.37.13.06.24.16.3.29zm-7.25 10c.26-.11.56.02.67.28l1.32 3.2 3.2 1.32c.26.11.39.41.28.67a.52.52 0 0 1-.28.28l-3.2 1.32-1.32 3.2c-.11.26-.41.39-.67.28a.52.52 0 0 1-.28-.28l-1.32-3.2-3.2-1.32c-.26-.11-.39-.41-.28-.67a.52.52 0 0 1 .28-.28l3.2-1.32 1.32-3.2c.11-.26.41-.39.67-.28z"/>
   </svg>`,
   gemini: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M12 2.4c.7 5.4 2 6.7 7.4 7.4-5.4.7-6.7 2-7.4 7.4-.7-5.4-2-6.7-7.4-7.4 5.4-.7 6.7-2 7.4-7.4Z"/>
-    <path d="M19.1 14.2c.3 2.3.9 2.9 3.2 3.2-2.3.3-2.9.9-3.2 3.2-.3-2.3-.9-2.9-3.2-3.2 2.3-.3 2.9-.9 3.2-3.2Z" opacity=".72"/>
+    <path d="M11.95 24c-.16-3.87-1.68-7.14-4.57-9.8C4.5 11.53 1.25 10.02 0 9.87v-.23c3.87-.16 7.14-1.68 9.8-4.57C12.47 2.18 13.98-1.07 14.13-2.32h.23c.16 3.87 1.68 7.14 4.57 9.8 2.88 2.67 6.13 4.18 7.38 4.33v.23c-3.87.16-7.14 1.68-9.8 4.57-2.67 2.89-4.18 6.14-4.33 7.39h-.23z" transform="translate(0, 1.2) scale(0.9)"/>
   </svg>`,
-  xai: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M5 5.2 19 18.8M19 5.2 5 18.8" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/>
+  xai: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
   </svg>`,
-  groq: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M13.4 2.8 5.9 13h5.2l-1.6 8.1L18 10.2h-5.4l.8-7.4Z" fill="currentColor"/>
+  groq: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14.93V18h-2v-1.07c-2.83-.48-5-2.94-5-5.93h2c0 2.21 1.79 4 4 4s4-1.79 4-4-1.79-4-4-4c-.58 0-1.12.13-1.62.35L8.71 5.67C9.72 5.24 10.83 5 12 5c3.87 0 7 3.13 7 7 0 2.99-2.17 5.45-5 5.93z"/>
   </svg>`,
-  openrouter: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <circle cx="5.3" cy="6.5" r="1.8" fill="currentColor"/>
-    <circle cx="18.7" cy="17.5" r="1.8" fill="currentColor"/>
-    <path d="M7.1 7.6 10 10.2c1.2 1.1 1.9 1.5 3.1 1.5h2.8M16.9 16.4 14 13.8c-1.2-1.1-1.9-1.5-3.1-1.5H8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    <path d="m14 9.6 2.4 2.1-2.4 2.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  openrouter: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="6" cy="6" r="3"/>
+    <circle cx="18" cy="18" r="3"/>
+    <path d="M8.5 8.5l7 7M15 6h3v3M9 18H6v-3"/>
   </svg>`,
-  deepseek: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M3.4 14.4c2.5-1.3 4.1-3.2 5.7-5.8 1.7-2.7 3.6-3.7 5.7-3.1 1.9.5 3.3 2 3.9 4.2.7 2.6-.2 5.5-2.2 7.2-1.9 1.6-4.7 1.8-6.6.4-1.1-.8-1.5-2.2-1-3.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    <circle cx="13.8" cy="10.4" r="1.1" fill="currentColor"/>
-    <path d="M16.7 7.1c.8-.8 1.8-1.2 3.1-1.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+  deepseek: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M12 2.5c-4.97 0-9 3.58-9 8 0 2.87 1.69 5.4 4.3 6.84L6 21.5l4.63-2.1c.44.07.9.1 1.37.1 4.97 0 9-3.58 9-8s-4.03-8-9-8zm-.3 13.2c-2.38 0-4.3-1.61-4.3-3.6 0-1.99 1.92-3.6 4.3-3.6s4.3 1.61 4.3 3.6c0 1.99-1.92 3.6-4.3 3.6zm.3-5.4c-1.1 0-2 .72-2 1.6s.9 1.6 2 1.6 2-.72 2-1.6-.9-1.6-2-1.6z"/>
   </svg>`,
-  nvidia: `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <rect x="3.6" y="5" width="16.8" height="14" rx="3.2" stroke="currentColor" stroke-width="1.4"/>
-    <path d="M7 15.4V9.3c2.8-.2 5.4.5 7.2 2.6-1.7 2.2-4.2 3.6-7.2 3.5Z" fill="currentColor" opacity=".55"/>
-    <circle cx="10.6" cy="12.1" r="1.2" fill="currentColor"/>
+  nvidia: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M8.9 7.6c1.6-.5 3.3-.5 4.8 0 3.8 1.2 6.5 4.8 6.5 8.9 0 .4 0 .7-.1 1.1-1.3-4.5-5.5-7.7-10.4-7.5l-.8.1V7.8l-.1-.2zm-3.2 4.4c.9-.4 2-.5 3-.4 3.7.3 6.7 3.3 7 7-.8 1.4-2 2.5-3.5 3.1-.2-3.1-2.6-5.6-5.8-5.9l-.7-.1v-3.7zm-3.7 1.7C3.1 16 5 18 7.6 18.7v-2.3c-1.1-.3-1.9-1.2-2.1-2.3l-3.5-.4zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
   </svg>`,
 };
 
 const TINT = {
-  openai: "var(--ink)",
+  openai: "#10a37f",
   claude: "#d97757",
   gemini: "#4285f4",
   xai: "var(--ink)",
   groq: "#f55036",
-  openrouter: "#8b5cf6",
-  deepseek: "#4d6bfe",
+  openrouter: "#6366f1",
+  deepseek: "#3b82f6",
   nvidia: "#76b900",
 };
 

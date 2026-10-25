@@ -31,13 +31,20 @@
 }
 
 .brand-mark {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
-  background: var(--gradient-signature);
-  box-shadow: var(--glow-brand);
   display: grid;
   place-items: center;
+  flex-shrink: 0;
+}
+
+.brand-mark .brand-logo-img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 2px 6px rgba(0, 160, 255, 0.28));
 }
 
 .brand-mark svg {
@@ -1433,7 +1440,7 @@ details.dev[open] summary::before {
 }
 
 .msg-thinking {
-  margin: 6px 0;
+  margin: 8px 0;
   animation: msg-in 200ms var(--ease-out) both;
 }
 
@@ -1441,42 +1448,110 @@ details.dev[open] summary::before {
   display: none;
 }
 
-.thinking-pill {
-  display: inline-flex;
+.thinking-drawer {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-sunken) 70%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--border));
+  overflow: hidden;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.thinking-drawer[open] {
+  border-color: color-mix(in srgb, var(--brand) 38%, var(--border));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+}
+
+.thinking-header {
+  display: flex;
   align-items: center;
   gap: 7px;
-  max-width: 100%;
-  padding: 4px 10px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--brand) 8%, var(--surface-sunken));
-  border: 1px solid color-mix(in srgb, var(--brand) 25%, var(--border));
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11.5px;
   color: var(--ink-muted);
-  font-size: 11px;
+  list-style: none;
+  transition: background var(--dur-fast) ease;
 }
 
-.thinking-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--brand);
-  box-shadow: 0 0 8px var(--brand);
-  animation: pulse-dot 1.4s ease-in-out infinite;
+.thinking-header::-webkit-details-marker {
+  display: none;
+}
+
+.thinking-header:hover {
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+  color: var(--ink);
+}
+
+.thinking-spark {
+  width: 14px;
+  height: 14px;
+  color: var(--brand);
   flex: 0 0 auto;
 }
 
-.thinking-label {
+.thinking-spark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.thinking-title {
   font-weight: 600;
   color: var(--ink);
-  flex: 0 0 auto;
+  font-size: 11.5px;
 }
 
-.thinking-snippet {
+.thinking-badge {
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
   color: var(--ink-subtle);
+  margin-left: 2px;
+}
+
+.thinking-badge.is-live {
+  background: color-mix(in srgb, var(--brand) 15%, transparent);
+  border-color: color-mix(in srgb, var(--brand) 30%, transparent);
+  color: var(--brand);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.thinking-arrow {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  color: var(--ink-subtle);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.thinking-drawer[open] .thinking-arrow {
+  transform: rotate(180deg);
+}
+
+.thinking-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.thinking-stream {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 80%, black);
+  border-left: 2.5px solid var(--brand);
+  color: var(--ink-muted);
   font-family: var(--font-mono, monospace);
-  font-size: 10px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.58;
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .msg-typing {
@@ -1523,6 +1598,18 @@ details.dev[open] summary::before {
   color: var(--ink-muted);
   font-size: 11.5px;
   line-height: 1.5;
+}
+
+.msg-error-detail {
+  margin-top: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .msg-retry {
@@ -2762,4 +2849,73 @@ details.dev[open] summary::before {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* ---------- Topbar Quick Tools & Present Split Button ---------- */
+.deck-quick-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-btn);
+  padding: 2px 4px;
+}
+
+.deck-quick-tools .btn {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--ink-muted);
+  border-radius: calc(var(--r-btn) - 2px);
+  cursor: pointer;
+}
+
+.deck-quick-tools .btn:hover {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.deck-quick-tools .btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.split-btn-group {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.split-btn-group #present {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-right: 12px;
+}
+
+.split-btn-group .split-btn-trigger {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+  padding: 0 8px;
+  min-width: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.split-btn-group .split-btn-trigger svg {
+  width: 12px;
+  height: 12px;
+}
+
+.split-btn-group .dropdown-menu {
+  top: calc(100% + 6px);
+  right: 0;
 }

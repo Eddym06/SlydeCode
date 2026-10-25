@@ -367,16 +367,23 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
 
     const thinkingEl = message.el.querySelector(".msg-thinking");
     if (thinkingEl) {
-      const isThinking = Boolean(message.thinking && message.state === "streaming" && !message.text);
-      thinkingEl.hidden = !isThinking;
-      if (isThinking) {
-        const lastLine = message.thinking.trim().split("\n").filter(Boolean).pop() || "";
+      const hasThinking = Boolean(message.thinking && message.thinking.trim());
+      thinkingEl.hidden = !hasThinking;
+      if (hasThinking) {
+        const isStreamingThinking = message.state === "streaming" && !message.text;
+        const wasOpen = thinkingEl.querySelector(".thinking-drawer")?.open ?? isStreamingThinking;
         thinkingEl.innerHTML = `
-          <div class="thinking-pill">
-            <span class="thinking-dot"></span>
-            <span class="thinking-label">${escapeHtml(t("copilot.thinking"))}</span>
-            ${lastLine ? `<span class="thinking-snippet">${escapeHtml(lastLine.slice(-85))}</span>` : ""}
-          </div>`;
+          <details class="thinking-drawer" ${wasOpen ? "open" : ""}>
+            <summary class="thinking-header">
+              <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
+              <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
+              <span class="thinking-badge ${isStreamingThinking ? "is-live" : ""}">${isStreamingThinking ? "pensando…" : "razonamiento"}</span>
+              <svg class="thinking-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+            </summary>
+            <div class="thinking-body">
+              <div class="thinking-stream">${escapeHtml(message.thinking)}</div>
+            </div>
+          </details>`;
       }
     }
 
@@ -400,12 +407,11 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
     error.hidden = !failed;
     if (failed) {
       const canRetry = messages[messages.length - 1] === message;
+      const generic = message.state === "stopped" ? t("copilot.stopped") : errorText(message.errorCode);
+      const detail = message.errorMessage ? `<div class="msg-error-detail">${escapeHtml(message.errorMessage)}</div>` : "";
       error.innerHTML = `
-        <p>${escapeHtml(
-          message.state === "stopped"
-            ? t("copilot.stopped")
-            : errorText(message.errorCode)
-        )}</p>
+        <p>${escapeHtml(generic)}</p>
+        ${detail}
         ${
           canRetry
             ? `<button type="button" class="msg-retry" data-retry>${escapeHtml(
@@ -638,6 +644,7 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
       if (runEpoch === epoch && assistant.state === "streaming") {
         assistant.state = "error";
         assistant.errorCode = "network";
+        assistant.errorMessage = t("copilot.error.network");
         syncAssistant(assistant);
         announce(t("copilot.errorTitle"));
       }
@@ -649,6 +656,7 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
         if (assistant.state === "streaming") {
           assistant.state = "error";
           assistant.errorCode = error.code || "network";
+          assistant.errorMessage = error.message || "";
         }
         announce(t("copilot.errorTitle"));
       }
@@ -699,6 +707,7 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
     if (event.type === "error") {
       assistant.state = "error";
       assistant.errorCode = event.code || "generic";
+      assistant.errorMessage = event.message || "";
       syncAssistant(assistant);
       announce(t("copilot.errorTitle"));
     }

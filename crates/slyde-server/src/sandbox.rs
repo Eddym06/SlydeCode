@@ -182,7 +182,13 @@ fn runtime_script(width: u32, height: u32, static_mode: bool) -> String {
     scale_in: [{ opacity: 0, transform: 'scale(.96)' }, { opacity: 1, transform: 'scale(1)' }],
     slide_in_left: [{ opacity: 0, transform: 'translateX(-28px)' }, { opacity: 1, transform: 'translateX(0)' }],
     slide_in_right: [{ opacity: 0, transform: 'translateX(28px)' }, { opacity: 1, transform: 'translateX(0)' }],
-    typewriter: [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)' }]
+    typewriter: [{ opacity: 0, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 0 0 0)' }],
+    spin: [{ opacity: 0, transform: 'rotate(0deg)' }, { opacity: 1, transform: 'rotate(360deg)' }],
+    rotate_in: [{ opacity: 0, transform: 'rotate(-45deg) scale(.9)' }, { opacity: 1, transform: 'rotate(0deg) scale(1)' }],
+    pulse: [{ transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }],
+    flip_up: [{ opacity: 0, transform: 'perspective(600px) rotateX(40deg)' }, { opacity: 1, transform: 'perspective(600px) rotateX(0deg)' }],
+    blur_in: [{ opacity: 0, filter: 'blur(12px)' }, { opacity: 1, filter: 'blur(0)' }],
+    bounce_in: [{ opacity: 0, transform: 'scale(0.3)' }, { opacity: 0.9, transform: 'scale(1.08)' }, { opacity: 1, transform: 'scale(1)' }]
   };
 
   function play(step) {

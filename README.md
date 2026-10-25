@@ -1,13 +1,26 @@
-# SlydeCode
+<p align="center">
+  <img src="assets/logo.png" alt="SlydeCode Logo" width="320">
+</p>
 
-> **Canva met a compiler.** An AI-native, editorial-grade presentation studio.
-> The high-performance Rust core owns the live deck state and serves it over loopback (`127.0.0.1`), using Google Chrome as the single source of truth for both canvas rendering and projector output.
+<p align="center">
+  <strong>Canva met a compiler.</strong> An AI-native, editorial-grade presentation studio.<br>
+  <em>The high-performance Rust core owns the live deck state and compiles to zero-leak sandboxed HTML slides.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Rust-2021-orange?logo=rust" alt="Rust 2021">
+  <img src="https://img.shields.io/badge/Chrome-CDP%20Headless-blue?logo=googlechrome" alt="Chrome CDP">
+  <img src="https://img.shields.io/badge/MCP-JSON--RPC%202.0-purple" alt="MCP">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
+</p>
 
 ---
 
 ## Highlights
 
 - **Linear/Figma-tier Studio UI:**
+  - **Official Branding:** Clean vector brand identity and high-res transparent emblem.
+  - **Deck Quick Tools:** Dedicated topbar tools to create a *New* presentation, *Open* an existing `.slyde` file from disk, and *Save* a copy instantly.
   - **Native Drag-and-Drop Storyboard:** Reorder slides effortlessly with smooth HTML5 drag-and-drop and spatial drop indicators.
   - **Slide Quick Actions:** Duplicate, delete, and shift slides up or down directly from thumbnail hover bars.
   - **Template Picker Popover:** One-click insertion of layout starters: *Hero*, *Bullet List*, *Diagram*, *Data Chart*, *Image Layout*, or *Code Block*.
@@ -19,18 +32,24 @@
   - **Light & Dark Mode:** Warm minimalism with signature violet→coral gradients and AA-contrast compliant typography.
 
 - **In-App AI Copilot with Live Reasoning Streaming:**
-  - **8 Top Providers:** DeepSeek, OpenAI (ChatGPT), Anthropic (Claude), Google Gemini, xAI (Grok), Groq, OpenRouter, and NVIDIA NIM.
-  - **Sub-300ms Live Thinking Stream (`ChatEvent::Thinking`):** Reasoning models like `deepseek-flash` stream their internal thinking process live with an interactive thinking pill and snippet preview.
+  - **8 Authentic Provider Logos:** DeepSeek, OpenAI (ChatGPT), Anthropic (Claude), Google Gemini, xAI (Grok), Groq, OpenRouter, and NVIDIA NIM with official SVG brand marks.
+  - **Sub-300ms Live Thinking Stream (`ChatEvent::Thinking`):** Reasoning models like `deepseek-flash` stream their internal thinking process live in a downward collapsible mono drawer with markdown previews.
+  - **Direct Upstream Error Transparency:** Never masks errors behind generic alerts; surfaces exact provider feedback and details.
   - **Full Deck Tools Loop:** The copilot autonomously inspects and modifies the deck using structured tools (`read_deck`, `read_slide`, `create_presentation`, `upsert_slide`, `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`).
   - **Contextual Prompt Suggestions:** Instant suggestion pills tailored to the active slide or deck state.
   - **Multimodal File Attachments:** Attach images (PNG, JPEG, WebP), PDFs, DOCX, PPTX, or code/text files with server-side extraction.
   - **Zero-Friction Key Management:** Keys stay on your machine in `%APPDATA%\SlydeCode\copilot.json` (or environment variables) and are never exposed to the browser.
 
+- **Native Motion & Animation Engine:**
+  - **Continuous CSS Motion Graphics:** Copilot writes hardware-accelerated CSS `@keyframes` in `<style>` for living graphics (rotating rings, pulsing glowing nodes, radar sweeps, SVG stroke drawings).
+  - **Stepped Runtime Entrance Animations:** Built-in keyframes for `fade_up`, `fade`, `scale_in`, `slide_in_left`, `slide_in_right`, `typewriter`, `spin`, `rotate_in`, `pulse`, `flip_up`, `blur_in`, and `bounce_in`.
+  - **Zero-Leak Sandbox Isolation:** Slide styles and scripts run within isolated, CSP-hardened iframes (`connect-src 'none'`, `form-action 'none'`).
+
 - **Dual-Screen Presenter & Speaker Console:**
-  - Press `S` or append `?speaker=1` to launch the **Speaker Console** (*Modo Orador*).
-  - Split view showing the live slide alongside a preview of the upcoming slide.
-  - Real-time wall clock and digital stopwatch timer with Play, Pause, and Reset controls.
-  - Scalable speaker notes viewer with on-the-fly font size adjustment (`A-` / `A+`).
+  - **Split Presenter Group:** One-click launch into fullscreen presentation mode or dedicated **Speaker Console** (*Modo Orador*).
+  - **Popup Blocker Resilient:** Graceful unblocked navigation fallback ensuring presentation windows launch reliably in Chrome app mode.
+  - **Stage Stepper & Blackout Mode:** Press `Space`/`Enter` to step through animation fragments, `B`/`.` for instant blank/blackout screen, `Home`/`End` to jump directly to first/last slide.
+  - **Speaker Notes & Clocks:** Real-time wall clock, digital stopwatch timer (Play/Pause/Reset), and scalable notes viewer (`A-` / `A+`).
 
 - **Model Context Protocol (MCP) Server:**
   - Connect external AI coding agents (Claude Desktop, Cursor, Windsurf, etc.) via stdio JSON-RPC 2.0 (`slyde mcp`).
@@ -89,6 +108,8 @@ The studio will automatically open in an isolated Google Chrome application wind
 | `ArrowRight` / `ArrowDown` | Studio / Presenter | Next slide |
 | `ArrowLeft` / `ArrowUp` | Studio / Presenter | Previous slide |
 | `Space` / `Enter` | Presenter | Advance animation step or next slide |
+| `B` / `.` | Presenter | Blank / Blackout screen toggle |
+| `Home` / `End` | Presenter | Jump directly to first or last slide |
 | `S` | Presenter | Toggle Speaker Console Mode (*Modo Orador*) |
 | `F` | Presenter | Toggle fullscreen |
 | `Escape` | Presenter | Exit kiosk / presenter mode |

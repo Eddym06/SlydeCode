@@ -66,6 +66,15 @@ function boot(sessionToken) {
     topbarExportPdf: $("topbar-export-pdf"),
     topbarExportPng: $("topbar-export-png"),
     topbarSaveDeck: $("topbar-save-deck"),
+    topbarNewDeck: $("topbar-new-deck"),
+    topbarOpenDeck: $("topbar-open-deck"),
+    topbarSaveDeckBtn: $("topbar-save-deck-btn"),
+    topbarFilePicker: $("topbar-file-picker"),
+    present: $("present"),
+    presentMenuTrigger: $("present-menu-trigger"),
+    presentMenu: $("present-menu"),
+    presentFullscreen: $("present-fullscreen"),
+    presentSpeaker: $("present-speaker"),
     storyboard: $("storyboard"),
     slideCount: $("slide-count"),
     templatePopover: $("template-popover"),
@@ -991,9 +1000,6 @@ function boot(sessionToken) {
     }
   });
 
-  $("present").addEventListener("click", () => {
-    window.open(`/present?t=${encodeURIComponent(sessionToken)}`, "slyde-present", "width=1440,height=900");
-  });
 
   $("add-slide").addEventListener("click", () => run("add_slide", { template: "hero" }));
   $("empty-cta").addEventListener("click", () => run("add_slide", { template: "hero" }));
@@ -1190,6 +1196,110 @@ function boot(sessionToken) {
     }
   }
 
+  function openPresentation(speaker = false) {
+    const d = deck();
+    const slideIndex = d ? Math.max(0, d.slides.findIndex((s) => s.id === selectedId)) : 0;
+    const hash = slideIndex > 0 ? `#${slideIndex + 1}` : "";
+    const speakerParam = speaker ? "&speaker=1" : "";
+    const url = `/present?t=${encodeURIComponent(sessionToken)}${speakerParam}${hash}`;
+    // Open in a new tab without window feature restrictions to avoid popup blocker in app mode
+    const win = window.open(url, "_blank");
+    if (!win || win.closed || typeof win.closed === "undefined") {
+      // Fallback if popup blocker intercepted it
+      window.location.href = url;
+    }
+  }
+
+  function setupPresentGroup() {
+    if (els.present) {
+      els.present.addEventListener("click", () => openPresentation(false));
+    }
+    if (els.presentMenuTrigger && els.presentMenu) {
+      els.presentMenuTrigger.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = !els.presentMenu.hidden;
+        els.presentMenu.hidden = open;
+        els.presentMenuTrigger.setAttribute("aria-expanded", String(!open));
+      });
+      document.addEventListener("click", (e) => {
+        if (!els.presentMenu.contains(e.target) && e.target !== els.presentMenuTrigger) {
+          els.presentMenu.hidden = true;
+          els.presentMenuTrigger.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+    if (els.presentFullscreen) {
+      els.presentFullscreen.addEventListener("click", () => {
+        if (els.presentMenu) els.presentMenu.hidden = true;
+        openPresentation(false);
+      });
+    }
+    if (els.presentSpeaker) {
+      els.presentSpeaker.addEventListener("click", () => {
+        if (els.presentMenu) els.presentMenu.hidden = true;
+        openPresentation(true);
+      });
+    }
+  }
+
+  function setupDeckQuickTools() {
+    if (els.topbarNewDeck) {
+      els.topbarNewDeck.addEventListener("click", async () => {
+        if (confirm(t("action.confirmNewDeck"))) {
+          try {
+            await run("create_presentation", {
+              title: t("deck.untitled") || "Untitled Presentation",
+              theme: "studio",
+              aspect_ratio: "16:9",
+            });
+            await run("add_slide", { template: "hero" });
+            toast(t("toast.saved") || "Created new deck");
+          } catch (err) {
+            console.error("Failed to create new deck", err);
+          }
+        }
+      });
+    }
+
+    if (els.topbarSaveDeckBtn) {
+      els.topbarSaveDeckBtn.addEventListener("click", () => {
+        const link = document.createElement("a");
+        link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
+        link.download = "";
+        document.body.append(link);
+        link.click();
+        link.remove();
+        toast(t("toast.downloaded"));
+      });
+    }
+
+    if (els.topbarOpenDeck && els.topbarFilePicker) {
+      els.topbarOpenDeck.addEventListener("click", () => {
+        els.topbarFilePicker.click();
+      });
+      els.topbarFilePicker.addEventListener("change", async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const res = await client.openDeck(text);
+          if (res && res.view) {
+            applyView(res.view);
+            selectedId = res.view.presentation.slides[0]?.id || "";
+            stageKey = "";
+            renderStage();
+            toast(t("toast.saved") || "Deck loaded");
+          }
+        } catch (err) {
+          console.error("Failed to open deck", err);
+          toast(err.message || "Failed to open deck");
+        } finally {
+          els.topbarFilePicker.value = "";
+        }
+      });
+    }
+  }
+
   if (els.subtabSlide) {
     els.subtabSlide.addEventListener("click", () => {
       inspectorSubtab = "slide";
@@ -1212,6 +1322,8 @@ function boot(sessionToken) {
       setStatus("connecting");
       setupTemplatePicker();
       setupExportDropdown();
+      setupPresentGroup();
+      setupDeckQuickTools();
       applyView(payload.view);
       syncLangButtons();
       syncThemeToggle();
