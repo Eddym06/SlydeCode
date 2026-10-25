@@ -270,10 +270,11 @@ Nothing partially implemented on the branch.
       `-D warnings` on Linux); Linux also gained absolute snap/flatpak paths, and
       a test guards against an empty candidate list — 2026-10-25
 - [x] CI is green on the pull request (Linux fmt/clippy/tests and the Windows
-      studio suite). The scoped-edit E2E test that failed twice on CI was racing
-      the stage document: it now waits for `data-slyde-ready` through the
-      iframe's CDP target (and polls for the outgoing command) instead of
-      sleeping, and prints a diagnostic snapshot when it fails — 2026-10-25
+      studio suite, 55/55). The canvas E2E tests that failed three runs in a row
+      were racing the stage document: they now wait for `data-slyde-ready`
+      through the iframe's CDP target, tolerate the lazily created HUD node,
+      poll for the outgoing command and fall back to clicking the block through
+      the stage session when parent-page input misses the frame — 2026-10-25
 - [x] Canvas extracted (selection, HUD, inline editing, image placement) and the
       storyboard extracted (thumbnails, drag-and-drop, hover actions) — 2026-10-25
 - [x] Inspector extracted to its own module (markup, animation timeline, notes
