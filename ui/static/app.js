@@ -11,6 +11,7 @@ import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { createStoryboard } from "./storyboard.js";
+import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -151,7 +152,7 @@ function boot(sessionToken) {
   }
 
   function buildPaletteActions(scope = {}) {
-    const element = scope.element || selectedElement;
+    const element = scope.element || canvas.selectedElement;
     const d = deck();
     const actions = [];
 
@@ -618,9 +619,9 @@ function boot(sessionToken) {
     if (!els.copilotContextPill || !els.copilotPromptPills) return;
     const current = slide();
     const idx = current ? d.slides.findIndex((s) => s.id === current.id) : -1;
-    if (selectedElement) {
+    if (canvas.selectedElement) {
       els.copilotContextPill.textContent = t("copilot.contextElement", {
-        id: selectedElement.id,
+        id: canvas.selectedElement.id,
       });
       els.copilotContextPill.dataset.target = "element";
     } else if (current && idx >= 0) {
@@ -706,7 +707,7 @@ function boot(sessionToken) {
     const key = `${current.id}:${hash(current.code)}:${hash(JSON.stringify(current.animation))}:${d.aspect_ratio}`;
     if (key !== stageKey) {
       stageKey = key;
-      structureNodes = [];
+      canvas.resetStructure();
       els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1&edit=1${sourceQuery}`;
     }
     fitStage(d);
@@ -732,304 +733,37 @@ function boot(sessionToken) {
     els.frameWrap.style.height = `${Math.round(height)}px`;
   }
 
-  // ---------- Bimodal canvas: element selection & inline editing ----------
-  //
-  // The sandbox owns hit-testing (it sees the real DOM), the studio owns the
-  // state and the chrome. Nothing here rewrites a slide: every change goes
-  // through `mutate_element`, so undo/redo and autosave keep working.
+  // ---------- Bimodal canvas ----------
+  // Selection, HUD and image editing live in `canvas.js`; the shell supplies the
+  // commands and reacts to selection/structure changes.
 
-  let selectedElement = null; // { id, tag, text, rect, viewport, slideId }
-  let elementHud = null;
-  let elementPaddingStep = 0;
-  let elementEditing = false;
-  let structureNodes = [];
+  const canvas = createCanvas({
+    frame: els.frame,
+    t,
+    actions: {
+      command: run,
+      uploadImage: (dataUrl) => client.uploadAsset(dataUrl),
+      notify: toast,
+      currentSlideId: () => selectedId,
+      aspectRatio: () => (deck() ? deck().aspect_ratio : "16:9"),
+      openPaletteForElement: (element) => openPalette({ element }),
+      onSelectedElement: () => {
+        if (view) updateCopilotContext(view.presentation);
+      },
+      onStructure: () => {
+        if (view && inspector.subtab === "slide") renderInspector(view.presentation);
+      },
+      applyI18n,
+    },
+  });
+  canvas.attach();
 
-  function ensureElementHud() {
-    if (elementHud) return elementHud;
-    const wrap = document.querySelector(".stage-wrap");
-    if (!wrap) return null;
-    elementHud = document.createElement("div");
-    elementHud.className = "element-hud";
-    elementHud.id = "element-hud";
-    elementHud.setAttribute("role", "toolbar");
-    elementHud.setAttribute("data-i18n-aria", "elementHud.label");
-    elementHud.hidden = true;
-    elementHud.innerHTML = `
-      <span class="element-hud-tag" id="element-hud-tag"></span>
-      <span class="element-hud-sep" aria-hidden="true"></span>
-      <button type="button" class="element-hud-btn" data-element-action="align-left"
-              data-i18n-title="elementHud.alignLeft" data-i18n-aria="elementHud.alignLeft">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M4 12h10M4 18h13"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="align-center"
-              data-i18n-title="elementHud.alignCenter" data-i18n-aria="elementHud.alignCenter">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M7 12h10M6 18h12"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="align-right"
-              data-i18n-title="elementHud.alignRight" data-i18n-aria="elementHud.alignRight">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M10 12h10M7 18h13"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="padding"
-              data-i18n-title="elementHud.padding" data-i18n-aria="elementHud.padding">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn element-hud-accent" data-element-action="ai"
-              data-i18n-title="elementHud.ai" data-i18n-aria="elementHud.ai">
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="close"
-              data-i18n-title="elementHud.deselect" data-i18n-aria="elementHud.deselect">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="m6 6 12 12M18 6 6 18"/>
-        </svg>
-      </button>`;
-    wrap.append(elementHud);
-    applyI18n(elementHud);
-    elementHud.addEventListener("click", onElementHudClick);
-    return elementHud;
-  }
-
-  function renderElementHud() {
-    const hud = ensureElementHud();
-    if (!hud) return;
-    if (!selectedElement || !els.frame) {
-      hud.hidden = true;
-      return;
-    }
-    const frameRect = els.frame.getBoundingClientRect();
-    const viewport = selectedElement.viewport || { w: frameRect.width, h: frameRect.height };
-    const scale = viewport.w ? frameRect.width / viewport.w : 1;
-    const rect = selectedElement.rect;
-    const left = frameRect.left + rect.x * scale;
-    const top = frameRect.top + rect.y * scale;
-    const width = rect.w * scale;
-
-    hud.hidden = false;
-    const tag = hud.querySelector("#element-hud-tag");
-    if (tag) tag.textContent = `#${selectedElement.id}`;
-    const hudWidth = hud.offsetWidth;
-    const x = Math.min(
-      Math.max(8, left + width / 2 - hudWidth / 2),
-      Math.max(8, window.innerWidth - hudWidth - 8)
-    );
-    const y = Math.max(8, top - hud.offsetHeight - 10);
-    hud.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-  }
-
-  function onElementHudClick(event) {
-    const button = event.target.closest("[data-element-action]");
-    if (!button || !selectedElement) return;
-    const action = button.dataset.elementAction;
-    if (action === "close") {
-      deselectElement();
-    } else if (action === "ai") {
-      openPalette({ element: selectedElement });
-    } else if (action === "padding") {
-      const steps = ["padding: 0.35em 0.5em", "padding: 1.1em 1.4em", "padding: 2em 2.4em"];
-      elementPaddingStep = (elementPaddingStep + 1) % steps.length;
-      applyElementStyle(steps[elementPaddingStep]);
-    } else if (action.startsWith("align-")) {
-      applyElementStyle(`text-align: ${action.slice(6)}`);
-    }
-  }
-
-  function applyElementStyle(style) {
-    if (!selectedElement) return;
-    // Generated handles repeat in every slide, so the edit is always scoped.
-    run("mutate_element", {
-      slide_id: selectedElement.slideId || selectedId,
-      element_id: selectedElement.id,
-      style,
-    });
-  }
-
-  // ---------- images ----------
-
-  /// Canvas size of the open deck, in CSS pixels.
-  function deckSize() {
-    const d = deck();
-    const ratio = d ? d.aspect_ratio : "16:9";
-    if (ratio === "4:3") return { w: 1024, h: 768 };
-    if (ratio === "9:16") return { w: 720, h: 1280 };
-    return { w: 1280, h: 720 };
-  }
-
-  /// Centres a new picture at 60% of the canvas width, keeping its aspect ratio.
-  function placementFor(natural) {
-    const { w: W, h: H } = deckSize();
-    const ratio =
-      natural && natural.w > 0 && natural.h > 0 ? natural.h / natural.w : 9 / 16;
-    let w = Math.round(W * 0.6);
-    let h = Math.round(w * ratio);
-    if (h > H * 0.9) {
-      h = Math.round(H * 0.9);
-      w = Math.round(h / ratio);
-    }
-    return {
-      x: Math.round((W - w) / 2),
-      y: Math.round((H - h) / 2),
-      w: Math.max(16, w),
-      h: Math.max(16, h),
-    };
-  }
-
-  /// Stores the image and appends it to the slide that is on screen.
-  async function insertPastedImage(dataUrl, natural) {
-    if (!dataUrl || !selectedId) return;
-    try {
-      const src = await client.uploadAsset(dataUrl);
-      const rect = placementFor(natural);
-      const inserted = await run("insert_image", {
-        slide_id: selectedId,
-        src,
-        ...rect,
-      });
-      if (inserted) toast(t("toast.imageAdded"));
-    } catch (error) {
-      toast(`${t("toast.error")} — ${error.message}`);
-    }
-  }
-
-  function fileToDataUrl(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error || new Error("could not read the file"));
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function imageSize(dataUrl) {
-    return new Promise((resolve) => {
-      const image = new Image();
-      image.onload = () => resolve({ w: image.naturalWidth, h: image.naturalHeight });
-      image.onerror = () => resolve({ w: 1024, h: 576 });
-      image.src = dataUrl;
-    });
-  }
-
-  /// Paste or drop an image anywhere in the studio shell (the canvas has its own
-  /// listeners inside the iframe, so this only covers the panels).
-  function imageFromClipboard(event) {
-    const items = (event.clipboardData && event.clipboardData.items) || [];
-    for (const item of items) {
-      if (item.type && item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) return file;
-      }
-    }
-    const files = (event.dataTransfer && event.dataTransfer.files) || [];
-    for (const file of files) {
-      if (file.type && file.type.startsWith("image/")) return file;
-    }
-    return null;
-  }
-
-  async function insertFromEvent(event) {
-    const target = event.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-    const file = imageFromClipboard(event);
-    if (!file) return;
-    event.preventDefault();
-    const dataUrl = await fileToDataUrl(file);
-    insertPastedImage(dataUrl, await imageSize(dataUrl));
-  }
-
-  document.addEventListener("paste", insertFromEvent);
-  document.addEventListener("drop", insertFromEvent);
-
-  /// Persists the rectangle the canvas reported after a drag or a resize.
-  function commitGeometry(elementId, rect) {
-    if (!elementId || !rect || !selectedId) return;
-    run("set_geometry", {
-      slide_id: selectedId,
-      element_id: elementId,
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      w: Math.round(rect.w),
-      h: Math.round(rect.h),
-    });
+  function selectElementById(id) {
+    canvas.selectById(id);
   }
 
   function deselectElement() {
-    const id = selectedElement && selectedElement.id;
-    selectedElement = null;
-    renderElementHud();
-    if (view) updateCopilotContext(view.presentation);
-    if (id && els.frame && els.frame.contentWindow) {
-      els.frame.contentWindow.postMessage({ __slyde: true, type: "clear-selection" }, "*");
-    }
-  }
-
-  function handleStageMessage(event) {
-    if (!els.frame || event.source !== els.frame.contentWindow) return;
-    const data = event.data;
-    if (!data || data.__slyde !== true) return;
-    if (data.type === "select") {
-      const changed = !selectedElement || selectedElement.id !== data.id;
-      selectedElement = { ...data, slideId: selectedId };
-      elementPaddingStep = 0;
-      renderElementHud();
-      if (view) updateCopilotContext(view.presentation);
-      // Pull focus back to the studio so its shortcuts keep working. Skip it
-      // on the second click of a double-click and while editing, otherwise the
-      // sandbox loses focus mid-edit and commits immediately.
-      if (changed && !elementEditing) {
-        document.body.tabIndex = -1;
-        document.body.focus({ preventScroll: true });
-      }
-    } else if (data.type === "editing") {
-      elementEditing = true;
-    } else if (data.type === "deselect") {
-      elementEditing = false;
-      selectedElement = null;
-      renderElementHud();
-      if (view) updateCopilotContext(view.presentation);
-    } else if (data.type === "text") {
-      elementEditing = false;
-      const id = data.id;
-      const value = typeof data.value === "string" ? data.value : "";
-      if (id) {
-        run("mutate_element", {
-          slide_id: selectedId,
-          element_id: id,
-          text: value,
-        });
-      }
-    } else if (data.type === "image-paste") {
-      insertPastedImage(data.dataUrl, data.natural);
-    } else if (data.type === "image-geometry") {
-      commitGeometry(data.id, data.rect);
-    } else if (data.type === "tree") {
-      structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
-      if (view && inspector.subtab === "slide") renderInspector(view.presentation);
-    }
-  }
-
-  window.addEventListener("message", handleStageMessage);
-
-  els.frame.addEventListener("load", () => {
-    if (selectedElement && els.frame.contentWindow) {
-      els.frame.contentWindow.postMessage(
-        { __slyde: true, type: "select-by-id", id: selectedElement.id },
-        "*"
-      );
-    }
-  });
-
-  function selectElementById(id) {
-    if (!id || !els.frame || !els.frame.contentWindow) return;
-    els.frame.contentWindow.postMessage({ __slyde: true, type: "select-by-id", id }, "*");
+    canvas.clearSelection();
   }
 
   function renderChips(d) {
@@ -1065,10 +799,7 @@ function boot(sessionToken) {
     actions: {
       command: run,
       selectElement: selectElementById,
-      pickImage: async (file) => {
-        const dataUrl = await fileToDataUrl(file);
-        await insertPastedImage(dataUrl, await imageSize(dataUrl));
-      },
+      pickImage: (file) => canvas.insertFile(file),
       saveDeck: () => {
         const link = document.createElement("a");
         link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
@@ -1131,8 +862,8 @@ function boot(sessionToken) {
     inspector.render({
       deck: d,
       slide: slide(),
-      selectedElement,
-      structureNodes,
+      selectedElement: canvas.selectedElement,
+      structureNodes: canvas.structureNodes,
     });
   }
 
@@ -1291,10 +1022,7 @@ function boot(sessionToken) {
   onLangChange(() => {
     syncLangButtons();
     applyI18n();
-    if (elementHud) {
-      applyI18n(elementHud);
-      renderElementHud();
-    }
+    if (canvas.selectedElement) canvas.refreshHud();
     if (view) {
       storyboard.invalidate();
       applyView(view);
@@ -2009,7 +1737,7 @@ function boot(sessionToken) {
     if (!payload.view) return;
     stageKey = "";
     storyboard.invalidate();
-    selectedElement = null;
+    canvas.clearSelection({ notifySandbox: false });
     selectedId = payload.view.presentation.slides[0]?.id || "";
     applyView(payload.view);
   }
@@ -2142,7 +1870,7 @@ function boot(sessionToken) {
       copilot = mountCopilot({
         client,
         getSelectedSlideId: () => selectedId,
-        getSelectedElementId: () => (selectedElement ? selectedElement.id : null),
+        getSelectedElementId: () => (canvas.selectedElement ? canvas.selectedElement.id : null),
         notify: toast,
         getDeckId: () => activeDeckId,
       });
