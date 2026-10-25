@@ -41,6 +41,9 @@ pub enum CoreError {
     #[error("element {element_id} has no inner content to replace (void or self-closing tag)")]
     ElementHasNoContent { element_id: String },
 
+    #[error("invalid animation: {0}")]
+    InvalidAnimation(String),
+
     #[error("invalid project: {0}")]
     InvalidProject(String),
 }

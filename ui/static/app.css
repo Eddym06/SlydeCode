@@ -3207,3 +3207,135 @@ details.dev[open] summary::before {
   white-space: nowrap;
   min-width: 0;
 }
+/* ---------- Animation step editor (inspector) ---------- */
+.anim-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.anim-step {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.anim-step-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.anim-step-head .step-index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-subtle);
+  width: 14px;
+  flex: 0 0 auto;
+}
+
+.anim-kind {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 0 4px;
+}
+
+.anim-btn,
+.anim-step-head .step-play {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.anim-btn:hover:not(:disabled),
+.anim-step-head .step-play:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.anim-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.anim-btn-danger:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.anim-step-fields {
+  display: flex;
+  gap: 6px;
+}
+
+.anim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.anim-field span {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-subtle);
+  white-space: nowrap;
+}
+
+.anim-field-target {
+  flex: 1 1 auto;
+}
+
+.anim-input {
+  width: 100%;
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 0 6px;
+}
+
+.anim-field:not(.anim-field-target) .anim-input {
+  width: 62px;
+}
+
+.anim-add {
+  width: 100%;
+  height: 28px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.anim-add:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}

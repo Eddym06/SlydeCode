@@ -218,6 +218,10 @@ pub enum UiCommand {
         #[serde(default)]
         html: Option<String>,
     },
+    SetAnimation {
+        slide_id: String,
+        animation: Vec<slyde_core::AnimationStep>,
+    },
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]

@@ -13,6 +13,10 @@ use crate::model::{
 pub const DEFAULT_MAX_HISTORY: usize = 100;
 pub const DEFAULT_MAX_SLIDES: usize = 200;
 pub const DEFAULT_MAX_CODE_BYTES: usize = 512 * 1024;
+/// A slide reveals in a handful of beats, never in a parade of effects.
+pub const MAX_ANIMATION_STEPS: usize = 24;
+pub const MAX_ANIMATION_DURATION_MS: u32 = 5000;
+pub const MAX_ANIMATION_DELAY_MS: u32 = 10000;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -276,6 +280,7 @@ impl PresentationState {
         // Every block gets a persistent handle so the canvas and the tools agree
         // on what "this element" means.
         let code = crate::html::ensure_element_ids(&code);
+        validate_animation(&animation)?;
 
         let mut next = self.presentation().clone();
 
@@ -351,6 +356,24 @@ impl PresentationState {
         Ok(to)
     }
 
+    /// Replaces every animation step on a slide, as edited in the inspector.
+    pub fn set_animation(
+        &mut self,
+        slide_id: &str,
+        steps: Vec<AnimationStep>,
+    ) -> Result<(), CoreError> {
+        let mut next = self.presentation().clone();
+        let slide = next
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+            .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
+        validate_animation(&steps)?;
+        slide.animation = steps;
+        self.commit("set_animation", next);
+        Ok(())
+    }
+
     /// Read-only lookup used by the server to answer `trigger_animation`.
     pub fn animation_step(
         &self,
@@ -394,6 +417,42 @@ impl PresentationState {
 
 pub fn new_slide_id() -> SlideId {
     format!("sld_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// Shared guard for authored and hand-edited timelines.
+pub fn validate_animation(steps: &[AnimationStep]) -> Result<(), CoreError> {
+    if steps.len() > MAX_ANIMATION_STEPS {
+        return Err(CoreError::InvalidAnimation(format!(
+            "at most {MAX_ANIMATION_STEPS} steps per slide"
+        )));
+    }
+    for (index, step) in steps.iter().enumerate() {
+        if step.target.trim().is_empty() {
+            return Err(CoreError::InvalidAnimation(format!(
+                "step {} needs a target selector",
+                index + 1
+            )));
+        }
+        if step.duration_ms == 0 || step.duration_ms > MAX_ANIMATION_DURATION_MS {
+            return Err(CoreError::InvalidAnimation(format!(
+                "step {} duration must be between 1 and {MAX_ANIMATION_DURATION_MS} ms",
+                index + 1
+            )));
+        }
+        if step.delay_ms > MAX_ANIMATION_DELAY_MS {
+            return Err(CoreError::InvalidAnimation(format!(
+                "step {} delay cannot exceed {MAX_ANIMATION_DELAY_MS} ms",
+                index + 1
+            )));
+        }
+        if step.easing.trim().is_empty() {
+            return Err(CoreError::InvalidAnimation(format!(
+                "step {} needs an easing curve",
+                index + 1
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Byte ranges of an element's opening tag and, when it has content, its inner
@@ -577,6 +636,53 @@ mod tests {
             duration_ms: 400,
             easing: "ease-out".into(),
         }
+    }
+
+    #[test]
+    fn set_animation_replaces_reorders_and_validates_steps() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1 class=\"title\">A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        s.set_animation("sld1", vec![step(".title"), step(".sub")])
+            .unwrap();
+        assert_eq!(s.presentation().slides[0].animation.len(), 2);
+        assert!(s.can_undo());
+
+        // Reordering is just a new array.
+        s.set_animation("sld1", vec![step(".sub"), step(".title")])
+            .unwrap();
+        assert_eq!(s.presentation().slides[0].animation[0].target, ".sub");
+
+        s.undo().unwrap();
+        assert_eq!(s.presentation().slides[0].animation[0].target, ".title");
+
+        let mut broken = step(".title");
+        broken.target = "   ".into();
+        assert!(matches!(
+            s.set_animation("sld1", vec![broken]),
+            Err(CoreError::InvalidAnimation(_))
+        ));
+
+        let too_long = AnimationStep {
+            duration_ms: MAX_ANIMATION_DURATION_MS + 1,
+            ..step(".title")
+        };
+        assert!(matches!(
+            s.set_animation("sld1", vec![too_long]),
+            Err(CoreError::InvalidAnimation(_))
+        ));
+
+        assert!(matches!(
+            s.set_animation("missing", vec![]),
+            Err(CoreError::SlideNotFound(_))
+        ));
     }
 
     #[test]

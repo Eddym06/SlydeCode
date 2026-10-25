@@ -48,7 +48,7 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
 - Copilot provider path: `cargo test -p slyde-server` covers catalog endpoints, model normalization/free flags, key rejection before network, attachment extraction, tool schemas, OpenAI fragmented tool calls, Anthropic streaming (including parallel tool results in one user turn) and deck-summary context.
 - Copilot browser E2E: provider config/key/model responses are mocked with CDP `Fetch.fulfillRequest`, so the suite proves the eight-provider sheet, key form focus, model search, Free filter, selection persistence, attachment chip/remove, and typed SSE text + tool rows + completion announcement without a real key or network.
-- UI suite: 23 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 15 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
+- UI suite: 24 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 16 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, the animation timeline editor, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
 
 ## In Progress
 - Real-provider manual validation (needs user keys): OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, DeepSeek and NVIDIA. Endpoints and wire formats are unit-tested/mocked; vendor-specific tool-calling quirks are not yet proven in this environment.
@@ -103,6 +103,7 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] Manual animation editor in the inspector: add, edit kind/target/delay/duration, reorder and remove steps (`set_animation`, validated) — 2026-10-25
 - [x] Presenter reveal steps advance one per click/arrow again (first step on slide entry); authoring contract now matches behaviour — 2026-10-25
 - [x] Plan phases A–D: bimodal canvas, `⌘K` palette, KaTeX/hljs/Mermaid rendering, teleprompter pace, structure tree — 2026-10-25
 - [x] Spec audit + fixes: `mutate_element` nested-markup corruption, `get_selected_element` payload, honest `search_asset`/`generate_image` contracts, truthful technical-slide prompt — 2026-10-24

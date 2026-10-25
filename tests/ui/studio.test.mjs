@@ -1211,6 +1211,67 @@ test("renders code, math and diagrams inside the sandbox", async () => {
   }
 });
 
+test("edits the animation timeline from the inspector", async () => {
+  await page.evaluate(`document.querySelectorAll(".thumb")[0].click(); true`);
+  await sleep(600);
+
+  const readSteps = async () => {
+    const state = await page.evaluate(
+      `fetch("/api/state?t=${token}").then((r) => r.json())`
+    );
+    return state.view.presentation.slides[0].animation;
+  };
+
+  const before = await readSteps();
+
+  // Add two steps so there is something to reorder.
+  for (let index = 0; index < 2; index += 1) {
+    await page.evaluate(`document.getElementById("anim-add").click(); true`);
+    await sleep(500);
+  }
+  const added = await readSteps();
+  assert.equal(added.length, before.length + 2, "add step appends one each time");
+
+  // Change the kind of the last step.
+  await page.evaluate(`(() => {
+    const rows = document.querySelectorAll(".anim-step");
+    const row = rows[rows.length - 1];
+    const select = row.querySelector('[data-field="kind"]');
+    select.value = "pulse";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(600);
+  let steps = await readSteps();
+  assert.equal(steps[steps.length - 1].kind, "pulse", "the kind is editable");
+
+  // Move it up one place.
+  await page.evaluate(`(() => {
+    const rows = document.querySelectorAll(".anim-step");
+    const row = rows[rows.length - 1];
+    row.querySelector('[data-move="-1"]').click();
+    return true;
+  })()`);
+  await sleep(600);
+  steps = await readSteps();
+  assert.equal(steps.length, added.length, "reordering keeps the count");
+  assert.equal(
+    steps[steps.length - 2].kind,
+    "pulse",
+    "the moved step is no longer last"
+  );
+
+  // Remove the last step.
+  await page.evaluate(`(() => {
+    const rows = document.querySelectorAll(".anim-step");
+    rows[rows.length - 1].querySelector("[data-remove]").click();
+    return true;
+  })()`);
+  await sleep(600);
+  steps = await readSteps();
+  assert.equal(steps.length, added.length - 1, "remove drops one step");
+});
+
 test("meets the accessibility baseline: names, focus ring and AA contrast", async () => {
   // Start from a known point in the tab order, then move with the keyboard so
   // Chrome applies :focus-visible exactly as a real keyboard user would see it.

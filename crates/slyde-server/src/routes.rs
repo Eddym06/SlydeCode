@@ -244,6 +244,10 @@ async fn apply_command(
         } => core
             .mutate_element(&element_id, text, style, html)
             .map(|_| None),
+        UiCommand::SetAnimation {
+            slide_id,
+            animation,
+        } => core.set_animation(&slide_id, animation).map(|_| None),
     }
 }
 

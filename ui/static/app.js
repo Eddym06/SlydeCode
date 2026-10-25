@@ -1001,8 +1001,145 @@ function boot(sessionToken) {
     });
   }
 
-  function renderInspector(d) {
-    const active = document.activeElement;
+  // ---------- Animation editor ----------
+  // The AI authors `animation` through `upsert_slide`; this is the manual
+  // counterpart, so a human can add, tune, reorder or drop steps without asking
+  // the model to rewrite the whole slide.
+
+  const ANIMATION_KINDS = [
+    "fade_up",
+    "fade",
+    "scale_in",
+    "slide_in_left",
+    "slide_in_right",
+    "typewriter",
+    "spin",
+    "rotate_in",
+    "pulse",
+    "flip_up",
+    "blur_in",
+    "bounce_in",
+  ];
+  const DEFAULT_EASING = "cubic-bezier(.16,1,.3,1)";
+
+  function renderAnimationEditor(current) {
+    const rows = current.animation
+      .map(
+        (step, index) => `
+        <div class="anim-step" data-index="${index}" data-easing="${escapeHtml(step.easing || DEFAULT_EASING)}">
+          <div class="anim-step-head">
+            <span class="step-index">${index + 1}</span>
+            <select class="anim-kind" data-field="kind" aria-label="${escapeHtml(t("inspector.stepKind"))}">
+              ${ANIMATION_KINDS.map(
+                (kind) =>
+                  `<option value="${kind}"${kind === step.kind ? " selected" : ""}>${kind}</option>`
+              ).join("")}
+            </select>
+            <button type="button" class="step-play" data-play="${index}"
+                    data-i18n-title="action.play" aria-label="${escapeHtml(t("action.play"))}">▶</button>
+            <button type="button" class="anim-btn" data-move="-1"
+                    data-i18n-title="animation.moveUp" aria-label="${escapeHtml(t("animation.moveUp"))}"
+                    ${index === 0 ? "disabled" : ""}>↑</button>
+            <button type="button" class="anim-btn" data-move="1"
+                    data-i18n-title="animation.moveDown" aria-label="${escapeHtml(t("animation.moveDown"))}"
+                    ${index === current.animation.length - 1 ? "disabled" : ""}>↓</button>
+            <button type="button" class="anim-btn anim-btn-danger" data-remove="${index}"
+                    data-i18n-title="animation.remove" aria-label="${escapeHtml(t("animation.remove"))}">✕</button>
+          </div>
+          <div class="anim-step-fields">
+            <label class="anim-field anim-field-target">
+              <span>${escapeHtml(t("inspector.stepTarget"))}</span>
+              <input class="anim-input" data-field="target" value="${escapeHtml(step.target)}"
+                     spellcheck="false" autocomplete="off">
+            </label>
+            <label class="anim-field">
+              <span>${escapeHtml(t("inspector.stepDelay"))}</span>
+              <input class="anim-input" type="number" data-field="delay" value="${step.delay_ms}"
+                     min="0" max="10000" step="10">
+            </label>
+            <label class="anim-field">
+              <span>${escapeHtml(t("inspector.stepDuration"))}</span>
+              <input class="anim-input" type="number" data-field="duration" value="${step.duration_ms}"
+                     min="1" max="5000" step="10">
+            </label>
+          </div>
+        </div>`
+      )
+      .join("");
+
+    return `
+      <div class="anim-editor" id="anim-editor">
+        ${rows || `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`}
+        <button type="button" class="anim-add" id="anim-add">+ ${escapeHtml(t("inspector.addStep"))}</button>
+      </div>`;
+  }
+
+  function bindAnimationEditor(current) {
+    const editor = $("anim-editor");
+    if (!editor) return;
+
+    const collect = () =>
+      [...editor.querySelectorAll(".anim-step")].map((row) => ({
+        kind: row.querySelector('[data-field="kind"]').value,
+        target: row.querySelector('[data-field="target"]').value.trim(),
+        delay_ms: Math.max(0, Number(row.querySelector('[data-field="delay"]').value) || 0),
+        duration_ms: Math.max(1, Number(row.querySelector('[data-field="duration"]').value) || 520),
+        easing: row.dataset.easing || DEFAULT_EASING,
+      }));
+
+    const save = (animation) =>
+      run("set_animation", { slide_id: current.id, animation });
+
+    editor.addEventListener("change", (event) => {
+      if (!event.target.matches("[data-field]")) return;
+      save(collect());
+    });
+
+    editor.addEventListener("click", (event) => {
+      const play = event.target.closest("[data-play]");
+      if (play) {
+        run("trigger_animation", {
+          slide_id: current.id,
+          step_index: Number(play.dataset.play),
+        });
+        return;
+      }
+
+      const remove = event.target.closest("[data-remove]");
+      if (remove) {
+        const steps = collect();
+        steps.splice(Number(remove.dataset.remove), 1);
+        save(steps);
+        return;
+      }
+
+      const move = event.target.closest("[data-move]");
+      if (move) {
+        const steps = collect();
+        const from = Number(move.closest(".anim-step").dataset.index);
+        const to = from + Number(move.dataset.move);
+        if (to < 0 || to >= steps.length) return;
+        const [moved] = steps.splice(from, 1);
+        steps.splice(to, 0, moved);
+        save(steps);
+        return;
+      }
+
+      if (event.target.closest("#anim-add")) {
+        const steps = collect();
+        steps.push({
+          kind: "fade_up",
+          target: ".title",
+          delay_ms: 90,
+          duration_ms: 560,
+          easing: DEFAULT_EASING,
+        });
+        save(steps);
+      }
+    });
+  }
+
+  function renderInspector(d) {    const active = document.activeElement;
     const notesFocused = active && active.classList && active.classList.contains("notes");
 
     const current = slide();
@@ -1082,20 +1219,7 @@ function boot(sessionToken) {
 
     if (els.subtabSlide) els.subtabSlide.disabled = false;
 
-    const steps = current.animation.length
-      ? `<div class="steps">${current.animation
-          .map(
-            (step, index) => `
-          <div class="step-row">
-            <span class="step-index">${index + 1}</span>
-            <span class="step-name">${escapeHtml(step.kind)}
-              <span class="step-target">${escapeHtml(step.target)}</span>
-            </span>
-            <button type="button" class="step-play" data-play="${index}">${escapeHtml(t("action.play"))}</button>
-          </div>`
-          )
-          .join("")}</div>`
-      : `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`;
+    const steps = renderAnimationEditor(current);
 
     const slideSection = `
       <section class="field">
@@ -1183,12 +1307,7 @@ function boot(sessionToken) {
       });
     }
 
-    els.inspector.querySelectorAll("[data-play]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const stepIndex = Number(button.dataset.play);
-        run("trigger_animation", { slide_id: current.id, step_index: stepIndex });
-      });
-    });
+    bindAnimationEditor(current);
 
     const remove = $("delete-slide");
     if (remove) {
