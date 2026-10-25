@@ -173,7 +173,10 @@ impl CopilotState {
             _ => request.bearer_auth(key),
         };
 
-        let response = request.send().await.map_err(|_| CopilotError::Network)?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| CopilotError::from_network(&error))?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();

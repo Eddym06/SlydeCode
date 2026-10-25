@@ -54,7 +54,10 @@ async fn post(
         request = request.header("X-Title", "SlydeCode");
     }
 
-    let response = request.send().await.map_err(|_| CopilotError::Network)?;
+    let response = request
+        .send()
+        .await
+        .map_err(|error| CopilotError::from_network(&error))?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
@@ -104,15 +107,15 @@ async fn stream_openai(
     .await?;
 
     let tool_calls = state.finish()?;
-    let text = if state.text.trim().is_empty() && !state.reasoning.trim().is_empty() && tool_calls.is_empty() {
+    let text = if state.text.trim().is_empty()
+        && !state.reasoning.trim().is_empty()
+        && tool_calls.is_empty()
+    {
         state.reasoning
     } else {
         state.text
     };
-    Ok(Turn::Assistant {
-        text,
-        tool_calls,
-    })
+    Ok(Turn::Assistant { text, tool_calls })
 }
 
 async fn stream_anthropic(
@@ -151,15 +154,15 @@ async fn stream_anthropic(
     .await?;
 
     let tool_calls = state.finish();
-    let text = if state.text.trim().is_empty() && !state.reasoning.trim().is_empty() && tool_calls.is_empty() {
+    let text = if state.text.trim().is_empty()
+        && !state.reasoning.trim().is_empty()
+        && tool_calls.is_empty()
+    {
         state.reasoning
     } else {
         state.text
     };
-    Ok(Turn::Assistant {
-        text,
-        tool_calls,
-    })
+    Ok(Turn::Assistant { text, tool_calls })
 }
 
 async fn consume_sse(
@@ -173,7 +176,7 @@ async fn consume_sse(
         if tx.is_closed() {
             return Err(CopilotError::Cancelled);
         }
-        let bytes = chunk.map_err(|_| CopilotError::Network)?;
+        let bytes = chunk.map_err(|error| CopilotError::from_network(&error))?;
         buffer.push_str(&String::from_utf8_lossy(&bytes));
         while let Some(index) = buffer.find('\n') {
             let line = buffer[..index].trim_end_matches('\r').to_string();
@@ -396,7 +399,11 @@ impl OpenAiAccum {
             }
         }
         if let Some(reasoning) = delta
-            .and_then(|delta| delta.get("reasoning_content").or_else(|| delta.get("reasoning")))
+            .and_then(|delta| {
+                delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+            })
             .and_then(Value::as_str)
         {
             if !reasoning.is_empty() {

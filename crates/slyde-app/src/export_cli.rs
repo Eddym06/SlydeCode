@@ -128,7 +128,9 @@ pub async fn run(args: &[String]) -> Result<(), String> {
                 .iter()
                 .map(|id| SlideTarget {
                     id: id.clone(),
-                    url: format!("{sandbox}/s/{id}?static=1"),
+                    // Slide documents are authenticated: the CLI already holds the
+                    // session token, and `/s/{id}` accepts it.
+                    url: format!("{sandbox}/s/{id}?static=1&t={}", runtime.token),
                 })
                 .collect();
             export_png(

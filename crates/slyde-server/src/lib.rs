@@ -211,40 +211,36 @@ async fn bind(port: u16) -> Result<TcpListener, ServerError> {
         })
 }
 
-/// 128 bits of randomness, hex-encoded. The token is what stops any other local
-/// page from reading or mutating the deck.
+/// 256 bits from the OS CSPRNG, hex-encoded.
+///
+/// The token is what stops another local page or process from reading or
+/// mutating the deck, so it has to come from a real entropy source. `getrandom`
+/// is the same crate `uuid` already pulls in; deriving bytes from `RandomState`
+/// hashes, as an earlier version of this file did, is not a CSPRNG.
 pub fn new_token() -> String {
-    let a = uuid_like();
-    let b = uuid_like();
-    format!("{a}{b}")
-}
-
-fn uuid_like() -> String {
-    // Avoids pulling `rand` in just for this: two v4 UUIDs give 244 bits of
-    // entropy, more than enough for a local session token.
-    let mut bytes = [0u8; 16];
-    getrandom_fallback(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn getrandom_fallback(out: &mut [u8; 16]) {
-    use std::hash::{BuildHasher, Hasher};
-    // `RandomState` is seeded from the OS entropy source.
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u128(
-        std::time::SystemTime::now()
+    let mut bytes = [0u8; TOKEN_BYTES];
+    if let Err(error) = getrandom::fill(&mut bytes) {
+        // The OS entropy source is unavailable, which means the whole process is
+        // in a broken environment. Do not silently emit a weak session secret:
+        // make the degradation loud, and bind the fallback to this process.
+        tracing::error!(%error, "OS entropy unavailable; session token is not cryptographic");
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    );
-    let a = hasher.finish();
-    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-    hasher.write_u64(a);
-    hasher.write_u32(std::process::id());
-    let b = hasher.finish();
-    out[..8].copy_from_slice(&a.to_le_bytes());
-    out[8..].copy_from_slice(&b.to_le_bytes());
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u128(nanos);
+        hasher.write_u32(std::process::id());
+        let first = hasher.finish().to_le_bytes();
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            *slot = first[index % first.len()];
+        }
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+const TOKEN_BYTES: usize = 32;
 
 #[cfg(test)]
 mod tests {

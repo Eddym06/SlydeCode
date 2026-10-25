@@ -55,7 +55,7 @@ pub fn definitions() -> Vec<ToolDef> {
                     "type": "object",
                     "properties": {
                         "title": { "type": "string", "description": "Deck title, sentence case." },
-                        "theme": { "type": "string", "enum": ["studio", "paper", "night"] },
+                        "theme": { "type": "string", "enum": slyde_core::THEME_IDS },
                         "aspect_ratio": { "type": "string", "enum": ["16:9", "4:3", "9:16"] }
                     },
                     "required": ["title", "theme", "aspect_ratio"],
@@ -70,7 +70,7 @@ pub fn definitions() -> Vec<ToolDef> {
                 json!({
                     "type": "object",
                     "properties": {
-                        "index": { "type": "integer", "minimum": 0 },
+                        "index": { "type": "integer", "minimum": 0, "description": "Insertion position. Required only when inserting; ignored when slide_id matches an existing slide." },
                         "slide_id": { "type": "string", "description": "Existing slide id when replacing; omit to insert." },
                         "html_code": { "type": "string", "description": "Inner HTML and an optional <style> block. No document wrapper." },
                         "template": { "type": "string", "enum": ["hero", "bullet", "diagram", "chart", "image_layout", "code"] },
@@ -81,7 +81,7 @@ pub fn definitions() -> Vec<ToolDef> {
                                 "type": "object",
                                 "properties": {
                                     "target": { "type": "string", "description": "CSS selector inside the slide." },
-                                    "kind": { "type": "string", "enum": ["fade_up", "fade", "scale_in", "slide_in_left", "slide_in_right", "typewriter"] },
+                                    "kind": { "type": "string", "enum": slyde_core::ANIMATION_KIND_IDS },
                                     "delay_ms": { "type": "integer", "minimum": 0, "maximum": 3000 },
                                     "duration_ms": { "type": "integer", "minimum": 120, "maximum": 2000 },
                                     "easing": { "type": "string" }
@@ -91,7 +91,7 @@ pub fn definitions() -> Vec<ToolDef> {
                             }
                         }
                     },
-                    "required": ["index", "html_code", "template"],
+                    "required": ["html_code", "template"],
                     "additionalProperties": false
                 })
             },
@@ -155,12 +155,13 @@ pub fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             name: MUTATE_ELEMENT,
-            description: "Apply surgical edits (text, styles, inner HTML) to a specific element by ID (e.g. #title-1) without re-rendering or altering the rest of the slide.",
+            description: "Apply surgical edits (text, styles, inner HTML) to a specific element by ID (e.g. #title-1) without re-rendering or altering the rest of the slide. Always pass slide_id: generated handles repeat in every slide, so an unscoped id that matches several slides is rejected.",
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "element_id": { "type": "string", "description": "Element ID inside the slide document." },
+                        "slide_id": { "type": "string", "description": "Slide that owns the element. Required when the id is not unique across the deck." },
                         "text": { "type": "string", "description": "Replacement plain text content." },
                         "style": { "type": "string", "description": "CSS style directives to add/update." },
                         "html": { "type": "string", "description": "Replacement inner HTML snippet." }
@@ -356,13 +357,15 @@ fn outcome_to_tool(name: &str, outcome: AgentOutcome) -> ToolOutcome {
     let slide_id = outcome
         .upsert
         .as_ref()
-        .map(|upsert| upsert.slide_id.clone());
+        .map(|upsert| upsert.slide_id.clone())
+        .or_else(|| outcome.mutated_slide_id.clone());
     let slide_index = outcome.upsert.as_ref().map(|upsert| upsert.index);
     let result = json!({
         "ok": true,
         "tool": name,
         "created": outcome.created,
         "upsert": outcome.upsert,
+        "slide_id": outcome.mutated_slide_id,
         "animation": outcome.animation.is_some(),
     });
     ToolOutcome {
@@ -426,10 +429,8 @@ fn one_line_preview(code: &str) -> String {
                     out.pop();
                 }
             }
-            _ if !in_tag => {
-                if !ch.is_whitespace() || !out.ends_with(' ') {
-                    out.push(if ch.is_whitespace() { ' ' } else { ch });
-                }
+            _ if !in_tag && (!ch.is_whitespace() || !out.ends_with(' ')) => {
+                out.push(if ch.is_whitespace() { ' ' } else { ch });
             }
             _ => {}
         }
@@ -490,6 +491,40 @@ mod tests {
             assert!(schema.get("properties").is_some());
             assert_eq!(schema["additionalProperties"], false);
         }
+    }
+
+    /// Same guard as the MCP surface: these schemas are what the model is allowed
+    /// to send, so they must carry every kind and theme the core accepts.
+    #[test]
+    fn schemas_expose_the_full_core_contract() {
+        let upsert = definitions()
+            .into_iter()
+            .find(|tool| tool.name == UPSERT_SLIDE)
+            .unwrap();
+        let schema = (upsert.schema)();
+        let kinds = schema["properties"]["animation"]["items"]["properties"]["kind"]["enum"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            kinds.len(),
+            slyde_core::ANIMATION_KIND_IDS.len(),
+            "the model cannot use kinds the schema hides"
+        );
+
+        let create = definitions()
+            .into_iter()
+            .find(|tool| tool.name == CREATE_PRESENTATION)
+            .unwrap();
+        let schema = (create.schema)();
+        let themes = schema["properties"]["theme"]["enum"].as_array().unwrap();
+        assert_eq!(themes.len(), slyde_core::THEME_IDS.len());
+
+        let mutate = definitions()
+            .into_iter()
+            .find(|tool| tool.name == MUTATE_ELEMENT)
+            .unwrap();
+        let schema = (mutate.schema)();
+        assert_eq!(schema["properties"]["slide_id"]["type"], "string");
     }
 
     #[test]

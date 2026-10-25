@@ -24,8 +24,8 @@ pub fn definitions() -> Value {
                     "title": { "type": "string", "description": "Deck title, shown in the studio header." },
                     "theme": {
                         "type": "string",
-                        "enum": ["studio", "paper", "night"],
-                        "description": "Visual theme. studio = warm dark, paper = warm light, night = deep indigo."
+                        "enum": slyde_core::THEME_IDS,
+                        "description": "Visual theme id. studio = warm dark, paper = warm light, night = deep indigo, terminal = dark mono, academic = light serif, pitch = deep blue."
                     },
                     "aspect_ratio": {
                         "type": "string",
@@ -43,7 +43,7 @@ pub fn definitions() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "index": { "type": "integer", "minimum": 0, "description": "Insertion position, 0-based. Use the slide count to append." },
+                    "index": { "type": "integer", "minimum": 0, "description": "Insertion position, 0-based. Use the slide count to append. Required only when inserting; ignored when slide_id matches an existing slide." },
                     "slide_id": { "type": "string", "description": "Stable id. Omit to let the server generate one; pass the id returned by a previous call to update that slide." },
                     "html_code": {
                         "type": "string",
@@ -63,7 +63,7 @@ pub fn definitions() -> Value {
                                 "target": { "type": "string", "description": "CSS selector, e.g. .title or [data-anim=bar]" },
                                 "kind": {
                                     "type": "string",
-                                    "enum": ["fade_up", "fade", "scale_in", "slide_in_left", "slide_in_right", "typewriter"]
+                                    "enum": slyde_core::ANIMATION_KIND_IDS
                                 },
                                 "delay_ms": { "type": "integer", "minimum": 0, "default": 0 },
                                 "duration_ms": { "type": "integer", "minimum": 0, "default": 520 },
@@ -74,7 +74,7 @@ pub fn definitions() -> Value {
                         }
                     }
                 },
-                "required": ["index", "html_code"],
+                "required": ["html_code"],
                 "additionalProperties": false
             }
         },
@@ -148,11 +148,12 @@ pub fn definitions() -> Value {
         },
         {
             "name": "mutate_element",
-            "description": "Apply surgical style, layout, inner HTML or text changes to a specific component element without reloading the entire slide.",
+            "description": "Apply surgical style, layout, inner HTML or text changes to a specific component element without reloading the entire slide. Pass slide_id whenever the deck has more than one slide.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "element_id": { "type": "string", "description": "The element ID to mutate." },
+                    "slide_id": { "type": "string", "description": "Slide that owns the element. Required when the id is not unique across the deck: generated handles (slyde-1, slyde-2, …) repeat in every slide, and an unscoped ambiguous id is rejected." },
                     "text": { "type": "string", "description": "New plain text content for the element." },
                     "style": { "type": "string", "description": "CSS style directives to merge into the element style attribute." },
                     "html": { "type": "string", "description": "New inner HTML markup for the element." }
@@ -215,7 +216,7 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                 response
                     .pointer("/view/presentation/title")
                     .and_then(Value::as_str)
-                    .unwrap_or(&title),
+                    .unwrap_or(title),
                 response
                     .pointer("/view/presentation/theme/id")
                     .and_then(Value::as_str)
@@ -224,14 +225,21 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
         }
 
         "upsert_slide" => {
-            let index = require_u64(args, "index")?;
+            let slide_id = optional_str(args, "slide_id").map(str::to_string);
+            // `index` only matters when inserting. Replacing by id ignores it, so
+            // an agent that already knows the id never has to invent one.
+            let index = match require_u64(args, "index") {
+                Ok(index) => index,
+                Err(_) if slide_id.is_some() => 0,
+                Err(err) => return Err(err),
+            };
             let html_code = require_str(args, "html_code")?;
             let mut command = json!({
                 "action": "upsert_slide",
                 "index": index,
                 "html_code": html_code
             });
-            if let Some(slide_id) = optional_str(args, "slide_id") {
+            if let Some(slide_id) = slide_id {
                 command["slide_id"] = json!(slide_id);
             }
             if let Some(template) = optional_str(args, "template") {
@@ -340,6 +348,14 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                 .and_then(Value::as_str)
                 .and_then(slyde_core::AspectRatio::parse)
                 .unwrap_or_default();
+            // `/s/{id}` requires a token; the state response publishes the one
+            // meant for slide documents, with the session token as a fallback.
+            let slide_token = state
+                .get("sandbox_token")
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| runtime.token.clone());
             let slides: Vec<slyde_export::SlideTarget> = deck
                 .get("slides")
                 .and_then(Value::as_array)
@@ -350,8 +366,8 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                         .map(|id| slyde_export::SlideTarget {
                             id: id.to_string(),
                             url: format!(
-                                "http://127.0.0.1:{}/s/{}?static=1",
-                                runtime.sandbox_port, id
+                                "http://127.0.0.1:{}/s/{}?static=1&t={}",
+                                runtime.sandbox_port, id, slide_token
                             ),
                         })
                         .collect()
@@ -431,9 +447,7 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                             })
                         });
                     let code = s.get("code").and_then(Value::as_str).unwrap_or("");
-                    let marker = code
-                        .find(&id_needle)
-                        .or_else(|| code.find(&data_needle));
+                    let marker = code.find(&id_needle).or_else(|| code.find(&data_needle));
                     if structured.is_none() && marker.is_none() {
                         continue;
                     }
@@ -454,7 +468,8 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
             Ok(json!({
                 "element_id": element_id,
                 "found": false
-            }).to_string())
+            })
+            .to_string())
         }
 
         "mutate_element" => {
@@ -463,6 +478,9 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                 "action": "mutate_element",
                 "element_id": element_id
             });
+            if let Some(slide_id) = optional_str(args, "slide_id") {
+                command["slide_id"] = json!(slide_id);
+            }
             if let Some(t) = optional_str(args, "text") {
                 command["text"] = json!(t);
             }
@@ -473,7 +491,10 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                 command["html"] = json!(h);
             }
             let res = post(runtime, &command).await?;
-            Ok(format!("Mutated element {element_id} successfully: {res}"))
+            Ok(match res.get("mutated_slide_id").and_then(Value::as_str) {
+                Some(slide) => format!("Mutated element {element_id} on slide {slide}."),
+                None => format!("Mutated element {element_id}."),
+            })
         }
 
         "search_asset" => {
@@ -492,12 +513,24 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
             // Curated SVG icons for common technical & design domains. This set is
             // fixed and offline; there is no catalog or network lookup behind it.
             let icon_result = match query.as_str() {
-                q if q.contains("cloud") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z\"/></svg>",
-                q if q.contains("database") || q.contains("db") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"/><path d=\"M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5\"/><path d=\"M3 12c0 1.66 4 3 9 3s9-1.34 9-3\"/></svg>",
-                q if q.contains("server") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"/><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"/><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"/><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"/></svg>",
-                q if q.contains("arrow") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg>",
-                q if q.contains("code") || q.contains("terminal") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"16 18 22 12 16 6\"/><polyline points=\"8 6 2 12 8 18\"/></svg>",
-                _ => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/></svg>",
+                q if q.contains("cloud") => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z\"/></svg>"
+                }
+                q if q.contains("database") || q.contains("db") => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"/><path d=\"M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5\"/><path d=\"M3 12c0 1.66 4 3 9 3s9-1.34 9-3\"/></svg>"
+                }
+                q if q.contains("server") => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"/><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"/><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"/><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"/></svg>"
+                }
+                q if q.contains("arrow") => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg>"
+                }
+                q if q.contains("code") || q.contains("terminal") => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"16 18 22 12 16 6\"/><polyline points=\"8 6 2 12 8 18\"/></svg>"
+                }
+                _ => {
+                    "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/></svg>"
+                }
             };
             Ok(json!({
                 "query": query,
@@ -506,7 +539,8 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                 "found": true,
                 "svg": icon_result,
                 "usable_markup": format!("<span class=\"slyde-icon\">{}</span>", icon_result)
-            }).to_string())
+            })
+            .to_string())
         }
 
         "generate_image" => {
@@ -589,6 +623,67 @@ mod tests {
     fn required_argument_errors_name_the_argument() {
         let err = require_str(&json!({}), "html_code").unwrap_err();
         assert!(err.0.contains("html_code"));
+    }
+
+    fn tool(name: &str) -> Value {
+        definitions()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} is not published"))
+    }
+
+    /// The MCP schema is the public contract with external agents. It must accept
+    /// exactly what the core validates, never a subset: a model that follows the
+    /// schema must not be rejected for using a kind or theme we support.
+    #[test]
+    fn published_enums_match_the_core_contract() {
+        let upsert = tool("upsert_slide");
+        let kinds = upsert["inputSchema"]["properties"]["animation"]["items"]["properties"]["kind"]
+            ["enum"]
+            .as_array()
+            .unwrap();
+        let expected: Vec<Value> = slyde_core::ANIMATION_KIND_IDS
+            .iter()
+            .map(|id| json!(id))
+            .collect();
+        assert_eq!(kinds, &expected);
+
+        let create = tool("create_presentation");
+        let themes = create["inputSchema"]["properties"]["theme"]["enum"]
+            .as_array()
+            .unwrap();
+        let expected: Vec<Value> = slyde_core::THEME_IDS.iter().map(|id| json!(id)).collect();
+        assert_eq!(themes, &expected);
+    }
+
+    /// Replacing a slide by id must not force the caller to invent an index.
+    #[test]
+    fn upsert_requires_html_only_and_lets_slide_id_replace() {
+        let upsert = tool("upsert_slide");
+        assert_eq!(upsert["inputSchema"]["required"], json!(["html_code"]));
+        assert!(
+            upsert["inputSchema"]["properties"]["index"]["description"]
+                .as_str()
+                .is_some_and(|text| text.contains("ignored"))
+        );
+    }
+
+    #[test]
+    fn mutate_element_documents_the_slide_scope() {
+        let mutate = tool("mutate_element");
+        assert_eq!(
+            mutate["inputSchema"]["properties"]["slide_id"]["type"],
+            "string"
+        );
+        assert!(
+            mutate["description"]
+                .as_str()
+                .is_some_and(|text| text.contains("slide_id")),
+            "the description must tell the agent to scope the edit"
+        );
     }
 
     #[tokio::test]

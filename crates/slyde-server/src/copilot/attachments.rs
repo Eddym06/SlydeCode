@@ -130,7 +130,7 @@ fn extract_document(name: &str, mime: &str, bytes: &[u8]) -> Result<String, Copi
     if extension == "pptx" || is_zip_mime(mime, "presentationml") {
         return extract_pptx(name, bytes);
     }
-    if is_text_mime(&mime)
+    if is_text_mime(mime)
         || matches!(
             extension.as_str(),
             "txt" | "md" | "csv" | "json" | "html" | "css" | "js" | "ts" | "yaml" | "yml"

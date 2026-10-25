@@ -12,8 +12,8 @@ pub enum CopilotError {
     InvalidKey,
     #[error("the provider is rate limiting requests; try again shortly")]
     RateLimited,
-    #[error("the provider could not be reached")]
-    Network,
+    #[error("the provider could not be reached: {0}")]
+    Network(String),
     #[error("{0}")]
     Upstream(String),
     #[error("{0}")]
@@ -32,7 +32,7 @@ impl CopilotError {
             Self::MissingKey => "missing_key",
             Self::InvalidKey => "invalid_key",
             Self::RateLimited => "rate_limited",
-            Self::Network => "network",
+            Self::Network(_) => "network",
             Self::Upstream(_) => "upstream",
             Self::InvalidRequest(_) => "invalid_request",
             Self::Unsupported => "unsupported",
@@ -51,6 +51,18 @@ impl CopilotError {
                     // Provider error messages are documented API surface, but
                     // trim them so a stack trace never lands in a chat bubble.
                     first.chars().take(280).collect()
+                }
+            }
+            // A bare "the provider could not be reached" hides the difference
+            // between DNS, TLS, a proxy and a timeout. Keep the cause, on one
+            // line and bounded, so the user can act on it.
+            Self::Network(cause) => {
+                let first = cause.lines().next().unwrap_or("").trim();
+                if first.is_empty() {
+                    "the provider could not be reached".to_string()
+                } else {
+                    let detail: String = first.chars().take(200).collect();
+                    format!("the provider could not be reached: {detail}")
                 }
             }
             Self::InvalidRequest(detail) => detail.clone(),
@@ -76,6 +88,24 @@ impl CopilotError {
             return Self::Unsupported;
         }
         Self::Upstream(format!("HTTP {status}: {body}"))
+    }
+
+    /// Wraps a transport failure, keeping the whole cause chain.
+    ///
+    /// `reqwest` reports "error sending request for url (…)", which says nothing
+    /// about *why* it failed; the source chain carries the actual cause (DNS,
+    /// TLS, connection refused, timeout).
+    pub fn from_network(error: &(impl std::error::Error + ?Sized)) -> Self {
+        let mut parts = vec![error.to_string()];
+        let mut source = error.source();
+        while let Some(cause) = source {
+            let text = cause.to_string();
+            if !parts.iter().any(|part| part == &text) {
+                parts.push(text);
+            }
+            source = cause.source();
+        }
+        Self::Network(parts.join(": "))
     }
 }
 

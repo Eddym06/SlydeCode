@@ -154,7 +154,7 @@ fn error_response(error: CopilotError) -> Response {
         CopilotError::Unsupported => StatusCode::BAD_REQUEST,
         CopilotError::ToolLimit(_) => StatusCode::OK,
         CopilotError::Cancelled => StatusCode::REQUEST_TIMEOUT,
-        CopilotError::Network | CopilotError::Upstream(_) => StatusCode::BAD_GATEWAY,
+        CopilotError::Network(_) | CopilotError::Upstream(_) => StatusCode::BAD_GATEWAY,
     };
     let body = json!({
         "ok": false,

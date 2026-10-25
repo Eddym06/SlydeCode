@@ -44,14 +44,13 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
                     Some(Ok(Message::Text(text))) => {
                         // Keepalive only. Mutations go through POST /api/command so
                         // every change is validated in one place.
-                        if text.contains("\"ping\"") {
-                            if socket
+                        if text.contains("\"ping\"")
+                            && socket
                                 .send(Message::Text("{\"type\":\"pong\"}".to_string().into()))
                                 .await
                                 .is_err()
-                            {
-                                break;
-                            }
+                        {
+                            break;
                         }
                     }
                     Some(Ok(_)) => {}

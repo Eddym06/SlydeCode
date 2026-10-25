@@ -27,8 +27,6 @@ pub struct SandboxQuery {
     /// `edit=1` enables the studio selection and inline-editing layer.
     #[serde(default)]
     pub edit: Option<String>,
-    #[serde(default)]
-    pub t: Option<String>,
 }
 
 async fn no_cache_header(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
@@ -139,6 +137,8 @@ async fn api_state(
     Json(json!({
         "ok": true,
         "sandbox_origin": state.sandbox_origin,
+        // Embedded in every `<iframe src>`: authorizes slide documents only.
+        "sandbox_token": state.sandbox_token,
         "view": state.view().await
     }))
     .into_response()
@@ -225,7 +225,7 @@ async fn apply_command(
                 .enumerate()
                 .find(|(_, s)| s.id == slide_id)
                 .map(|(idx, s)| (idx, s.clone()))
-                .ok_or_else(|| CoreError::SlideNotFound(slide_id))?;
+                .ok_or(CoreError::SlideNotFound(slide_id))?;
             core.upsert_slide(
                 current_idx + 1,
                 None,
@@ -252,11 +252,12 @@ async fn apply_command(
         }
         UiCommand::MutateElement {
             element_id,
+            slide_id,
             text,
             style,
             html,
         } => core
-            .mutate_element(&element_id, text, style, html)
+            .mutate_element(&element_id, slide_id.as_deref(), text, style, html)
             .map(|_| None),
         UiCommand::SetAnimation {
             slide_id,
@@ -283,6 +284,7 @@ async fn api_agent(
             "ok": true,
             "created": outcome.created,
             "upsert": outcome.upsert,
+            "mutated_slide_id": outcome.mutated_slide_id,
             "sandbox_origin": state.sandbox_origin,
             "view": state.view().await
         }))
@@ -394,7 +396,11 @@ async fn print_document(
 
     let html = {
         let core = state.core.read().await;
-        sandbox::render_print_document(core.presentation(), &state.sandbox_origin, &state.token)
+        sandbox::render_print_document(
+            core.presentation(),
+            &state.sandbox_origin,
+            &state.sandbox_token,
+        )
     };
 
     let mut response = Html(html).into_response();
@@ -408,7 +414,12 @@ async fn sandbox_slide(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(query): Query<SandboxQuery>,
+    Query(auth): Query<AuthQuery>,
 ) -> Response {
+    if !crate::state::is_slide_authorized(&state, &auth) {
+        return unauthorized();
+    }
+
     let core = state.core.read().await;
     let deck = core.presentation();
     let Some(slide) = deck.slide(&id) else {
@@ -705,7 +716,9 @@ mod tests {
             .oneshot(
                 Request::post("/api/command?t=tok_test")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"action":"duplicate_slide","slide_id":"sld_a"}"#))
+                    .body(Body::from(
+                        r#"{"action":"duplicate_slide","slide_id":"sld_a"}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -713,8 +726,14 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let core = state.core.read().await;
         assert_eq!(core.presentation().slides.len(), 2);
-        assert_ne!(core.presentation().slides[0].id, core.presentation().slides[1].id);
-        assert_eq!(core.presentation().slides[0].code, core.presentation().slides[1].code);
+        assert_ne!(
+            core.presentation().slides[0].id,
+            core.presentation().slides[1].id
+        );
+        assert_eq!(
+            core.presentation().slides[0].code,
+            core.presentation().slides[1].code
+        );
     }
 
     #[tokio::test]
@@ -725,7 +744,9 @@ mod tests {
             .oneshot(
                 Request::post("/api/command?t=tok_test")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"action":"add_slide","template":"bullets","index":0}"#))
+                    .body(Body::from(
+                        r#"{"action":"add_slide","template":"bullets","index":0}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -733,7 +754,10 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let core = state.core.read().await;
         assert_eq!(core.presentation().slides.len(), 2);
-        assert_eq!(core.presentation().slides[0].template, slyde_core::TemplateType::Bullet);
+        assert_eq!(
+            core.presentation().slides[0].template,
+            slyde_core::TemplateType::Bullet
+        );
     }
 
     #[tokio::test]
@@ -830,9 +854,15 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_serves_the_slide_with_csp() {
-        let app = sandbox_router(test_state());
+        let state = test_state();
+        let token = state.sandbox_token.clone();
+        let app = sandbox_router(state);
         let res = app
-            .oneshot(Request::get("/s/sld_a").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(format!("/s/sld_a?t={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -846,11 +876,127 @@ mod tests {
 
     #[tokio::test]
     async fn sandbox_returns_404_for_unknown_slide() {
-        let app = sandbox_router(test_state());
+        let state = test_state();
+        let token = state.sandbox_token.clone();
+        let app = sandbox_router(state);
         let res = app
-            .oneshot(Request::get("/s/nope").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(format!("/s/nope?t={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Slide documents carry user content. Without a token any local process (or
+    /// any page the user has open) could read the deck through `/s/{id}`.
+    #[tokio::test]
+    async fn sandbox_slides_require_a_token() {
+        let state = test_state();
+        let sandbox_token = state.sandbox_token.clone();
+        let app_token = state.token.clone();
+        assert_ne!(sandbox_token, app_token, "the two secrets must differ");
+
+        for path in ["/s/sld_a".to_string(), "/s/sld_a?t=wrong".to_string()] {
+            let res = sandbox_router(state.clone())
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        // The editor's iframes use the sandbox token; the export pipeline and the
+        // CLI already hold the app token and keep working with it.
+        for token in [&sandbox_token, &app_token] {
+            let res = sandbox_router(state.clone())
+                .oneshot(
+                    Request::get(format!("/s/sld_a?t={token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "token {token} should work");
+        }
+    }
+
+    /// The app token must not leak into the payloads the browser reads while it
+    /// renders slides; the sandbox token is the only new field.
+    #[tokio::test]
+    async fn state_publishes_the_sandbox_token() {
+        let state = test_state();
+        let expected = state.sandbox_token.clone();
+        let res = app_router(state)
+            .oneshot(
+                Request::get("/api/state?t=tok_test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let json = body_json(res).await;
+        assert_eq!(json["sandbox_token"], expected.as_str());
+    }
+
+    /// Regression: generated `slyde-N` handles repeat in every slide, so editing
+    /// the second slide used to rewrite the first one. The command now either
+    /// scopes the edit or refuses it.
+    #[tokio::test]
+    async fn canvas_edits_are_scoped_to_the_selected_slide() {
+        let mut core = PresentationState::new("Deck", Theme::studio(), AspectRatio::R16x9);
+        for (index, (id, text)) in [("sld_a", "First"), ("sld_b", "Second")].iter().enumerate() {
+            core.upsert_slide(
+                index,
+                Some((*id).into()),
+                format!("<h1>{text}</h1>"),
+                TemplateType::Hero,
+                vec![],
+            )
+            .unwrap();
+        }
+        let state = AppState::new(
+            core,
+            "tok_test".into(),
+            std::path::PathBuf::from("ui"),
+            vec!["http://127.0.0.1:4444".into()],
+            "http://127.0.0.1:4445".into(),
+        );
+
+        let ambiguous = app_router(state.clone())
+            .oneshot(
+                Request::post("/api/command?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"mutate_element","element_id":"slyde-1","text":"Wrong"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ambiguous.status(),
+            StatusCode::BAD_REQUEST,
+            "an unscoped ambiguous handle must not silently edit the first slide"
+        );
+
+        let scoped = app_router(state.clone())
+            .oneshot(
+                Request::post("/api/command?t=tok_test")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"action":"mutate_element","slide_id":"sld_b","element_id":"slyde-1","text":"Second, edited"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(scoped.status(), StatusCode::OK);
+
+        let view = state.view().await;
+        assert!(view.presentation.slides[0].code.contains("First"));
+        assert!(view.presentation.slides[1].code.contains("Second, edited"));
     }
 }

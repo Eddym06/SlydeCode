@@ -20,6 +20,9 @@ pub enum AgentCommand {
         aspect_ratio: Option<String>,
     },
     UpsertSlide {
+        /// Insertion position. Ignored when `slide_id` matches an existing slide,
+        /// so agents that already know the id do not have to invent an index.
+        #[serde(default)]
         index: usize,
         #[serde(default)]
         slide_id: Option<String>,
@@ -46,6 +49,10 @@ pub enum AgentCommand {
     },
     MutateElement {
         element_id: String,
+        /// Scopes the edit to one slide. Generated element handles are unique per
+        /// slide document, not per deck, so an unscoped ambiguous id is rejected.
+        #[serde(default)]
+        slide_id: Option<String>,
         #[serde(default)]
         text: Option<String>,
         #[serde(default)]
@@ -126,10 +133,10 @@ impl AgentCommand {
                 slide_id: Some(slide_id.clone()),
                 slide_index: None,
             },
-            AgentCommand::MutateElement { element_id, .. } => Activity {
+            AgentCommand::MutateElement { slide_id, .. } => Activity {
                 phase: AgentPhase::Writing,
                 action: AgentAction::MutateElement,
-                slide_id: Some(element_id.clone()),
+                slide_id: slide_id.clone(),
                 slide_index: None,
             },
         }
@@ -212,11 +219,13 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
         }
         AgentCommand::MutateElement {
             element_id,
+            slide_id,
             text,
             style,
             html,
         } => {
-            let slide_id = core.mutate_element(&element_id, text, style, html)?;
+            let slide_id =
+                core.mutate_element(&element_id, slide_id.as_deref(), text, style, html)?;
             Ok(AgentOutcome {
                 mutated_slide_id: Some(slide_id),
                 ..AgentOutcome::default()

@@ -163,6 +163,9 @@ pub async fn api_export(
 
     let sandbox_origin = state.sandbox_origin.clone();
     let token = sandbox::percent_encode(&state.token);
+    // Slide documents carry their own token: the sandbox origin accepts it and
+    // the print page's iframes need it to load at all.
+    let slide_token = sandbox::percent_encode(&state.sandbox_token);
 
     let result = match format {
         ExportFormat::Pdf => {
@@ -178,7 +181,7 @@ pub async fn api_export(
                 .map(|id| SlideTarget {
                     id: id.clone(),
                     url: format!(
-                        "{sandbox_origin}/s/{}?static=1",
+                        "{sandbox_origin}/s/{}?static=1&t={slide_token}",
                         sandbox::percent_encode(id)
                     ),
                 })

@@ -623,9 +623,10 @@ pub fn render_print_document(deck: &Presentation, sandbox_origin: &str, token: &
         .iter()
         .map(|slide| {
             format!(
-                r#"<section class="page"><iframe src="{origin}/s/{id}?static=1" title=""></iframe></section>"#,
+                r#"<section class="page"><iframe src="{origin}/s/{id}?static=1&amp;t={token}" title=""></iframe></section>"#,
                 origin = sandbox_origin,
-                id = percent_encode(&slide.id)
+                id = percent_encode(&slide.id),
+                token = token
             )
         })
         .collect::<String>();
@@ -650,14 +651,13 @@ pub fn render_print_document(deck: &Presentation, sandbox_origin: &str, token: &
   iframe {{ width: {width}px; height: {height}px; border: 0; display: block; }}
 </style>
 </head>
-<body data-token="{token}">
+<body>
 {pages}
 </body>
 </html>"#,
         title = escape_html(&deck.title),
         width = width,
         height = height,
-        token = token,
         pages = pages,
     )
 }

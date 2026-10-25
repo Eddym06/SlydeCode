@@ -21,12 +21,23 @@ pub fn system_prompt(
         "English"
     };
     let summary = deck_summary(deck, selected_id);
+    // The tool schemas publish these same lists from `slyde_core`, so the prompt
+    // cannot drift from what the model is actually allowed to send.
+    let kinds = slyde_core::ANIMATION_KIND_IDS.join("`, `");
+    let themes = slyde_core::THEME_IDS.join("`, `");
     let selection = match selected_element.filter(|id| !id.trim().is_empty()) {
-        Some(id) => format!(
-            "- Element selected on canvas: `{id}`. The user is looking at that block: prefer \
-             `mutate_element(element_id=\"{id}\")` for this request and only touch the whole slide \
-             when they ask for a broader change."
-        ),
+        Some(id) => match selected_id {
+            Some(slide_id) => format!(
+                "- Element selected on canvas: `{id}` on slide `{slide_id}`. The user is looking at \
+                 that block: prefer `mutate_element(element_id=\"{id}\", slide_id=\"{slide_id}\")` for \
+                 this request and only touch the whole slide when they ask for a broader change."
+            ),
+            None => format!(
+                "- Element selected on canvas: `{id}`. The user is looking at that block: prefer \
+                 `mutate_element(element_id=\"{id}\")` for this request and only touch the whole slide \
+                 when they ask for a broader change."
+            ),
+        },
         None => "- No element is selected on the canvas.".to_string(),
     };
     format!(
@@ -61,8 +72,7 @@ deck aspect ratio and scaled to the viewport. You write only the inner HTML and 
 - Inline SVG is welcome for diagrams, icons and data marks.
 - The deck theme exposes `--slyde-bg`, `--slyde-fg`, `--slyde-muted`, `--slyde-accent` and
   `--slyde-font`. Use these variables first; they are what makes a slide belong to the deck.
-- The available theme ids are `studio` (warm dark), `paper` (warm light) and `night`
-  (indigo). The existing deck theme is in the context below.
+- The available theme ids are `{themes}`. The existing deck theme is in the context below.
 - The slide root should fill the stage: `position:absolute; inset:0;` with internal padding.
   The canvas is {aspect}. Do not rely on the browser window size.
 - Keep every piece of text inside the canvas. Large type must wrap deliberately; never use
@@ -111,7 +121,7 @@ Slides come alive with smooth, high-fidelity animations. Combine continuous CSS 
 
 2. **Stepped reveal animations in `animation` array (`upsert_slide`)**:
    - Use steps for ordered reveals during live presentation (advances step-by-step on click or Space).
-   - Allowed kinds: `fade_up`, `fade`, `scale_in`, `slide_in_left`, `slide_in_right`, `typewriter`, `spin`, `rotate_in`, `pulse`, `flip_up`, `blur_in`, `bounce_in`.
+   - Allowed kinds: `{kinds}`.
    - Targets must be CSS selectors inside the slide.
    - Stepped elements are automatically fully visible in static thumbnails and exports.
    - Reveal points, metrics or cards sequentially to guide the audience's attention.
@@ -140,7 +150,7 @@ You can only change the deck through the provided tools.
 Rules:
 
 1. If the user asks to modify or refine a specific block, use `mutate_element` (it needs the id that
-   appears in the slide source) or a surgical `upsert_slide`, never a full rewrite of the deck.
+   appears in the slide source, plus the `slide_id` that owns it), never a full rewrite of the deck.
 2. If the deck is empty and the user asks for a presentation, call
    `create_presentation`, then write slides with `upsert_slide` in order.
 3. For edits of full slides, keep the existing deck. Use the exact `slide_id` from the context. Inserting
@@ -164,7 +174,9 @@ Rules:
 "#,
         language = language,
         aspect = deck.aspect_ratio.as_str(),
-        summary = summary
+        summary = summary,
+        kinds = kinds,
+        themes = themes
     )
 }
 
@@ -194,6 +206,23 @@ mod tests {
             .push(Slide::new("sld_a".into(), "<h1>Hello</h1>".into()));
         let prompt = system_prompt(&deck, Some("sld_a"), Some("title-1"), "en");
         assert!(prompt.contains("Element selected on canvas: `title-1`"));
-        assert!(prompt.contains("mutate_element(element_id=\"title-1\")"));
+        assert!(
+            prompt.contains("mutate_element(element_id=\"title-1\", slide_id=\"sld_a\")"),
+            "the model must be told which slide owns the element: {prompt}"
+        );
+    }
+
+    /// The prompt and the tool schemas both read `slyde_core`'s lists, so the
+    /// model is never told about a kind or theme the schema would reject.
+    #[test]
+    fn prompt_lists_the_exact_wire_contract() {
+        let deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
+        let prompt = system_prompt(&deck, None, None, "en");
+        for kind in slyde_core::ANIMATION_KIND_IDS {
+            assert!(prompt.contains(kind), "prompt is missing kind {kind}");
+        }
+        for theme in slyde_core::THEME_IDS {
+            assert!(prompt.contains(theme), "prompt is missing theme {theme}");
+        }
     }
 }

@@ -16,6 +16,12 @@ pub struct AppState {
     pub core: RwLock<PresentationState>,
     pub events: broadcast::Sender<ServerEvent>,
     pub token: String,
+    /// Authorizes slide documents on the sandbox origin only.
+    ///
+    /// Slide URLs are embedded in `<iframe src>`, so the AI-authored script inside
+    /// a slide can read this value out of its own location. It therefore must not
+    /// unlock `/api/*`: reading or mutating the deck still requires `token`.
+    pub sandbox_token: String,
     pub allowed_origins: Vec<String>,
     pub ui_dir: PathBuf,
     /// Origin of the sandbox listener, e.g. `http://127.0.0.1:4322`.
@@ -76,6 +82,7 @@ impl AppState {
             core: RwLock::new(core),
             events,
             token,
+            sandbox_token: crate::new_token(),
             allowed_origins,
             ui_dir,
             sandbox_origin,
@@ -217,6 +224,10 @@ pub enum UiCommand {
     },
     MutateElement {
         element_id: String,
+        /// Scopes the edit to one slide; required when the handle is not unique
+        /// across the deck (generated `slyde-N` handles are per slide document).
+        #[serde(default)]
+        slide_id: Option<String>,
         #[serde(default)]
         text: Option<String>,
         #[serde(default)]
@@ -267,6 +278,18 @@ pub fn is_authorized(state: &AppState, headers: &HeaderMap, query: &AuthQuery) -
         .or_else(|| bearer_token(headers))
         .unwrap_or("");
     token_matches(provided, &state.token)
+}
+
+/// Slide documents accept the sandbox token (what the editor embeds) or the app
+/// token (used by the export pipeline and the CLI, which already hold it).
+///
+/// A slide document contains user content, so it cannot be public: any local
+/// process could otherwise read the deck through `/s/{id}`.
+pub fn is_slide_authorized(state: &AppState, query: &AuthQuery) -> bool {
+    let Some(provided) = query.t.as_deref().filter(|t| !t.is_empty()) else {
+        return false;
+    };
+    token_matches(provided, &state.sandbox_token) || token_matches(provided, &state.token)
 }
 
 /// Browsers always send `Origin` on cross-origin and WebSocket requests. When
