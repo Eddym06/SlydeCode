@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust-2024-orange?logo=rust" alt="Rust 2024">
   <img src="https://img.shields.io/badge/Chrome-CDP%20Headless-blue?logo=googlechrome" alt="Chrome CDP">
   <img src="https://img.shields.io/badge/MCP-JSON--RPC%202.0-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="AGPL-3.0">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
 </p>
 
 ---
@@ -95,7 +95,8 @@ The studio will automatically open in an isolated Google Chrome application wind
 | `slyde app --no-open` | Start the local server without launching Chrome (prints session URL). |
 | `slyde mcp` | Start the stdio MCP server for external agent integration. |
 | `slyde export --format pdf --out deck.pdf` | Render and export the active deck as an exact 16:9 PDF. |
-| `slyde export --format png --out exports/` | Export each slide as an individual 1280×720 PNG image. |
+| `slyde export --format png --out exports/` | Export each slide as a PNG (2560×1440, one Chrome session). |
+| `slyde export --format pptx --out deck.pptx` | Export a PowerPoint file with one full-bleed picture per slide and the speaker notes. |
 | `slyde version` | Show version information. |
 | `slyde help` | Show command usage. |
 
@@ -151,6 +152,20 @@ SlydeCode/
 ├── docs/                # Architecture specifications, Copilot design, and Design System docs
 └── tests/               # Browser CDP integration suite and activity state-machine tests
 ```
+
+---
+
+## Decks, images and exports
+
+- **Deck library.** Every deck is a file under the app-data directory; the topbar
+  **Library** sheet lists them with search, rename, duplicate and delete. Starting
+  a deck no longer replaces the one you had open.
+- **Images.** Paste (Ctrl+V) or drop an image onto the canvas, or use the
+  inspector **Image** button. Drag to move, Shift+drag to resize, arrows to nudge.
+  Images live in an asset store and travel with the deck: a `.slyde` file becomes
+  a ZIP bundle (`deck.json` + `assets/`) as soon as a slide uses one.
+- **Exports.** PDF (exact 16:9), PNG (2560×1440, one Chrome session for the whole
+  deck) and PPTX (one full-bleed picture per slide, notes preserved).
 
 ---
 
@@ -215,12 +230,10 @@ node --test "tests/ui/*.test.mjs"
 
 ## License
 
-SlydeCode is released under the **GNU Affero General Public License v3.0**
-(`AGPL-3.0-only`); see [`LICENSE`](./LICENSE). The crates declare the same
-license through `license.workspace = true`.
+SlydeCode is released under the **MIT License**; see [`LICENSE`](./LICENSE). The
+crates declare the same license through `license.workspace = true`.
 
-The AGPL is a strong copyleft license with a network clause: if you run a
-modified SlydeCode as a service, you must offer its source to the users of that
-service. Bundled third-party assets keep their own licenses (`assets/fonts`,
-`assets/vendor` each ship their license file).
+Bundled third-party assets keep their own licenses (`assets/fonts` is SIL OFL
+1.1, `assets/vendor` ships KaTeX/highlight.js/Mermaid licenses next to the
+bundles).
 
