@@ -36,7 +36,7 @@ const TEXT_EXT = new Set([
 
 const $ = (id) => document.getElementById(id);
 
-export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify }) {
+export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify, getDeckId }) {
   const els = {
     panel: $("copilot-panel"),
     thread: $("copilot-thread"),
@@ -68,6 +68,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   let pending = [];
   let streaming = false;
   let controller = null;
+  let currentRequestId = null;
   let epoch = 0;
 
   const sheet = createModelSheet({
@@ -697,6 +698,16 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     updateSendEnabled();
   }
 
+  function stopTurn() {
+    const requestId = currentRequestId;
+    currentRequestId = null;
+    if (requestId) {
+      // Best effort: aborting the fetch is the local half of the cancel.
+      client.copilotCancel(requestId).catch(() => {});
+    }
+    if (controller) controller.abort();
+  }
+
   function send() {
     if (streaming) return;
     const text = els.input.value.trim();
@@ -756,6 +767,14 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     setComposerBusy(true);
     syncAssistant(assistant, true);
 
+    // The server keeps this id so Stop can cancel the turn server-side, not just
+    // abort the local stream (otherwise the tool rounds keep running).
+    const requestId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    currentRequestId = requestId;
+
     const payload = {
       provider: providerId,
       model: modelId,
@@ -764,6 +783,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       selected_element_id:
         typeof getSelectedElementId === "function" ? getSelectedElementId() || null : null,
       language: lang(),
+      request_id: requestId,
     };
 
     try {
@@ -798,6 +818,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         controller = null;
         setComposerBusy(false);
         syncAssistant(assistant);
+        persistThread();
       }
     }
   }
@@ -848,7 +869,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function stopStream() {
     if (!streaming) return;
-    if (controller) controller.abort();
+    stopTurn();
   }
 
   function retry(message) {
@@ -869,12 +890,13 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function newChat() {
     if (streaming) {
+      stopTurn();
       epoch += 1;
-      if (controller) controller.abort();
       controller = null;
       setComposerBusy(false);
     }
     messages = [];
+    persistThread();
     pending = [];
     els.input.value = "";
     els.file.value = "";
@@ -884,6 +906,50 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     renderThread();
     updateSendEnabled();
     els.input.focus();
+  }
+
+  /// Conversation persistence: one thread per deck, so switching decks does not
+  /// mix two conversations and a reload does not lose the argument you were in.
+  function currentDeckId() {
+    if (typeof getDeckId !== "function") return null;
+    const deck = getDeckId();
+    return typeof deck === "string" && deck ? deck : null;
+  }
+
+  async function restoreThread() {
+    const deck = currentDeckId();
+    if (!deck || streaming) return;
+    try {
+      const stored = await client.copilotThread(deck);
+      if (!stored.length) {
+        messages = [];
+        renderThread();
+        return;
+      }
+      messages = stored.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        text: message.text || "",
+        attachments: [],
+        thinking: "",
+        tools: [],
+        state: "done",
+        errorCode: null,
+        el: null,
+      }));
+      renderThread({ forceScroll: true });
+    } catch {
+      /* The thread is a convenience; the panel still works without it. */
+    }
+  }
+
+  function persistThread() {
+    const deck = currentDeckId();
+    if (!deck || !messages.length) return;
+    const payload = messages
+      .filter((message) => message.state !== "streaming")
+      .map((message) => ({ role: message.role, text: message.text || "" }))
+      .filter((message) => message.text.trim());
+    client.copilotSaveThread(deck, payload).catch(() => {});
   }
 
   function buildHistory() {
@@ -1056,9 +1122,17 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   autosize();
   loadConfig();
 
+  // Restore the conversation for the deck that is already open when the panel
+  // mounts (a reload, or coming back to a deck).
+  restoreThread();
+
   return {
     focus() {
       els.input.focus();
+    },
+    /** Re-reads the conversation for the current deck (after a deck switch). */
+    refreshThread() {
+      restoreThread();
     },
     open() {
       openSheet();

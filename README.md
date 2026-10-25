@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust-2024-orange?logo=rust" alt="Rust 2024">
   <img src="https://img.shields.io/badge/Chrome-CDP%20Headless-blue?logo=googlechrome" alt="Chrome CDP">
   <img src="https://img.shields.io/badge/MCP-JSON--RPC%202.0-purple" alt="MCP">
-  <img src="https://img.shields.io/badge/License-AGPL--3.0-blue" alt="AGPL-3.0">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License">
 </p>
 
 ---
@@ -63,6 +63,19 @@
 
 ---
 
+## Platform support
+
+| Platform | Status |
+|---|---|
+| Windows (x86_64-pc-windows-gnu) | Verified: full test suite, studio E2E, exports |
+| Windows (x86_64-pc-windows-msvc) | Not verified on the development machine (no C++ build tools; `scripts/cargo.ps1` falls back to GNU there) |
+| Linux | Pure crates compile for `x86_64-unknown-linux-gnu`; CI runs the Rust suite on ubuntu-latest. No manual pass yet |
+| macOS | Pure crates compile for `x86_64-apple-darwin`; no manual pass yet |
+
+`slyde-server` cannot be cross-*built* from Windows because `reqwest`/rustls pulls
+`ring`, whose build script needs a C toolchain for the target. That is why the
+Linux/macOS check in CI matters.
+
 ## Requirements
 
 - **Rust:** Stable toolchain (`+stable-x86_64-pc-windows-gnu` recommended on Windows).
@@ -95,7 +108,8 @@ The studio will automatically open in an isolated Google Chrome application wind
 | `slyde app --no-open` | Start the local server without launching Chrome (prints session URL). |
 | `slyde mcp` | Start the stdio MCP server for external agent integration. |
 | `slyde export --format pdf --out deck.pdf` | Render and export the active deck as an exact 16:9 PDF. |
-| `slyde export --format png --out exports/` | Export each slide as an individual 1280×720 PNG image. |
+| `slyde export --format png --out exports/` | Export each slide as a PNG (2560×1440, one Chrome session). |
+| `slyde export --format pptx --out deck.pptx` | Export a PowerPoint file with one full-bleed picture per slide and the speaker notes. |
 | `slyde version` | Show version information. |
 | `slyde help` | Show command usage. |
 
@@ -154,14 +168,31 @@ SlydeCode/
 
 ---
 
+## Decks, images and exports
+
+- **Deck library.** Every deck is a file under the app-data directory; the topbar
+  **Library** sheet lists them with search, rename, duplicate and delete. Starting
+  a deck no longer replaces the one you had open.
+- **Images.** Paste (Ctrl+V) or drop an image onto the canvas, or use the
+  inspector **Image** button. Drag to move, Shift+drag to resize, arrows to nudge.
+  Images live in an asset store and travel with the deck: a `.slyde` file becomes
+  a ZIP bundle (`deck.json` + `assets/`) as soon as a slide uses one.
+- **Exports.** PDF (exact 16:9), PNG (2560×1440, one Chrome session for the whole
+  deck) and PPTX (one full-bleed picture per slide, notes preserved).
+- **Copilot memory.** The conversation is stored per deck and comes back after a
+  reload or a deck switch; "New chat" clears it.
+
+---
+
 ## Running Tests
 
 ```powershell
 # Rust: 161 unit and integration tests across the five crates
 cargo test --workspace
 
-# UI: 29 end-to-end tests (28 browser flows + the activity state machine).
-# They spawn the real binary in headless Chrome over CDP and need no npm packages.
+# UI: 55 tests. Browser flows drive the real studio in headless Chrome over CDP;
+# the component and i18n suites run the DOM-free modules directly in Node.
+# No npm packages are involved.
 cargo build --workspace
 node --test "tests/ui/*.test.mjs"
 ```
@@ -215,12 +246,10 @@ node --test "tests/ui/*.test.mjs"
 
 ## License
 
-SlydeCode is released under the **GNU Affero General Public License v3.0**
-(`AGPL-3.0-only`); see [`LICENSE`](./LICENSE). The crates declare the same
-license through `license.workspace = true`.
+SlydeCode is released under the **MIT License**; see [`LICENSE`](./LICENSE). The
+crates declare the same license through `license.workspace = true`.
 
-The AGPL is a strong copyleft license with a network clause: if you run a
-modified SlydeCode as a service, you must offer its source to the users of that
-service. Bundled third-party assets keep their own licenses (`assets/fonts`,
-`assets/vendor` each ship their license file).
+Bundled third-party assets keep their own licenses (`assets/fonts` is SIL OFL
+1.1, `assets/vendor` ships KaTeX/highlight.js/Mermaid licenses next to the
+bundles).
 

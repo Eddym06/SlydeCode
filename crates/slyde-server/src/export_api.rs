@@ -25,6 +25,8 @@ use crate::state::{AppState, AuthQuery, ServerEvent, is_authorized, origin_allow
 use crate::{discover_browser, now_ms, sandbox, storage};
 
 /// Distinguishes export jobs that start in the same millisecond.
+/// PNGs are rendered at 2x so they stay sharp on a retina projector.
+const PNG_SCALE: u32 = 2;
 static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Default, Deserialize)]
@@ -39,6 +41,8 @@ pub struct ExportQuery {
 enum ExportFormat {
     Pdf,
     Png,
+    /// PowerPoint: one rendered picture per slide, wrapped in a real `.pptx`.
+    Pptx,
 }
 
 impl ExportFormat {
@@ -46,6 +50,7 @@ impl ExportFormat {
         match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
             Some("pdf") => Some(Self::Pdf),
             Some("png") | Some("images") => Some(Self::Png),
+            Some("pptx") | Some("powerpoint") => Some(Self::Pptx),
             _ => None,
         }
     }
@@ -54,6 +59,7 @@ impl ExportFormat {
         match self {
             Self::Pdf => "pdf",
             Self::Png => "png",
+            Self::Pptx => "pptx",
         }
     }
 
@@ -61,6 +67,7 @@ impl ExportFormat {
         match self {
             Self::Pdf => "pdf",
             Self::Png => "zip",
+            Self::Pptx => "pptx",
         }
     }
 
@@ -68,6 +75,9 @@ impl ExportFormat {
         match self {
             Self::Pdf => "application/pdf",
             Self::Png => "application/zip",
+            Self::Pptx => {
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            }
         }
     }
 }
@@ -93,13 +103,13 @@ pub async fn api_export(
         return api_error(
             StatusCode::BAD_REQUEST,
             "invalid_format",
-            "format must be pdf or png",
+            "format must be pdf, png or pptx",
         );
     };
 
     // Snapshot the deck, then drop the lock: an export must never block the
     // editor (or an AI agent) while Chrome renders.
-    let (title, aspect_ratio, slide_ids) = {
+    let (title, aspect_ratio, slide_ids, slide_notes) = {
         let core = state.core.read().await;
         let deck = core.presentation();
         (
@@ -108,6 +118,10 @@ pub async fn api_export(
             deck.slides
                 .iter()
                 .map(|slide| slide.id.clone())
+                .collect::<Vec<_>>(),
+            deck.slides
+                .iter()
+                .map(|slide| slide.notes.clone())
                 .collect::<Vec<_>>(),
         )
     };
@@ -175,7 +189,7 @@ pub async fn api_export(
                 .await
                 .map(|written| vec![written])
         }
-        ExportFormat::Png => {
+        ExportFormat::Png | ExportFormat::Pptx => {
             let targets: Vec<SlideTarget> = slide_ids
                 .iter()
                 .map(|id| SlideTarget {
@@ -186,14 +200,32 @@ pub async fn api_export(
                     ),
                 })
                 .collect();
-            export_png(
+            // One Chrome session for the whole deck, at 2x. If the DevTools
+            // handshake fails on an unusual Chrome build, fall back to the
+            // sequential CLI path instead of failing the export.
+            match slyde_export::export_png_batch(
                 &browser.path,
                 &targets,
                 aspect_ratio,
                 &dir,
+                PNG_SCALE,
                 Some(&progress_tx),
             )
             .await
+            {
+                Ok(files) => Ok(files),
+                Err(error) => {
+                    tracing::warn!(%error, "batch PNG export failed; using one Chrome per slide");
+                    export_png(
+                        &browser.path,
+                        &targets,
+                        aspect_ratio,
+                        &dir,
+                        Some(&progress_tx),
+                    )
+                    .await
+                }
+            }
         }
     };
 
@@ -221,6 +253,19 @@ pub async fn api_export(
         ExportFormat::Png => {
             let files = files.clone();
             match tokio::task::spawn_blocking(move || bundle_pngs(&files)).await {
+                Ok(result) => result,
+                Err(err) => Err(format!("packaging task failed: {err}")),
+            }
+        }
+        ExportFormat::Pptx => {
+            let files = files.clone();
+            let notes = slide_notes.clone();
+            let deck_title = title.clone();
+            match tokio::task::spawn_blocking(move || {
+                bundle_pptx(&deck_title, &notes, &files, aspect_ratio)
+            })
+            .await
+            {
                 Ok(result) => result,
                 Err(err) => Err(format!("packaging task failed: {err}")),
             }
@@ -267,6 +312,49 @@ fn attachment(title: &str, format: ExportFormat, body: Vec<u8>) -> Response {
     response
 }
 
+/// Builds the `.pptx` bundle from the rendered PNGs.
+///
+/// The deck is already rendered by Chrome, so PowerPoint gets one full-bleed
+/// picture per slide: exactly what the presenter showed, no second layout
+/// engine and no HTML-to-shape translation to get wrong. Slide notes travel as
+/// real notes, so the speaker view still works.
+fn bundle_pptx(
+    deck_title: &str,
+    notes: &[Option<String>],
+    files: &[PathBuf],
+    aspect_ratio: slyde_core::AspectRatio,
+) -> Result<Vec<u8>, String> {
+    if files.is_empty() {
+        return Err("no slides were rendered".to_string());
+    }
+    let (width_px, height_px) = slyde_export::png_dimensions(aspect_ratio);
+    let mut slides = Vec::with_capacity(files.len());
+    for (index, path) in files.iter().enumerate() {
+        let png = std::fs::read(path)
+            .map_err(|err| format!("could not read {}: {err}", path.display()))?;
+        slides.push(slyde_pptx::PptxSlide {
+            title: format!("Slide {}", index + 1),
+            png,
+            notes: notes.get(index).and_then(|value| value.clone()),
+        });
+    }
+
+    let deck = slyde_pptx::PptxDeck {
+        title: deck_title,
+        width_px,
+        height_px,
+        slides: &slides,
+    };
+    let target = files[0]
+        .parent()
+        .map(|dir| dir.join("deck.pptx"))
+        .unwrap_or_else(|| std::env::temp_dir().join("deck.pptx"));
+    slyde_pptx::write_pptx(&deck, &target).map_err(|err| err.to_string())?;
+    let bytes = std::fs::read(&target)
+        .map_err(|err| format!("could not read {}: {err}", target.display()))?;
+    let _ = std::fs::remove_file(&target);
+    Ok(bytes)
+}
 /// PNGs are already compressed; storing them keeps the ZIP step near-instant.
 fn bundle_pngs(files: &[PathBuf]) -> Result<Vec<u8>, String> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -334,7 +422,11 @@ mod tests {
         assert_eq!(ExportFormat::parse(Some("PDF")), Some(ExportFormat::Pdf));
         assert_eq!(ExportFormat::parse(Some("png")), Some(ExportFormat::Png));
         assert_eq!(ExportFormat::parse(Some("images")), Some(ExportFormat::Png));
-        assert_eq!(ExportFormat::parse(Some("pptx")), None);
+        assert_eq!(ExportFormat::parse(Some("pptx")), Some(ExportFormat::Pptx));
+        assert_eq!(
+            ExportFormat::parse(Some("POWERPOINT")),
+            Some(ExportFormat::Pptx)
+        );
         assert_eq!(ExportFormat::parse(None), None);
     }
 

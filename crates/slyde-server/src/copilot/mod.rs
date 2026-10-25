@@ -43,11 +43,83 @@ pub struct CopilotConfigView {
     pub last_model: Option<String>,
 }
 
+/// Live turns: request id → the flag a running turn polls.
+type TurnCancels = std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>;
+
+/// One chat message as it is persisted per deck.
+///
+/// Only role and text: tool rows and reasoning were live UI, and storing them
+/// would freeze a rendering the next session may not reproduce. The thread is
+/// there to remember the conversation, not to replay animations.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StoredMessage {
+    pub role: String,
+    pub text: String,
+}
+
+/// Bounds for one deck's thread so a long session cannot grow the file forever.
+const MAX_THREAD_MESSAGES: usize = 40;
+const MAX_THREAD_TEXT_CHARS: usize = 20_000;
+const MAX_THREAD_DECKS: usize = 100;
+
+#[derive(Debug, Default)]
+struct Threads {
+    path: Option<std::path::PathBuf>,
+    decks: std::collections::BTreeMap<String, Vec<StoredMessage>>,
+}
+
+impl Threads {
+    fn load(path: Option<std::path::PathBuf>) -> Self {
+        let mut threads = Self {
+            path,
+            decks: Default::default(),
+        };
+        let Some(file) = threads.path.clone() else {
+            return threads;
+        };
+        let Ok(raw) = std::fs::read_to_string(&file) else {
+            return threads;
+        };
+        match serde_json::from_str::<std::collections::BTreeMap<String, Vec<StoredMessage>>>(&raw) {
+            Ok(decks) => threads.decks = decks,
+            Err(error) => {
+                tracing::warn!(%error, "copilot threads file is not valid JSON; ignoring it")
+            }
+        }
+        threads
+    }
+
+    fn save(&self) -> Result<(), CopilotError> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| CopilotError::Cancelled)?;
+        }
+        let encoded = serde_json::to_vec_pretty(&self.decks)
+            .map_err(|error| CopilotError::InvalidRequest(error.to_string()))?;
+        let temp = path.with_extension("json.tmp");
+        std::fs::write(&temp, encoded)
+            .and_then(|_| std::fs::rename(&temp, path))
+            .map_err(|error| {
+                tracing::warn!(%error, "could not save the copilot threads file");
+                CopilotError::Cancelled
+            })
+    }
+}
+
 #[derive(Debug)]
 pub struct CopilotState {
     store: ConfigStore,
     config: RwLock<CopilotConfig>,
     http: reqwest::Client,
+    /// Live turns by request id. The browser sends the id with the turn and can
+    /// cancel it with `POST /api/copilot/cancel`, which is the difference between
+    /// "stop" aborting a stream locally and the server really stopping the
+    /// provider call (and the tool rounds it would run).
+    cancels: std::sync::Mutex<TurnCancels>,
+    /// Conversations, one per deck, kept next to the key file.
+    threads: std::sync::Mutex<Threads>,
 }
 
 impl CopilotState {
@@ -62,6 +134,10 @@ impl CopilotState {
     }
 
     fn with_store(store: ConfigStore, config: CopilotConfig) -> Self {
+        let thread_path = store
+            .path()
+            .map(|path| path.with_file_name("copilot-threads.json"));
+        let threads = Threads::load(thread_path);
         let http = reqwest::Client::builder()
             .user_agent(concat!("SlydeCode/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
@@ -72,7 +148,99 @@ impl CopilotState {
             store,
             config: RwLock::new(config),
             http,
+            cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
+            threads: std::sync::Mutex::new(threads),
         }
+    }
+
+    /// The stored conversation for a deck, oldest first.
+    pub fn thread(&self, deck: &str) -> Vec<StoredMessage> {
+        let threads = self
+            .threads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        threads.decks.get(deck).cloned().unwrap_or_default()
+    }
+
+    /// Replaces a deck's conversation, bounded in length and message size.
+    pub fn save_thread(
+        &self,
+        deck: &str,
+        messages: Vec<StoredMessage>,
+    ) -> Result<usize, CopilotError> {
+        if deck.trim().is_empty() {
+            return Err(CopilotError::InvalidRequest("a deck id is required".into()));
+        }
+        let mut threads = self
+            .threads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut cleaned: Vec<StoredMessage> = messages
+            .into_iter()
+            .filter(|message| !message.text.trim().is_empty())
+            .map(|message| StoredMessage {
+                role: match message.role.as_str() {
+                    "assistant" => "assistant".to_string(),
+                    _ => "user".to_string(),
+                },
+                text: message.text.chars().take(MAX_THREAD_TEXT_CHARS).collect(),
+            })
+            .collect();
+        if cleaned.len() > MAX_THREAD_MESSAGES {
+            cleaned.drain(0..cleaned.len() - MAX_THREAD_MESSAGES);
+        }
+        if cleaned.is_empty() {
+            threads.decks.remove(deck);
+        } else {
+            threads.decks.insert(deck.to_string(), cleaned.clone());
+        }
+        // Keep the file bounded: drop the oldest decks when the cap is reached.
+        while threads.decks.len() > MAX_THREAD_DECKS {
+            let Some(oldest) = threads.decks.keys().next().cloned() else {
+                break;
+            };
+            threads.decks.remove(&oldest);
+        }
+        let stored = cleaned.len();
+        threads.save()?;
+        Ok(stored)
+    }
+
+    /// Registers a turn and returns the flag it must poll to notice a cancel.
+    pub(crate) fn begin_turn(&self, request_id: &str) -> tokio::sync::watch::Receiver<bool> {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let mut cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cancels.insert(request_id.to_string(), tx);
+        rx
+    }
+
+    /// Removes a finished turn. Returns false when the turn was already gone.
+    pub(crate) fn end_turn(&self, request_id: &str) -> bool {
+        let mut cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cancels.remove(request_id).is_some()
+    }
+
+    /// Signals a running turn. Returns false when no such turn is in flight.
+    pub(crate) fn cancel_turn(&self, request_id: &str) -> bool {
+        let cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match cancels.get(request_id) {
+            Some(tx) => tx.send(true).is_ok(),
+            None => false,
+        }
+    }
+
+    /// True when the browser asked to stop this turn.
+    pub(crate) fn was_cancelled(flag: &tokio::sync::watch::Receiver<bool>) -> bool {
+        *flag.borrow()
     }
 
     pub(crate) fn http(&self) -> &reqwest::Client {
@@ -220,6 +388,74 @@ fn has_key(config: &CopilotConfig, provider: ProviderDef) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn conversations_are_stored_per_deck_and_bounded() {
+        let state = super::CopilotState::in_memory();
+        assert!(state.thread("deck-a").is_empty());
+
+        state
+            .save_thread(
+                "deck-a",
+                vec![super::StoredMessage {
+                    role: "user".into(),
+                    text: "make it shorter".into(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(state.thread("deck-a").len(), 1);
+        assert!(
+            state.thread("deck-b").is_empty(),
+            "decks never share a thread"
+        );
+
+        // Long threads keep the newest messages, and long text is truncated.
+        let many: Vec<_> = (0..100)
+            .map(|index| super::StoredMessage {
+                role: "assistant".into(),
+                text: format!("m{index}"),
+            })
+            .collect();
+        assert_eq!(state.save_thread("deck-a", many).unwrap(), 40);
+        assert_eq!(state.thread("deck-a").last().unwrap().text, "m99");
+
+        let huge = super::StoredMessage {
+            role: "user".into(),
+            text: "x".repeat(50_000),
+        };
+        state.save_thread("deck-c", vec![huge]).unwrap();
+        assert_eq!(
+            state.thread("deck-c")[0].text.chars().count(),
+            20_000,
+            "a pasted document cannot bloat the file"
+        );
+
+        // An empty thread removes the entry instead of storing a blank list.
+        state.save_thread("deck-a", vec![]).unwrap();
+        assert!(state.thread("deck-a").is_empty());
+        assert!(state.save_thread("   ", vec![]).is_err());
+    }
+    #[test]
+    fn a_turn_can_be_cancelled_by_its_request_id() {
+        let state = super::CopilotState::in_memory();
+        let flag = state.begin_turn("turn-1");
+        assert!(!super::CopilotState::was_cancelled(&flag));
+
+        assert!(state.cancel_turn("turn-1"), "a live turn is cancellable");
+        assert!(
+            super::CopilotState::was_cancelled(&flag),
+            "the running loop sees the cancel"
+        );
+
+        // Unknown ids and finished turns are reported honestly, not silently.
+        assert!(!state.cancel_turn("missing"));
+        assert!(state.end_turn("turn-1"));
+        assert!(!state.end_turn("turn-1"), "a turn is only removed once");
+        assert!(
+            !state.cancel_turn("turn-1"),
+            "a finished turn cannot be cancelled"
+        );
+    }
+
     use super::*;
 
     #[tokio::test]

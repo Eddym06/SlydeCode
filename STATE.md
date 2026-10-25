@@ -1,212 +1,300 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 12:10
+> Last updated: 2026-10-25 15:30
 
 ## Current Phase
 
-Phase 2.9 — **Contract and security hardening after the repo audit.** Rust 161 tests
-and 29 UI E2E tests green; `cargo fmt --check` and `cargo clippy -D warnings` are
-clean and now enforced in CI (`.github/workflows/ci.yml`).
+Phase 3.3 — **product completion on `feat/product-completion`.** Rust 220 tests and
+55 UI tests green (41 browser/CDP + 14 component); `cargo fmt --check` and
+`cargo clippy -D warnings` clean.
 
-The audit found four defects worth fixing before anything else: a silent cross-slide
-edit (`data-id` handles are unique per slide, not per deck), tool schemas that
-published a subset of the animation kinds and themes the core accepts, an
-unauthenticated `/s/{id}` on the sandbox origin, and an undo stack that filled with
-one entry per keystroke while typing the title or the notes. All four are fixed and
-covered by tests, including an E2E that drives a real canvas edit on the second
-slide.
+This block closed the three product gaps the audit named — a real deck library,
+real images, and PowerPoint export — plus the infrastructure that had been
+missing: batch PNG rendering over CDP at 2x, a concurrent MCP stdio loop, a
+server-side copilot cancel, per-locale dictionaries with parity tests, and a
+module smoke test that would have caught the dead `app.js` import.
+
+Recent rounds split the studio shell into modules: the presenter state machine
+(the overlay and the standalone page had two copies that had drifted), the whole
+inspector, the storyboard and the canvas (selection, HUD, inline editing and image
+geometry). `app.js` went from ~2,600 to **~1,730 lines** and now holds only the
+topbar, the stage frame, the agent-activity chip, the presenter overlay, the
+palette actions and the boot glue.
+
+Two data bugs were found and fixed in the previous round, both invisible to the
+old suite:
+
+- the autosave wrote into a placeholder `unset.slyde` instead of the active deck
+  (`watch::Sender::send` silently drops the value when nobody is subscribed yet),
+  so edits looked saved and were not;
+- the UI suite was driving the previous build, because `findBinary()` preferred
+  the gnu profile by list order instead of by recency.
 
 ## Implemented & Working
 
-### Backend (Rust workspace, 5 crates, 161 tests)
+### Deck library (new)
 
-- `slyde-core`: `Presentation`/`Slide`/`Theme`/`AnimationStep` model, `PresentationState`
-  with undo/redo, history limits, validation (`max_slides` 200, `max_code_bytes` 512 KiB,
-  non-empty code, CSS-valid colors), and the `.slyde` project file (versioned JSON,
-  validated on read). 50 tests.
-- **Wire contract has one source of truth**: `slyde_core::ANIMATION_KIND_IDS` and
-  `slyde_core::THEME_IDS` feed the MCP schema, the copilot schema and the copilot
-  prompt. `AnimationKind::id()` is an exhaustive match, and both test suites assert
-  the published schemas equal the core lists, so a new variant cannot be forgotten.
-- **Element edits are scoped**: `mutate_element(element_id, slide_id, …)` refuses an
-  unscoped handle that matches more than one slide (`CoreError::AmbiguousElement`).
-  Generated `slyde-N` handles stay unique per slide document, so stored decks need no
-  migration.
-- `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`,
-  `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`,
-  `/api/copilot/*`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin
-  guards. Chrome discovery/launch, runtime rendezvous file, structured
-  `agent_activity` events, starter templates, atomic deck storage with debounced
-  autosave. 93 tests, including the copilot.
-- **Two session secrets**: `token` authorizes `/api/*` and `/ws`; `sandbox_token`
-  authorizes slide documents only and is what the editor embeds in every iframe URL.
-  `/s/{id}` accepts either (exports and the CLI already hold the app token), and
-  rejects everything else with 401. Tokens come from `getrandom` (256 bits).
-- **Copilot backend**: provider catalog for eight vendors, OpenAI-compatible transport
-  for seven plus a native Anthropic Messages adapter, SSE assembly for fragmented tool
-  calls, deck tools that call the shared `agent::run` path, typed error mapping,
-  server-side key storage with env fallback, model normalization, bounded attachment
-  extraction. Network failures now carry the real cause chain (DNS/TLS/refused) instead
-  of a generic "could not be reached".
-- **Undo history coalesces typing**: consecutive commits with the same label and target
-  within `Limits::coalesce_window_ms` (default 1200 ms) rewrite one entry, so a rename
-  or a paragraph of speaker notes is one undo step. `coalesce_window_ms: 0` restores
-  one-entry-per-commit for tests.
-- `slyde-export`: transport-agnostic Chrome pipeline. PDF via `--print-to-pdf`
-  (960×540 pt = exact 16:9), PNG per slide at 1280×720. Unique Chrome profile per job,
-  absolute paths, artifact verification, optional progress channel. 3 tests.
-- `slyde-mcp`: hand-rolled JSON-RPC 2.0 stdio loop, 11 tools with hand-written schemas,
-  thin HTTP proxy into the running studio, auto-spawn when no healthy runtime exists.
-  `upsert_slide` accepts `slide_id` without an `index`, and `mutate_element` takes an
-  optional `slide_id`. 13 tests.
-- `slyde-app`: CLI (`app`, `mcp`, `export`, `version`, `help`), UI/assets dir
-  resolution, runtime reuse, Chrome launch, welcome slide seeding. `SLYDE_DATA_DIR`,
-  `SLYDE_UI_DIR`, `SLYDE_ASSETS_DIR` and `SLYDE_BROWSER` overrides. 2 tests.
+- `<app-data>/decks/<id>.slyde`, one file per deck, plus `settings.json` inside
+  the same directory for the active pointer. The directory is the source of
+  truth: no index to drift, and a corrupt file is skipped instead of hiding the
+  rest of the library.
+- Endpoints: `GET /api/decks`, `POST /api/decks/{new,open,rename,duplicate,delete}`.
+  Every operation flushes the outgoing deck first, then swaps the pointer, the
+  in-memory state and the published view.
+- Deck ids are ASCII slugs derived from the title (`Presentación sin título` →
+  `presentacion-sin-titulo-1a2b`) and validated against traversal on every lookup.
+- Startup imports the pre-library `current.slyde` once, and opens a healthy deck
+  when the active file is unreadable (leaving the broken file untouched).
+- UI: a Library sheet (search, relative timestamps, inline rename, duplicate,
+  delete with an in-sheet confirmation), a topbar button, and `⌘K` entries.
+  "New" now creates a deck file instead of replacing the open one.
+
+### Images (new)
+
+- Asset store at `<app-data>/assets/`, random ids (`<16 hex>.<png|jpg|webp|gif>`),
+  served at `/assets/<name>` on **both** origins so slides can reference them
+  under the sandbox CSP. SVG is refused: an SVG is a document, not a picture.
+- `POST /api/assets` accepts a base64 data URL (what a paste produces) and
+  answers with the stored URL; uploads are capped at 12 MiB and the format is
+  decided by the bytes, not by the declared mime type.
+- Canvas: paste (Ctrl+V), drag-and-drop onto the stage, an inspector **Image**
+  button, drag to move, Shift+drag to resize, arrow-key nudge (1px / 10px with
+  Shift). Geometry is committed as stage pixels through `set_geometry`, which
+  **replaces** the declarations instead of appending them, so dragging does not
+  accumulate stale `left:` values.
+- `.slyde` v2: a deck that references stored images saves as a ZIP bundle
+  (`deck.json` + `assets/…`); a deck without images stays plain JSON. The reader
+  sniffs the ZIP signature, so both shapes open with the same button.
+
+### PowerPoint export (new)
+
+- `crates/slyde-pptx` writes a real OOXML deck by hand (no immature PPTX crate):
+  content types, presentation/master/layout/theme, one full-bleed picture per
+  slide, notes preserving the speaker view.
+- Validated independently with `python-pptx` (`scripts/validate-pptx.py`):
+  opens, correct slide count and EMU size, exactly one picture per slide, notes
+  readable. The crate has 16 tests of its own, including a stack-based XML
+  well-formedness checker.
+- Wired into `POST /api/export?format=pptx`, `slyde export --format pptx`, the
+  `export_presentation` MCP tool and the UI export menu.
+
+### Rendering and export
+
+- PNG export now runs **one** Chrome session for the whole deck over CDP
+  (`Page.captureScreenshot`) instead of one process per slide, and renders at 2x
+  (2560×1440 for 16:9). Every command and every slide has a hard timeout, and any
+  failure falls back to the sequential CLI path so an unusual Chrome build cannot
+  break export.
+- PDF stays on `--print-to-pdf` (960×540 pt, exact 16:9).
+
+### Backend (Rust workspace, 7 crates, 217 tests)
+
+- `slyde-core` (54 tests): model, `PresentationState` with snapshot history and
+  coalescing typing, validation, `.slyde` project format, element scoping,
+  `insert_image` / `set_element_geometry`, `ImageRect`.
+- `slyde-server` (128 tests): two listeners, all HTTP/WS endpoints, token +
+  Origin guards, the deck library, the asset store, the copilot, exports.
+- `slyde-mcp` (16 tests): JSON-RPC stdio with **concurrent dispatch** — each line
+  becomes a task under a `Semaphore(8)`, one writer task serialises stdout, and a
+  fast request overtakes a slow one.
+- `slyde-pptx` (16 tests), `slyde-export` (4 tests incl. the CDP batch test),
+  `slyde-app` (3 tests).
+- Copilot: `POST /api/copilot/cancel` stops a turn server-side (the flag is
+  checked per SSE chunk and per tool round, so the upstream response is dropped),
+  and the round budget is 40 with the repeat guard intact.
+
+### Shell modules
+
+| Module | Responsibility |
+|---|---|
+| `presenter-core.js` | reveal state machine and key map, shared by the overlay and the presenter page |
+| `inspector.js` | slide/deck tabs, animation timeline, notes, export buttons |
+| `storyboard.js` | thumbnails, drag-and-drop, hover actions, roving tabindex |
+| `canvas.js` | element selection, floating HUD, inline-edit messages, image paste/drop/geometry |
+| `deck-library.js` | library sheet (list, search, rename, duplicate, delete) |
+| `copilot.js`, `copilot-model-sheet.js` | provider sheet, thread, reasoning drawer |
+| `agent-activity.js`, `teleprompter.js` | activity timing and speaker pacing (pure) |
+| `api.js`, `i18n.js`, `locales/*` | HTTP/SSE client, translations |
+| `app.js` | the shell: topbar, stage frame, chips, presenter overlay, boot |
+
+### Inspector (own module)
+
+- `ui/static/inspector.js` owns the slide tab, the deck tab and the animation
+  timeline: it renders from the read model it is given and sends commands through
+  injected callbacks, so it never touches the deck. `THEME_CHOICES`,
+  `ANIMATION_KINDS` and the default easing live there (the palette imports the
+  theme list from the same place).
+- The DOM ids are unchanged (`#theme-select`, `#notes`, `#export-pdf`, …) because
+  they are the contract with the export progress handler and the E2E suite; what
+  changed is who owns the markup and the wiring.
+- The notes caret/scroll restoration moved with it, so the fix cannot be lost in
+  a future refactor of the shell.
+
+### Presenter (shared)
+
+- `ui/static/presenter-core.js` owns the reveal state (current slide, queued
+  animation steps, frame readiness, intro-once) and the key map. The studio
+  overlay (`app.js`) and the standalone page (`present.js`) both drive it, so
+  "one step per advance", Home/End, `B`/`S`/`F`/Esc and the progress bar cannot
+  disagree between surfaces. It is pure, and `tests/ui/components.test.mjs` covers
+  it (intro once, wait-before-ready, slide advance, end, clamping, reload,
+  malformed slides, every key).
+
+### Copilot conversation
+
+- One thread per deck, stored next to the keys (`copilot-threads.json`): bounded
+  at 40 messages, 20k characters each and 100 decks. The panel restores it when
+  it mounts and when the deck changes, "New chat" clears it, and every settled
+  turn saves it. Tool rows and reasoning are not persisted: they were live UI, and
+  replaying them next session would be a lie about what the model did.
 
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
 
-- **Topbar:** brand mark, inline deck title input with real-time saving/saved indicator,
-  canvas zoom controls (`Fit`, `50%`, `75%`, `100%`, `125%`, `150%`), language switch
-  (EN/ES), light/dark toggle, undo/redo, quick export menu (PDF, PNG ZIP, .slyde),
-  Present button.
-- **Storyboard:** live thumbnails, HTML5 drag-and-drop reordering with spatial drop-line
-  indicators, thumbnail hover action bar, layout template popover.
-- **Stage:** centered canvas with responsive scaling + manual zoom, AI sweep generation
-  animation, status bar with connection dot and chips for animations.
-- **Bimodal canvas:** every block carries `data-id`, click to select, floating HUD
-  (align, padding, AI, deselect), double-click inline editing committed through
-  `mutate_element` **with the owning slide id**, structure tree in the inspector.
-- **Inspector:** slide tab (template badge, id, duplicate/delete, speaker notes with
-  caret-preserving autosave, animation timeline editor, developer mode) and deck tab
-  (all six theme swatches, aspect ratio, deck file save/open, export).
-- **In-app Copilot:** contextual indicator pill, suggestion pills, streaming SSE,
-  localized tool rows, reasoning drawer with tail-following scroll and double-click
-  expand, provider sheet with 8 providers and model search.
-- **Presenter & Speaker Console:** kiosk presenter with auto-hiding HUD and progress bar;
-  speaker console with next-slide preview, wall clock, stopwatch, scalable notes,
-  reading-time pace. All localized in EN & ES.
-- **Themes:** the inspector select, the theme swatches and the command palette all read
-  one `THEME_CHOICES` list that mirrors `slyde_core::THEME_IDS` (studio, paper, night,
-  terminal, academic, pitch).
-- **Auth in the browser:** JSON calls send `Authorization: Bearer`; only the WS
-  handshake, `<a download>` links and `window.open` still use the query form, because a
-  browser cannot set headers there.
-- **Accessibility:** AA contrast in light and dark, focus rings, roving tabindex in the
-  storyboard, labels on every icon button, `aria-live` status, localized iframe labels,
-  32px top-bar targets. EN and ES dictionaries have exact key parity (257 keys each).
+- Locale dictionaries live in `ui/static/locales/{en,es}.js` (263 keys each) and
+  `i18n.js` is a 66-line loader with the same API. A parity test enforces equal
+  key sets, no empty values, every `data-i18n*` attribute resolving, matching
+  `{placeholder}` tokens, and that the dictionary did not creep back into
+  `i18n.js`.
+- `tests/ui/modules.test.mjs` imports every UI module in Node and fails on any
+  `SyntaxError`: a duplicate `let` in a new module had produced a blank studio
+  with no error in the product.
+- `tests/ui/components.test.mjs` is the component layer the audit asked for: the
+  DOM-free modules (reveal state, key map, progress, pacing, activity, image
+  placement) plus the inspector's contract lists (12 kinds, 6 themes) are tested
+  directly in Node.
+  There is still no DOM component runner, which is the trade-off of the zero-npm
+  decision.
+- Library sheet, image editing, PPTX menu item, all localized in EN and ES.
+- Auth: JSON calls use `Authorization: Bearer`; only the WS handshake, downloads
+  and `window.open` keep the query form.
 
 ### Persistence
 
-- Every committed mutation (UI command, MCP call, undo/redo, file open) is autosaved,
-  debounced 300 ms, to `%APPDATA%\SlydeCode\decks\current.slyde` (atomic temp+rename).
-- Startup restores that deck; if the file exists but is invalid, autosave stays off for
-  the session so the recoverable file is never overwritten.
-- `Guardar copia` downloads the deck via `GET /api/deck`; `Abrir archivo…` uploads a
-  `.slyde` through a file input to `POST /api/deck/open`, which validates before
-  replacing the deck. Ctrl+C flushes the deck before shutdown.
+- Autosave is debounced 300 ms and follows the **active** deck through a watch
+  channel; a deck switch flushes the outgoing deck first.
+- Ctrl+C flushes before shutdown. A server without a library still runs entirely
+  in memory (tests rely on it).
 
 ### Verified end to end
 
-- `cargo test --workspace`: 161 tests green (2026-10-25).
-- `node --test "tests/ui/*.test.mjs"`: 29 tests green in headless Chrome over CDP,
-  including the new cross-slide edit regression and the accessibility baseline.
-- Live HTTP probe of the sandbox origin: `/s/{id}` → 401 without a token, 401 with a
-  wrong token, 200 with the sandbox token and with the app token; `/print` embeds the
-  sandbox token in its iframes and never the app token.
-- Earlier phases verified export (PDF/PNG, correct page size and dimensions), fonts in
-  sandbox and export, MCP stdio flows and `.slyde` save/open.
+- `cargo test --workspace`: 217 green.
+- `node --test "tests/ui/*.test.mjs"`: 41 green, including the deck library flow,
+  the image flow (insert → render in the sandbox → drag → geometry persisted →
+  bundle download) and the 2x PNG export.
+- `python scripts/validate-pptx.py target/tmp/pptx-check.pptx --expect-slides 3`:
+  `OK … 3 slides, one full-bleed PNG each`.
+- Live probe: `/s/{id}` 401 without a token, 200 with the sandbox token; the
+  autosave writes into the active deck file (checked on disk).
 
 ## In Progress
 
-Nothing partially implemented. The next work is prioritised in the backlog below.
+Nothing partially implemented on the branch.
 
-## Not Implemented Yet (audited 2026-10-25)
+## Not Implemented Yet
 
-- Drag & drop assets with an `assets/images` store and a `.slyde` bundle for them.
-- Optimistic DOM updates / `startViewTransition` morphs; token-by-token visual fill.
-- `SlideElement.elements` is modelled and reachable through tools, but the canvas still
-  edits one HTML blob per slide; nothing populates the structured array yet.
-- PPTX export, deck library/recent files, component-level UI tests (no DOM runner).
+- `app.js` is the shell in one closure (~1,730 lines): it is now glue (topbar,
+  stage frame, chips, presenter overlay, boot), but it is still one closure with
+  shared mutable state rather than a state object with per-region render.
+- OS keychain for provider keys (the file is owner-only on Unix; Windows has no
+  DACL yet).
+- `app.js` is still one large `boot()` closure, and the presenter logic is
+  duplicated between `app.js` and `present.js`.
+- A DOM component runner (the pure modules are covered; the DOM wiring is only
+  covered end-to-end).
+- Deck thumbnails in the library (rows show title, slide count, age and theme).
+- PPTX exports pictures, not editable text shapes.
 
 ## Known Issues / Bugs
 
-- MSVC target cannot link on this machine (Windows SDK missing). Only
-  `x86_64-pc-windows-gnu` is verified; the `rust-toolchain.toml` pins `stable`, so on
-  Windows the target still has to be passed explicitly or configured in `.cargo/config`.
-- PNG export launches one headless Chrome per slide (~1–2 s each, sequential). A 50-slide
-  deck takes over a minute; reuse a single Chrome via CDP if this becomes a real workflow.
-- Slides can only reference `data:`/`blob:` images (sandbox CSP), so photo-rich decks
-  are not possible yet.
-- Autosave keeps a single working deck; there is no deck library or recent-files list.
-  `Nuevo` replaces the working deck (undoable, but the file on disk is rewritten after
-  300 ms).
-- Killing the server with `Stop-Process -Force` skips the Ctrl+C flush; the last
-  debounced write is what survives.
-- The inspector rebuilds itself with `innerHTML` on every state change. The notes caret
-  and scroll are restored explicitly, but focus inside other inspector controls can
-  still be lost while a remote change lands.
-- Copilot conversation history is not persisted across reloads. Keys and the last
-  provider/model are stored; the thread lives in the page.
-- Stop aborts the HTTP stream; there is no server-side cancel endpoint or
-  partial-response persistence.
-- The copilot is desktop-only: the right panel is hidden below 1100px.
-- Provider model lists include models that may not support tool calling or vision; the
-  UI shows metadata when the provider supplies it but does not pre-validate capability.
-- API keys are stored as plaintext in the app-data JSON with owner-only Unix
-  permissions. There is no OS keychain integration (a Windows DACL is still missing).
-- PDF/DOCX/PPTX extraction is text-only (no OCR, no layout or image extraction).
-- Real provider calls are unverified with live keys; the suite mocks the HTTP boundary.
-- UI coverage is end-to-end only; there is no component-level DOM runner.
-- macOS and Linux are untested (the new CI job runs the Rust suite on Linux, which is
-  not the same as a manual pass).
+- macOS and Linux remain unverified locally (the CI job runs the Rust suite on
+  Linux, but that is not a manual pass).
+- MSVC cannot link on this machine (Windows SDK missing); `x86_64-pc-windows-gnu`
+  is the verified target and CI uses plain `stable` on Linux/Windows runners.
+- Keyboard nudge inside the canvas needs the slide frame to own focus; clicking
+  the picture takes focus, but a keyboard-first user has to click first.
+- Image editing only exists in the studio stage, not in the presenter.
+- The `.slyde` bundle duplicates assets that another deck may already have (no
+  content addressing yet).
+- Slide images must be raster; SVG and remote URLs are rejected by design.
+- The inspector still rebuilds itself with `innerHTML`; the notes caret and
+  scroll are restored explicitly, but focus can be lost while a remote change
+  lands.
+- A restored copilot thread shows text only: tool rows and reasoning from the
+  previous session are gone by design.
+- Copilot: 40 rounds is still a budget, not a guarantee, and large decks may need
+  a second "continue".
+- PNG export at 2x triples the file size; there is no user-facing 1x/2x choice.
+- Provider model lists include models that may not support tool calling; the UI
+  shows metadata but does not pre-validate capability.
+- Real provider calls are still unverified with live keys.
 
 ## Build & Platform Status
 
-- Windows: **verified** with `cargo +stable-x86_64-pc-windows-gnu`. MSVC blocked by the
-  missing Windows SDK (`LNK1181: kernel32.lib`); clippy and rustfmt must therefore be
-  run through the gnu toolchain as well.
-- macOS: not verified (no machine).
-- Linux: not verified locally; the CI workflow runs fmt, clippy and `cargo test` on
-  `ubuntu-latest`.
+- Windows: **verified** with `cargo +stable-x86_64-pc-windows-gnu` (full suite,
+  studio E2E, all exports). MSVC has no C++ build tools on this machine, so
+  `scripts/cargo.ps1` now falls back to the GNU toolchain instead of failing.
+- macOS / Linux: `slyde-core`, `slyde-pptx` and `slyde-export` are **cross-checked**
+  for `x86_64-apple-darwin` and `x86_64-unknown-linux-gnu` and compile clean.
+  `slyde-server` cannot be cross-built from Windows (`ring` needs a C toolchain
+  for the target), so CI's ubuntu job is the real Linux verification. No manual
+  pass on either OS yet.
+- `clippy -D warnings` is now clean on the Windows target **and** on the Linux
+  cfg paths touched by the browser discovery work: the module is checked in
+  isolation with `clippy-driver --target x86_64-unknown-linux-gnu` (see
+  MEMORY.md for the recipe), because the full workspace cross-check stops at
+  `ring`.
 
 ## Backlog (Prioritized)
 
-1. **Validate the copilot against live provider keys** (all eight), starting with
-   OpenAI, Anthropic and OpenRouter; record model/tool quirks and add shims where needed.
-2. **Deck library / recent files + new deck**, replacing the single-autosave-slot model.
-3. **Image asset strategy** for `.slyde` decks (sandbox CSP currently allows only
-   `data:`/`blob:`), including a bundle format decision.
-4. **Faster PNG export**: one Chrome/CDP session for all slides, at 2× for retina.
-5. **Persist copilot conversations** per deck and add token/cost estimates.
-6. **PPTX export** behind an `Exporter` trait — research first, validate in PowerPoint.
-7. **Split `ui/static/app.js`** into the modules described in `ui/src/README.md`
-   (state object + per-region render) and drop the `innerHTML` rebuild of the inspector.
-8. Component-level UI unit tests if a DOM runner is adopted; E2E stays the contract.
+1. **Validate the copilot against live provider keys** (all eight).
+2. **Turn the shell into a state object**: the panels are modules, but the shell
+   still shares ~30 mutable `let`s through closures instead of one read model
+   with explicit subscriptions.
+3. **OS keychain** for provider keys (Windows has a DACL now; a real keychain is
+   next).
+4. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
+5. **Editable PPTX** (text shapes) behind the current image-per-slide baseline.
+6. A DOM component runner if the zero-npm rule is ever relaxed.
+7. Content-addressed assets so two decks can share one image.
+8. Token/cost estimates for copilot turns.
 
 ## Next Immediate Step
 
-- Run the copilot with at least one real key and report any provider/model that fails;
-  then harden those adapters. Independently, pick the deck-library item: it is the
-  biggest remaining product cliff.
+- Review the branch, then run the copilot with one real key and report any
+  provider/model that fails.
 
 ## Completed
 
-- [x] Audit follow-up: cross-slide element scoping, single-source wire contract, sandbox
-      token + authenticated slides, coalescing undo history, notes caret, bearer auth,
-      honest copilot network errors, fmt/clippy/CI gate, license and docs alignment —
+- [x] Fixed the first CI run: browser discovery now builds its candidate list
+      per OS, so no platform leaves a dead `mut` (`unused_mut` under
+      `-D warnings` on Linux); Linux also gained absolute snap/flatpak paths, and
+      a test guards against an empty candidate list — 2026-10-25
+- [x] CI is green on the pull request (Linux fmt/clippy/tests and the Windows
+      studio suite, 55/55). The canvas E2E tests that failed three runs in a row
+      were racing the stage document: they now wait for `data-slyde-ready`
+      through the iframe's CDP target, tolerate the lazily created HUD node,
+      poll for the outgoing command and fall back to clicking the block through
+      the stage session when parent-page input misses the frame — 2026-10-25
+- [x] Canvas extracted (selection, HUD, inline editing, image placement) and the
+      storyboard extracted (thumbnails, drag-and-drop, hover actions) — 2026-10-25
+- [x] Inspector extracted to its own module (markup, animation timeline, notes
+      caret, export wiring) and the contract lists tested — 2026-10-25
+- [x] Shared presenter state machine + component tests — 2026-10-25
+- [x] Copilot conversations persisted per deck (bounded), restored on mount and
+      deck switch, cleared by New chat — 2026-10-25
+- [x] Deck library: files instead of a single autosave slot, endpoints, sheet,
+      `⌘K` entries, migration of `current.slyde` — 2026-10-25
+- [x] Images: asset store, paste/drop, move/resize, `.slyde` bundle v2 — 2026-10-25
+- [x] PowerPoint export: `slyde-pptx` + API + CLI + MCP + UI, validated with
+      python-pptx — 2026-10-25
+- [x] PNG export in one Chrome session over CDP at 2x, with a CLI fallback and
+      hard timeouts — 2026-10-25
+- [x] MCP stdio loop dispatches concurrently under a semaphore with one writer —
       2026-10-25
-- [x] Reasoning drawer: tail-following stream with its own scroll, double-click expand —
-      2026-10-25
-- [x] `Nuevo` starts a real new deck (`UiCommand::NewDeck` + `start_new_deck`, undoable) —
-      2026-10-25
-- [x] Copilot loop reliability: per-round deck snapshot, 20 rounds, repeat guard,
-      `tool_limit` error code — 2026-10-25
-- [x] Manual animation editor in the inspector — 2026-10-25
-- [x] Presenter reveal steps advance one per click/arrow — 2026-10-25
-- [x] Plan phases A–D: bimodal canvas, `⌘K` palette, KaTeX/hljs/Mermaid, teleprompter,
-      structure tree — 2026-10-25
-- [x] Spec audit + fixes: `mutate_element` nested-markup corruption, honest
-      `search_asset`/`generate_image` contracts — 2026-10-24
-- [x] In-app copilot: eight providers, streaming SSE, deck tools, attachments, EN/ES — 2026-10-24
-- [x] Durable decks: `.slyde` JSON, autosave, download/upload — 2026-10-24
-- [x] MCP end-to-end over stdio; PDF/PNG export verified — 2026-10-24
+- [x] Copilot: server-side cancel endpoint and a 40-round budget — 2026-10-25
+- [x] i18n split per locale + parity test; module smoke test — 2026-10-25
+- [x] Autosave path bug and stale-binary test bug fixed — 2026-10-25
+- [x] Audit follow-up: cross-slide scoping, wire contract, sandbox token, undo
+      coalescing, bearer auth, fmt/clippy/CI gate — 2026-10-25
+- [x] In-app copilot, presenter, exports, `.slyde` persistence, MCP end-to-end,
+      Geist + accessibility pass — 2026-10-24

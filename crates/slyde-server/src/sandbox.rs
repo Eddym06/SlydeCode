@@ -509,6 +509,161 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       return null;
     }
 
+    // ---- Images: paste, drag, resize -------------------------------------
+    // The stored geometry is the source of truth, so the layer always works in
+    // stage pixels (the document is CSS-scaled to fit the iframe) and reports
+    // the final rectangle to the studio, which commits it through the state.
+
+    function stageGeometry(el) {
+      var r = el.getBoundingClientRect();
+      var s = stage.getBoundingClientRect();
+      var scale = s.width ? s.width / W : 1;
+      return {
+        x: Math.round((r.left - s.left) / scale),
+        y: Math.round((r.top - s.top) / scale),
+        w: Math.round(r.width / scale),
+        h: Math.round(r.height / scale)
+      };
+    }
+
+    function applyGeometry(el, g) {
+      el.style.position = 'absolute';
+      el.style.left = g.x + 'px';
+      el.style.top = g.y + 'px';
+      el.style.width = g.w + 'px';
+      el.style.height = g.h + 'px';
+      paint();
+    }
+
+    var drag = null;
+
+    stage.addEventListener('pointerdown', function (event) {
+      if (editingNode || event.button !== 0) return;
+      var el = event.target;
+      if (!el || el.tagName !== 'IMG') return;
+      event.preventDefault();
+      var geometry = stageGeometry(el);
+      // Freeze the element where it is so it can move without reflowing the slide.
+      applyGeometry(el, geometry);
+      drag = {
+        el: el,
+        id: el.getAttribute('data-slyde-id'),
+        mode: event.shiftKey ? 'resize' : 'move',
+        startX: event.clientX,
+        startY: event.clientY,
+        geometry: geometry
+      };
+      select(el);
+      // The stage prevents the default focus change, so without this the frame
+      // never receives keydown and the arrow-key nudge would be dead.
+      try { window.focus(); } catch (e) {}
+      if (el.setPointerCapture) {
+        try { el.setPointerCapture(event.pointerId); } catch (e) {}
+      }
+    }, true);
+
+    window.addEventListener('pointermove', function (event) {
+      if (!drag) return;
+      event.preventDefault();
+      var s = stage.getBoundingClientRect();
+      var scale = s.width ? s.width / W : 1;
+      var dx = (event.clientX - drag.startX) / scale;
+      var dy = (event.clientY - drag.startY) / scale;
+      var next = {
+        x: drag.geometry.x,
+        y: drag.geometry.y,
+        w: drag.geometry.w,
+        h: drag.geometry.h
+      };
+      if (drag.mode === 'resize') {
+        next.w = Math.max(16, Math.round(drag.geometry.w + dx));
+        next.h = Math.max(16, Math.round(drag.geometry.h + dy));
+      } else {
+        next.x = Math.round(drag.geometry.x + dx);
+        next.y = Math.round(drag.geometry.y + dy);
+      }
+      applyGeometry(drag.el, next);
+    });
+
+    function endDrag() {
+      if (!drag) return;
+      var el = drag.el;
+      var id = drag.id;
+      var geometry = stageGeometry(el);
+      drag = null;
+      post({ type: 'image-geometry', id: id, rect: geometry });
+    }
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+
+    // Arrow keys nudge the selected picture: 1px, 10px with Shift. Without
+    // stopImmediatePropagation the document keydown forwarder would also send
+    // the arrow to the studio and change the slide.
+    document.addEventListener('keydown', function (event) {
+      if (!selection || selection.tagName !== 'IMG' || editingNode) return;
+      var step = event.shiftKey ? 10 : 1;
+      var g = stageGeometry(selection);
+      if (event.key === 'ArrowLeft') g.x -= step;
+      else if (event.key === 'ArrowRight') g.x += step;
+      else if (event.key === 'ArrowUp') g.y -= step;
+      else if (event.key === 'ArrowDown') g.y += step;
+      else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      applyGeometry(selection, g);
+      post({ type: 'image-geometry', id: selection.getAttribute('data-slyde-id'), rect: g });
+    }, true);
+
+    function readImage(file) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var image = new Image();
+        image.onload = function () {
+          post({
+            type: 'image-paste',
+            dataUrl: String(reader.result),
+            natural: {
+              w: image.naturalWidth || 1024,
+              h: image.naturalHeight || 576
+            }
+          });
+        };
+        image.src = String(reader.result);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    document.addEventListener('paste', function (event) {
+      if (editingNode) return;
+      var items = (event.clipboardData && event.clipboardData.items) || [];
+      for (var i = 0; i < items.length; i += 1) {
+        if (items[i].type && items[i].type.indexOf('image/') === 0) {
+          var file = items[i].getAsFile();
+          if (!file) continue;
+          event.preventDefault();
+          readImage(file);
+          return;
+        }
+      }
+    }, true);
+
+    document.addEventListener('dragover', function (event) {
+      if (!event.dataTransfer) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    }, true);
+
+    document.addEventListener('drop', function (event) {
+      var files = event.dataTransfer && event.dataTransfer.files;
+      if (!files || !files.length) return;
+      for (var i = 0; i < files.length; i += 1) {
+        if (files[i].type && files[i].type.indexOf('image/') === 0) {
+          event.preventDefault();
+          readImage(files[i]);
+          return;
+        }
+      }
+    }, true);
     stage.addEventListener('click', function (event) {
       if (editingNode) return;
       event.preventDefault();

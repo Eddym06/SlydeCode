@@ -35,12 +35,45 @@ pub async fn post_json(
     request("POST", url, Some(encoded), timeout).await
 }
 
+/// POSTs with an empty body and returns the response bytes verbatim.
+///
+/// The export endpoint answers with a file rather than JSON, so the CLI cannot
+/// go through `post_json`. A non-2xx still carries JSON, so the error keeps the
+/// server's message.
+pub async fn post_bytes(url: &str, timeout: Duration) -> Result<Vec<u8>, HttpError> {
+    let (status, body) = raw_request("POST", url, None, timeout).await?;
+    if !(200..300).contains(&status) {
+        return Err(HttpError::Status {
+            status,
+            body: String::from_utf8_lossy(&body).to_string(),
+        });
+    }
+    Ok(body)
+}
+
 async fn request(
     method: &str,
     url: &str,
     body: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<serde_json::Value, HttpError> {
+    let (status, body) = raw_request(method, url, body, timeout).await?;
+    if !(200..300).contains(&status) {
+        return Err(HttpError::Status {
+            status,
+            body: String::from_utf8_lossy(&body).to_string(),
+        });
+    }
+    serde_json::from_slice(&body).map_err(|e| HttpError::InvalidResponse(e.to_string()))
+}
+
+/// Performs one HTTP/1.1 request and returns the status and the body bytes.
+async fn raw_request(
+    method: &str,
+    url: &str,
+    body: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<(u16, Vec<u8>), HttpError> {
     let parsed = Url::parse(url)?;
 
     let attempt = async {
@@ -76,7 +109,7 @@ async fn request(
             .await
             .map_err(|e| HttpError::Network(e.to_string()))?;
 
-        parse_response(&raw)
+        split_response(&raw)
     };
 
     match tokio::time::timeout(timeout, attempt).await {
@@ -85,13 +118,14 @@ async fn request(
     }
 }
 
-fn parse_response(raw: &[u8]) -> Result<serde_json::Value, HttpError> {
+/// Splits a raw HTTP response into its status code and body bytes.
+fn split_response(raw: &[u8]) -> Result<(u16, Vec<u8>), HttpError> {
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .ok_or_else(|| HttpError::InvalidResponse("missing header terminator".into()))?;
     let head = String::from_utf8_lossy(&raw[..split]);
-    let body = &raw[split + 4..];
+    let body = raw[split + 4..].to_vec();
 
     let status = head
         .lines()
@@ -100,12 +134,7 @@ fn parse_response(raw: &[u8]) -> Result<serde_json::Value, HttpError> {
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(|| HttpError::InvalidResponse("missing status line".into()))?;
 
-    if !(200..300).contains(&status) {
-        let text = String::from_utf8_lossy(body).to_string();
-        return Err(HttpError::Status { status, body: text });
-    }
-
-    serde_json::from_slice(body).map_err(|e| HttpError::InvalidResponse(e.to_string()))
+    Ok((status, body))
 }
 
 struct Url {
@@ -165,14 +194,25 @@ mod tests {
     #[test]
     fn response_parsing_splits_headers_and_body() {
         let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
-        let json = parse_response(raw).unwrap();
-        assert_eq!(json["ok"], true);
+        let (status, body) = split_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"{\"ok\":true}");
     }
 
     #[test]
-    fn error_status_is_reported_with_the_body() {
-        let raw = b"HTTP/1.1 401 Unauthorized\r\n\r\n{\"error\":\"nope\"}";
-        let err = parse_response(raw).unwrap_err();
-        assert!(matches!(err, HttpError::Status { status: 401, .. }));
+    fn binary_bodies_survive_untouched() {
+        // A PPTX starts with the ZIP signature; the client must not decode it.
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/vnd.openxmlformats\r\n\r\nPK\x03\x04binary";
+        let (status, body) = split_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(&body[..4], b"PK\x03\x04");
+    }
+
+    #[test]
+    fn a_missing_status_line_is_an_error() {
+        assert!(matches!(
+            split_response(b"garbage\r\n\r\n"),
+            Err(HttpError::InvalidResponse(_))
+        ));
     }
 }

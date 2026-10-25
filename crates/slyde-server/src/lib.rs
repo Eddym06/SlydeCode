@@ -10,11 +10,15 @@
 //! It never renders HTML itself: Chrome is the only rendering surface.
 
 pub mod agent;
+pub mod asset_api;
+pub mod assets;
 pub mod chrome;
 pub mod copilot;
+pub mod deck_api;
 pub mod error;
 pub mod export_api;
 pub mod http;
+pub mod library;
 pub mod rendezvous;
 pub mod routes;
 pub mod sandbox;
@@ -32,6 +36,7 @@ use tower_http::services::ServeDir;
 
 pub use chrome::{Browser, BrowserKind, OpenMode, discover_browser};
 pub use error::ServerError;
+pub use library::{DeckSummary, Library};
 pub use rendezvous::{
     RuntimeInfo, app_data_dir, clear_runtime, now_ms, probe_health, read_runtime, runtime_path,
     write_runtime,
@@ -44,13 +49,16 @@ use slyde_core::PresentationState;
 pub struct ServerConfig {
     /// Directory that contains `index.html`, `present.html` and `static/`.
     pub ui_dir: PathBuf,
+    /// Initial deck. Ignored when `library_dir` points at a library with decks:
+    /// the active deck on disk wins, because that is what the user last worked on.
     pub state: PresentationState,
     /// `0` picks an ephemeral port, which is what production uses.
     pub port: u16,
     pub sandbox_port: u16,
     pub token: String,
-    /// When set, every committed deck is written here (atomic, debounced).
-    pub deck_path: Option<PathBuf>,
+    /// When set, decks live in this directory (one `.slyde` file each) and the
+    /// active one is autosaved there. `None` keeps the server in memory.
+    pub library_dir: Option<PathBuf>,
     /// Asset root (fonts, brand, icons), served at `/fonts` on both origins.
     /// `None` is valid: the UI and slides then use the system fallback stack.
     pub assets_dir: Option<PathBuf>,
@@ -64,7 +72,7 @@ impl ServerConfig {
             port: 0,
             sandbox_port: 0,
             token: new_token(),
-            deck_path: None,
+            library_dir: None,
             assets_dir: None,
         }
     }
@@ -75,6 +83,8 @@ pub struct RunningServer {
     pub sandbox_port: u16,
     pub token: String,
     pub state: Arc<AppState>,
+    /// Present when the server owns a deck library on disk.
+    pub library: Option<Arc<Library>>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -118,26 +128,52 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
         format!("http://localhost:{port}"),
     ];
 
-    let (deck_tx, autosave) = match &config.deck_path {
-        Some(path) => {
-            let (tx, rx) = tokio::sync::watch::channel(config.state.presentation().clone());
-            (Some(tx), Some((rx, path.clone())))
+    let (library, initial_state) = match config.library_dir.as_ref() {
+        Some(dir) => {
+            let library = Arc::new(Library::new(dir.clone()));
+            // A library written before this feature kept a single
+            // `current.slyde`; import it once so no work disappears.
+            if let Some(id) = library.migrate_legacy().await? {
+                if library.active().is_none() {
+                    library.set_active(&id)?;
+                }
+                tracing::info!(deck = %id, "imported the pre-library deck");
+            }
+            let (active, deck) = open_healthy_deck(&library).await?;
+            library.set_active(&active)?;
+            let mut state =
+                PresentationState::new(deck.title.clone(), deck.theme.clone(), deck.aspect_ratio);
+            state.replace(deck)?;
+            (Some(library), state)
+        }
+        None => (None, config.state),
+    };
+
+    let (deck_tx, autosave) = match &library {
+        Some(library) => {
+            let (tx, rx) = tokio::sync::watch::channel(initial_state.presentation().clone());
+            (Some(tx), Some((rx, library.subscribe_path())))
         }
         None => (None, None),
     };
 
     let state = AppState::with_copilot(
-        config.state,
+        initial_state,
         config.token.clone(),
         config.ui_dir,
         origins,
         format!("http://127.0.0.1:{sandbox_port}"),
-        deck_tx,
         Arc::new(copilot::CopilotState::persistent()),
+        match (&library, deck_tx) {
+            (Some(library), Some(deck_tx)) => {
+                state::Persistence::with_library(library.clone(), deck_tx)
+            }
+            _ => state::Persistence::memory(),
+        },
     );
 
-    if let Some((rx, path)) = autosave {
-        tokio::spawn(storage::run_autosave(rx, path));
+    if let Some((deck_rx, path_rx)) = autosave {
+        tokio::spawn(storage::run_autosave(deck_rx, path_rx));
     }
 
     let (shutdown, _) = watch::channel(false);
@@ -198,8 +234,44 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
         sandbox_port,
         token: config.token,
         state,
+        library,
         shutdown,
     })
+}
+
+/// Picks the deck to open at startup.
+///
+/// A deck that cannot be read must not block the app and must never be
+/// overwritten by the autosave: when the active file is unreadable, this falls
+/// back to a healthy sibling, or seeds a fresh deck, and leaves the broken file
+/// untouched so the user can recover it by hand.
+async fn open_healthy_deck(
+    library: &Library,
+) -> Result<(String, slyde_core::Presentation), ServerError> {
+    let active = library.active_or_newest()?;
+    if let Some(id) = active.as_deref() {
+        match library.load(id) {
+            Ok(Some(deck)) => return Ok((id.to_string(), deck)),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::error!(deck = %id, error = %error, "the active deck could not be read; opening another one");
+            }
+        }
+    }
+
+    let siblings = library.list().unwrap_or_default();
+    for summary in siblings {
+        if Some(summary.id.as_str()) == active.as_deref() {
+            continue;
+        }
+        if let Ok(Some(deck)) = library.load(&summary.id) {
+            return Ok((summary.id, deck));
+        }
+    }
+
+    let deck = library::welcome_deck();
+    let id = library.create(&deck.title.clone(), &deck).await?;
+    Ok((id, deck))
 }
 
 async fn bind(port: u16) -> Result<TcpListener, ServerError> {

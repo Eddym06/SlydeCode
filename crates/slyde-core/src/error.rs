@@ -51,4 +51,10 @@ pub enum CoreError {
 
     #[error("invalid project: {0}")]
     InvalidProject(String),
+
+    #[error("invalid image source: {0}")]
+    InvalidAsset(String),
+
+    #[error("invalid geometry: {0}")]
+    InvalidGeometry(String),
 }

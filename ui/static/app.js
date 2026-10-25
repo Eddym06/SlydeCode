@@ -7,6 +7,11 @@ import {
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
+import { mountDeckLibrary } from "./deck-library.js";
+import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
+import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { createStoryboard } from "./storyboard.js";
+import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -37,13 +42,13 @@ function boot(sessionToken) {
   // Authorizes slide documents only. It is embedded in every iframe URL, so a
   // slide's own script can read it; the session token stays out of that document.
   let sandboxToken = "";
+  // Active deck id: keys the copilot conversation and the library actions.
+  let activeDeckId = null;
   /// `&t=…` suffix appended to every slide URL (`""` when the server sent none).
   let sourceQuery = "";
   let selectedId = null;
   let stageKey = "";
-  let thumbsKey = "";
   let pendingAnimations = [];
-  let notesTimer = null;
   let titleTimer = null;
   let resizeTimer = null;
   let exportJob = null;
@@ -72,8 +77,10 @@ function boot(sessionToken) {
     exportMenu: $("export-menu"),
     topbarExportPdf: $("topbar-export-pdf"),
     topbarExportPng: $("topbar-export-png"),
+    topbarExportPptx: $("topbar-export-pptx"),
     topbarSaveDeck: $("topbar-save-deck"),
     topbarNewDeck: $("topbar-new-deck"),
+    topbarLibrary: $("topbar-library"),
     topbarOpenDeck: $("topbar-open-deck"),
     topbarSaveDeckBtn: $("topbar-save-deck-btn"),
     topbarFilePicker: $("topbar-file-picker"),
@@ -109,29 +116,20 @@ function boot(sessionToken) {
     copilotPromptPills: $("copilot-prompt-pills"),
   };
 
-  let inspectorSubtab = "slide";
   const ZOOM_LEVELS = ["fit", 0.5, 0.75, 1.0, 1.25, 1.5];
   let currentZoomIdx = 0;
   let saveTimer = null;
 
   let copilot = null;
   let palette = null;
+  let library = null;
   let activePanel = "inspector";
 
   // ---------- Command palette ----------
 
-  /// Every theme the backend accepts (`slyde_core::THEME_IDS`), with the two dots
-  /// the inspector shows. Both pickers read this list, so a theme can never be
-  /// offered in one place and missing in another. `theme.<id>` must exist in both
-  /// locale files.
-  const THEME_CHOICES = [
-    { id: "studio", dots: ["#7C3AED", "#FF6B4A"] },
-    { id: "paper", dots: ["#2C2B2A", "#D97706"] },
-    { id: "night", dots: ["#9B6BFF", "#FF8265"] },
-    { id: "terminal", dots: ["#00FF66", "#00E5FF"] },
-    { id: "academic", dots: ["#111111", "#0055D4"] },
-    { id: "pitch", dots: ["#0F172A", "#38BDF8"] },
-  ];
+  // The theme list is imported from `inspector.js`: the palette and the inspector
+  // must offer exactly the same decks themes, and `theme.<id>` must exist in both
+  // locales.
   const PALETTE_THEMES = THEME_CHOICES.map((choice) => choice.id);
   const PALETTE_RATIOS = ["16:9", "4:3", "9:16"];
 
@@ -154,7 +152,7 @@ function boot(sessionToken) {
   }
 
   function buildPaletteActions(scope = {}) {
-    const element = scope.element || selectedElement;
+    const element = scope.element || canvas.selectedElement;
     const d = deck();
     const actions = [];
 
@@ -178,6 +176,19 @@ function boot(sessionToken) {
     }
 
     actions.push(
+      {
+        id: "deck.library",
+        group: t("palette.group.deck"),
+        label: t("action.library"),
+        hint: "L",
+        run: () => openLibrary(),
+      },
+      {
+        id: "deck.new",
+        group: t("palette.group.deck"),
+        label: t("library.new"),
+        run: () => els.topbarNewDeck?.click(),
+      },
       {
         id: "present",
         group: t("palette.group.present"),
@@ -608,9 +619,9 @@ function boot(sessionToken) {
     if (!els.copilotContextPill || !els.copilotPromptPills) return;
     const current = slide();
     const idx = current ? d.slides.findIndex((s) => s.id === current.id) : -1;
-    if (selectedElement) {
+    if (canvas.selectedElement) {
       els.copilotContextPill.textContent = t("copilot.contextElement", {
-        id: selectedElement.id,
+        id: canvas.selectedElement.id,
       });
       els.copilotContextPill.dataset.target = "element";
     } else if (current && idx >= 0) {
@@ -651,134 +662,35 @@ function boot(sessionToken) {
     });
   }
 
-  /// Every thumb is a button; only the selected one is in the tab order, so
-  /// Tab jumps straight into the deck and the arrow keys walk the slides.
-  function syncStoryboardSelection() {
-    els.storyboard.querySelectorAll(".thumb").forEach((el) => {
-      const current = el.dataset.id === selectedId;
-      el.setAttribute("aria-current", String(current));
-      el.tabIndex = current ? 0 : -1;
+  /// The storyboard is its own module; the shell only hands it the slides.
+  const storyboard = createStoryboard({
+    root: els.storyboard,
+    t,
+    escapeHtml,
+    hash,
+    actions: {
+      command: run,
+      applyI18n,
+      selectSlide: (slideId) => {
+        selectedId = slideId;
+        stageKey = "";
+        applyView(view);
+      },
+    },
+  });
+
+  function renderStoryboard(d) {
+    storyboard.render({
+      slides: d.slides,
+      aspectRatio: d.aspect_ratio,
+      selectedId,
+      sandboxOrigin,
+      sourceQuery,
     });
   }
 
   function focusSelectedThumb() {
-    const target = [...els.storyboard.querySelectorAll(".thumb")].find(
-      (el) => el.dataset.id === selectedId
-    );
-    if (target) target.focus();
-  }
-
-  function renderStoryboard(d) {
-    const key = d.slides.map((s) => `${s.id}:${hash(s.code)}:${s.template}`).join("|") + `:${d.aspect_ratio}`;
-    if (key === thumbsKey) {
-      syncStoryboardSelection();
-      return;
-    }
-    thumbsKey = key;
-
-    const hadFocus = els.storyboard.contains(document.activeElement);
-    const [w, h] = d.aspect_ratio.split(":").map(Number);
-
-    els.storyboard.innerHTML = "";
-    if (!d.slides.length) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.style.padding = "8px 4px";
-      hint.textContent = t("empty.body");
-      els.storyboard.append(hint);
-      return;
-    }
-
-    d.slides.forEach((s, index) => {
-      const label = t("storyboard.slide", {
-        n: index + 1,
-        template: t(`template.${s.template}`),
-      });
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "thumb";
-      button.dataset.id = s.id;
-      button.draggable = true;
-      button.tabIndex = s.id === selectedId ? 0 : -1;
-      button.setAttribute("aria-current", String(s.id === selectedId));
-      button.setAttribute("aria-label", label);
-
-      button.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("text/plain", String(index));
-        e.dataTransfer.effectAllowed = "move";
-        button.classList.add("dragging");
-      });
-      button.addEventListener("dragend", () => {
-        button.classList.remove("dragging");
-        els.storyboard.querySelectorAll(".thumb").forEach((t) => {
-          t.classList.remove("drag-over-top", "drag-over-bottom");
-        });
-      });
-      button.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        const rect = button.getBoundingClientRect();
-        const mid = rect.top + rect.height / 2;
-        if (e.clientY < mid) {
-          button.classList.add("drag-over-top");
-          button.classList.remove("drag-over-bottom");
-        } else {
-          button.classList.add("drag-over-bottom");
-          button.classList.remove("drag-over-top");
-        }
-      });
-      button.addEventListener("dragleave", () => {
-        button.classList.remove("drag-over-top", "drag-over-bottom");
-      });
-      button.addEventListener("drop", (e) => {
-        e.preventDefault();
-        const fromIdx = Number(e.dataTransfer.getData("text/plain"));
-        if (Number.isNaN(fromIdx) || fromIdx === index) return;
-        const rect = button.getBoundingClientRect();
-        const mid = rect.top + rect.height / 2;
-        let toIdx = index;
-        if (e.clientY >= mid && fromIdx > index) toIdx += 1;
-        run("move_slide", { from: fromIdx, to: toIdx });
-      });
-
-      button.innerHTML = `
-        <span class="thumb-media" style="aspect-ratio:${w}/${h}">
-          <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1" aria-hidden="true" title=""
-            src="${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1${sourceQuery}"></iframe>
-        </span>
-        <span class="thumb-foot">
-          <span class="thumb-index">${String(index + 1).padStart(2, "0")}</span>
-          <span class="thumb-template">${escapeHtml(t(`template.${s.template}`))}</span>
-          <span class="thumb-actions">
-            ${index > 0 ? `<button type="button" class="thumb-btn" data-action="up" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveUp"))}" aria-label="${escapeHtml(t("storyboard.moveUp"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>` : ""}
-            ${index < d.slides.length - 1 ? `<button type="button" class="thumb-btn" data-action="down" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveDown"))}" aria-label="${escapeHtml(t("storyboard.moveDown"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>` : ""}
-            <button type="button" class="thumb-btn" data-action="dup" data-id="${s.id}" title="${escapeHtml(t("storyboard.duplicate"))}" aria-label="${escapeHtml(t("storyboard.duplicate"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button type="button" class="thumb-btn thumb-btn-danger" data-action="del" data-id="${s.id}" title="${escapeHtml(t("storyboard.delete"))}" aria-label="${escapeHtml(t("storyboard.delete"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-          </span>
-        </span>`;
-
-      button.querySelectorAll(".thumb-btn").forEach((btn) => {
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const action = btn.dataset.action;
-          const slideId = btn.dataset.id;
-          const slideIdx = Number(btn.dataset.idx);
-          if (action === "dup") run("duplicate_slide", { slide_id: slideId });
-          else if (action === "del") run("remove_slide", { slide_id: slideId });
-          else if (action === "up") run("move_slide", { from: slideIdx, to: slideIdx - 1 });
-          else if (action === "down") run("move_slide", { from: slideIdx, to: slideIdx + 1 });
-        });
-      });
-
-      button.addEventListener("click", () => {
-        selectedId = s.id;
-        stageKey = "";
-        applyView(view);
-      });
-      els.storyboard.append(button);
-    });
-
-    if (hadFocus) focusSelectedThumb();
+    storyboard.focusSelected();
   }
 
   function renderStage(d) {
@@ -795,7 +707,7 @@ function boot(sessionToken) {
     const key = `${current.id}:${hash(current.code)}:${hash(JSON.stringify(current.animation))}:${d.aspect_ratio}`;
     if (key !== stageKey) {
       stageKey = key;
-      structureNodes = [];
+      canvas.resetStructure();
       els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1&edit=1${sourceQuery}`;
     }
     fitStage(d);
@@ -821,192 +733,37 @@ function boot(sessionToken) {
     els.frameWrap.style.height = `${Math.round(height)}px`;
   }
 
-  // ---------- Bimodal canvas: element selection & inline editing ----------
-  //
-  // The sandbox owns hit-testing (it sees the real DOM), the studio owns the
-  // state and the chrome. Nothing here rewrites a slide: every change goes
-  // through `mutate_element`, so undo/redo and autosave keep working.
+  // ---------- Bimodal canvas ----------
+  // Selection, HUD and image editing live in `canvas.js`; the shell supplies the
+  // commands and reacts to selection/structure changes.
 
-  let selectedElement = null; // { id, tag, text, rect, viewport, slideId }
-  let elementHud = null;
-  let elementPaddingStep = 0;
-  let elementEditing = false;
-  let structureNodes = [];
+  const canvas = createCanvas({
+    frame: els.frame,
+    t,
+    actions: {
+      command: run,
+      uploadImage: (dataUrl) => client.uploadAsset(dataUrl),
+      notify: toast,
+      currentSlideId: () => selectedId,
+      aspectRatio: () => (deck() ? deck().aspect_ratio : "16:9"),
+      openPaletteForElement: (element) => openPalette({ element }),
+      onSelectedElement: () => {
+        if (view) updateCopilotContext(view.presentation);
+      },
+      onStructure: () => {
+        if (view && inspector.subtab === "slide") renderInspector(view.presentation);
+      },
+      applyI18n,
+    },
+  });
+  canvas.attach();
 
-  function ensureElementHud() {
-    if (elementHud) return elementHud;
-    const wrap = document.querySelector(".stage-wrap");
-    if (!wrap) return null;
-    elementHud = document.createElement("div");
-    elementHud.className = "element-hud";
-    elementHud.id = "element-hud";
-    elementHud.setAttribute("role", "toolbar");
-    elementHud.setAttribute("data-i18n-aria", "elementHud.label");
-    elementHud.hidden = true;
-    elementHud.innerHTML = `
-      <span class="element-hud-tag" id="element-hud-tag"></span>
-      <span class="element-hud-sep" aria-hidden="true"></span>
-      <button type="button" class="element-hud-btn" data-element-action="align-left"
-              data-i18n-title="elementHud.alignLeft" data-i18n-aria="elementHud.alignLeft">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M4 12h10M4 18h13"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="align-center"
-              data-i18n-title="elementHud.alignCenter" data-i18n-aria="elementHud.alignCenter">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M7 12h10M6 18h12"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="align-right"
-              data-i18n-title="elementHud.alignRight" data-i18n-aria="elementHud.alignRight">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 6h16M10 12h10M7 18h13"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="padding"
-              data-i18n-title="elementHud.padding" data-i18n-aria="elementHud.padding">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn element-hud-accent" data-element-action="ai"
-              data-i18n-title="elementHud.ai" data-i18n-aria="elementHud.ai">
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/>
-        </svg>
-      </button>
-      <button type="button" class="element-hud-btn" data-element-action="close"
-              data-i18n-title="elementHud.deselect" data-i18n-aria="elementHud.deselect">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="m6 6 12 12M18 6 6 18"/>
-        </svg>
-      </button>`;
-    wrap.append(elementHud);
-    applyI18n(elementHud);
-    elementHud.addEventListener("click", onElementHudClick);
-    return elementHud;
-  }
-
-  function renderElementHud() {
-    const hud = ensureElementHud();
-    if (!hud) return;
-    if (!selectedElement || !els.frame) {
-      hud.hidden = true;
-      return;
-    }
-    const frameRect = els.frame.getBoundingClientRect();
-    const viewport = selectedElement.viewport || { w: frameRect.width, h: frameRect.height };
-    const scale = viewport.w ? frameRect.width / viewport.w : 1;
-    const rect = selectedElement.rect;
-    const left = frameRect.left + rect.x * scale;
-    const top = frameRect.top + rect.y * scale;
-    const width = rect.w * scale;
-
-    hud.hidden = false;
-    const tag = hud.querySelector("#element-hud-tag");
-    if (tag) tag.textContent = `#${selectedElement.id}`;
-    const hudWidth = hud.offsetWidth;
-    const x = Math.min(
-      Math.max(8, left + width / 2 - hudWidth / 2),
-      Math.max(8, window.innerWidth - hudWidth - 8)
-    );
-    const y = Math.max(8, top - hud.offsetHeight - 10);
-    hud.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-  }
-
-  function onElementHudClick(event) {
-    const button = event.target.closest("[data-element-action]");
-    if (!button || !selectedElement) return;
-    const action = button.dataset.elementAction;
-    if (action === "close") {
-      deselectElement();
-    } else if (action === "ai") {
-      openPalette({ element: selectedElement });
-    } else if (action === "padding") {
-      const steps = ["padding: 0.35em 0.5em", "padding: 1.1em 1.4em", "padding: 2em 2.4em"];
-      elementPaddingStep = (elementPaddingStep + 1) % steps.length;
-      applyElementStyle(steps[elementPaddingStep]);
-    } else if (action.startsWith("align-")) {
-      applyElementStyle(`text-align: ${action.slice(6)}`);
-    }
-  }
-
-  function applyElementStyle(style) {
-    if (!selectedElement) return;
-    // Generated handles repeat in every slide, so the edit is always scoped.
-    run("mutate_element", {
-      slide_id: selectedElement.slideId || selectedId,
-      element_id: selectedElement.id,
-      style,
-    });
+  function selectElementById(id) {
+    canvas.selectById(id);
   }
 
   function deselectElement() {
-    const id = selectedElement && selectedElement.id;
-    selectedElement = null;
-    renderElementHud();
-    if (view) updateCopilotContext(view.presentation);
-    if (id && els.frame && els.frame.contentWindow) {
-      els.frame.contentWindow.postMessage({ __slyde: true, type: "clear-selection" }, "*");
-    }
-  }
-
-  function handleStageMessage(event) {
-    if (!els.frame || event.source !== els.frame.contentWindow) return;
-    const data = event.data;
-    if (!data || data.__slyde !== true) return;
-    if (data.type === "select") {
-      const changed = !selectedElement || selectedElement.id !== data.id;
-      selectedElement = { ...data, slideId: selectedId };
-      elementPaddingStep = 0;
-      renderElementHud();
-      if (view) updateCopilotContext(view.presentation);
-      // Pull focus back to the studio so its shortcuts keep working. Skip it
-      // on the second click of a double-click and while editing, otherwise the
-      // sandbox loses focus mid-edit and commits immediately.
-      if (changed && !elementEditing) {
-        document.body.tabIndex = -1;
-        document.body.focus({ preventScroll: true });
-      }
-    } else if (data.type === "editing") {
-      elementEditing = true;
-    } else if (data.type === "deselect") {
-      elementEditing = false;
-      selectedElement = null;
-      renderElementHud();
-      if (view) updateCopilotContext(view.presentation);
-    } else if (data.type === "text") {
-      elementEditing = false;
-      const id = data.id;
-      const value = typeof data.value === "string" ? data.value : "";
-      if (id) {
-        run("mutate_element", {
-          slide_id: selectedId,
-          element_id: id,
-          text: value,
-        });
-      }
-    } else if (data.type === "tree") {
-      structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
-      if (view && inspectorSubtab === "slide") renderInspector(view.presentation);
-    }
-  }
-
-  window.addEventListener("message", handleStageMessage);
-
-  els.frame.addEventListener("load", () => {
-    if (selectedElement && els.frame.contentWindow) {
-      els.frame.contentWindow.postMessage(
-        { __slyde: true, type: "select-by-id", id: selectedElement.id },
-        "*"
-      );
-    }
-  });
-
-  function selectElementById(id) {
-    if (!id || !els.frame || !els.frame.contentWindow) return;
-    els.frame.contentWindow.postMessage({ __slyde: true, type: "select-by-id", id }, "*");
+    canvas.clearSelection();
   }
 
   function renderChips(d) {
@@ -1030,370 +787,20 @@ function boot(sessionToken) {
     });
   }
 
-  // ---------- Animation editor ----------
-  // The AI authors `animation` through `upsert_slide`; this is the manual
-  // counterpart, so a human can add, tune, reorder or drop steps without asking
-  // the model to rewrite the whole slide.
+  // ---------- Inspector ----------
+  // The panel lives in `inspector.js`; the studio supplies the commands and the
+  // state it renders from. Keeping the ids means the export progress handler and
+  // the E2E suite keep working unchanged.
 
-  const ANIMATION_KINDS = [
-    "fade_up",
-    "fade",
-    "scale_in",
-    "slide_in_left",
-    "slide_in_right",
-    "typewriter",
-    "spin",
-    "rotate_in",
-    "pulse",
-    "flip_up",
-    "blur_in",
-    "bounce_in",
-  ];
-  const DEFAULT_EASING = "cubic-bezier(.16,1,.3,1)";
-
-  function renderAnimationEditor(current) {
-    const rows = current.animation
-      .map(
-        (step, index) => `
-        <div class="anim-step" data-index="${index}" data-easing="${escapeHtml(step.easing || DEFAULT_EASING)}">
-          <div class="anim-step-head">
-            <span class="step-index">${index + 1}</span>
-            <select class="anim-kind" data-field="kind" aria-label="${escapeHtml(t("inspector.stepKind"))}">
-              ${ANIMATION_KINDS.map(
-                (kind) =>
-                  `<option value="${kind}"${kind === step.kind ? " selected" : ""}>${kind}</option>`
-              ).join("")}
-            </select>
-            <button type="button" class="step-play" data-play="${index}"
-                    data-i18n-title="action.play" aria-label="${escapeHtml(t("action.play"))}">▶</button>
-            <button type="button" class="anim-btn" data-move="-1"
-                    data-i18n-title="animation.moveUp" aria-label="${escapeHtml(t("animation.moveUp"))}"
-                    ${index === 0 ? "disabled" : ""}>↑</button>
-            <button type="button" class="anim-btn" data-move="1"
-                    data-i18n-title="animation.moveDown" aria-label="${escapeHtml(t("animation.moveDown"))}"
-                    ${index === current.animation.length - 1 ? "disabled" : ""}>↓</button>
-            <button type="button" class="anim-btn anim-btn-danger" data-remove="${index}"
-                    data-i18n-title="animation.remove" aria-label="${escapeHtml(t("animation.remove"))}">✕</button>
-          </div>
-          <div class="anim-step-fields">
-            <label class="anim-field anim-field-target">
-              <span>${escapeHtml(t("inspector.stepTarget"))}</span>
-              <input class="anim-input" data-field="target" value="${escapeHtml(step.target)}"
-                     spellcheck="false" autocomplete="off">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDelay"))}</span>
-              <input class="anim-input" type="number" data-field="delay" value="${step.delay_ms}"
-                     min="0" max="10000" step="10">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDuration"))}</span>
-              <input class="anim-input" type="number" data-field="duration" value="${step.duration_ms}"
-                     min="1" max="5000" step="10">
-            </label>
-          </div>
-        </div>`
-      )
-      .join("");
-
-    return `
-      <div class="anim-editor" id="anim-editor">
-        ${rows || `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`}
-        <button type="button" class="anim-add" id="anim-add">+ ${escapeHtml(t("inspector.addStep"))}</button>
-      </div>`;
-  }
-
-  function bindAnimationEditor(current) {
-    const editor = $("anim-editor");
-    if (!editor) return;
-
-    const collect = () =>
-      [...editor.querySelectorAll(".anim-step")].map((row) => ({
-        kind: row.querySelector('[data-field="kind"]').value,
-        target: row.querySelector('[data-field="target"]').value.trim(),
-        delay_ms: Math.max(0, Number(row.querySelector('[data-field="delay"]').value) || 0),
-        duration_ms: Math.max(1, Number(row.querySelector('[data-field="duration"]').value) || 520),
-        easing: row.dataset.easing || DEFAULT_EASING,
-      }));
-
-    const save = (animation) =>
-      run("set_animation", { slide_id: current.id, animation });
-
-    editor.addEventListener("change", (event) => {
-      if (!event.target.matches("[data-field]")) return;
-      save(collect());
-    });
-
-    editor.addEventListener("click", (event) => {
-      const play = event.target.closest("[data-play]");
-      if (play) {
-        run("trigger_animation", {
-          slide_id: current.id,
-          step_index: Number(play.dataset.play),
-        });
-        return;
-      }
-
-      const remove = event.target.closest("[data-remove]");
-      if (remove) {
-        const steps = collect();
-        steps.splice(Number(remove.dataset.remove), 1);
-        save(steps);
-        return;
-      }
-
-      const move = event.target.closest("[data-move]");
-      if (move) {
-        const steps = collect();
-        const from = Number(move.closest(".anim-step").dataset.index);
-        const to = from + Number(move.dataset.move);
-        if (to < 0 || to >= steps.length) return;
-        const [moved] = steps.splice(from, 1);
-        steps.splice(to, 0, moved);
-        save(steps);
-        return;
-      }
-
-      if (event.target.closest("#anim-add")) {
-        const steps = collect();
-        steps.push({
-          kind: "fade_up",
-          target: ".title",
-          delay_ms: 90,
-          duration_ms: 560,
-          easing: DEFAULT_EASING,
-        });
-        save(steps);
-      }
-    });
-  }
-
-  function renderInspector(d) {
-    const active = document.activeElement;
-    const notesFocused = active && active.classList && active.classList.contains("notes");
-    // The caret is destroyed when the textarea is rebuilt; remember it so typing
-    // in the middle of a note does not jump to the end every autosave.
-    const notesCaret =
-      notesFocused && typeof active.selectionStart === "number"
-        ? { start: active.selectionStart, end: active.selectionEnd, scroll: active.scrollTop }
-        : null;
-
-    const current = slide();
-    const themeOptions = THEME_CHOICES.map(
-      (choice) =>
-        `<option value="${choice.id}" ${d.theme.id === choice.id ? "selected" : ""}>${escapeHtml(
-          t(`theme.${choice.id}`)
-        )}</option>`
-    ).join("");
-    const themeSwatches = THEME_CHOICES.map(
-      (choice) => `
-          <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
-            d.theme.id === choice.id
-          }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
-            <span class="swatch-dots">
-              ${choice.dots
-                .map((color) => `<span class="swatch-dot" style="background:${color}"></span>`)
-                .join("")}
-            </span>
-            <span class="swatch-name">${escapeHtml(t(`theme.${choice.id}`))}</span>
-          </button>`
-    ).join("");
-    const ratioOptions = ["16:9", "4:3", "9:16"]
-      .map((ratio) => `<option value="${ratio}" ${d.aspect_ratio === ratio ? "selected" : ""}>${ratio}</option>`)
-      .join("");
-
-    const deckSection = `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.themeSwatches"))}</span>
-        <div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">
-          ${themeSwatches}
-        </div>
-      </section>
-      <section class="field">
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.theme"))}</span>
-          <select class="select" id="theme-select">${themeOptions}</select>
-        </label>
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.aspect"))}</span>
-          <select class="select" id="ratio-select">${ratioOptions}</select>
-        </label>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.file"))}</span>
-        <div class="file-actions">
-          <button type="button" class="file-btn" id="save-deck">${escapeHtml(t("inspector.saveCopy"))}</button>
-          <button type="button" class="file-btn" id="open-deck">${escapeHtml(t("inspector.open"))}</button>
-        </div>
-        <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
-        <input type="file" id="deck-file" accept=".slyde,application/json" hidden>
-      </section>
-      <section class="field" id="export-section" aria-busy="false">
-        <span class="field-label">${escapeHtml(t("export.section"))}</span>
-        <div class="export-actions">
-          <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
-          <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
-        </div>
-        <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
-      </section>`;
-
-    if (!current) {
-      els.inspector.innerHTML = `<div id="inspector-deck-section">${deckSection}</div>`;
-      if (els.subtabSlide) els.subtabSlide.disabled = true;
-      if (els.subtabDeck) {
-        els.subtabDeck.classList.add("active");
-        els.subtabDeck.setAttribute("aria-selected", "true");
-      }
-      bindDeckControls();
-      applyI18n(els.inspector);
-      return;
-    }
-
-    if (els.subtabSlide) els.subtabSlide.disabled = false;
-
-    const steps = renderAnimationEditor(current);
-
-    const slideSection = `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.slide"))}</span>
-        <div class="field-value">${escapeHtml(t(`template.${current.template}`))}</div>
-        <div class="mono" title="${escapeHtml(current.id)}">${escapeHtml(current.id)}</div>
-        <div class="slide-quick-actions">
-          <button type="button" class="btn" id="inspector-duplicate-slide">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            ${escapeHtml(t("inspector.duplicate"))}
-          </button>
-          <button type="button" class="danger-btn" id="delete-slide">${escapeHtml(t("action.delete"))}</button>
-        </div>
-      </section>
-      <section class="field">
-        <label class="field-label" for="notes">${escapeHtml(t("inspector.notes"))}</label>
-        <textarea class="notes" id="notes" placeholder="${escapeHtml(t("inspector.notesPlaceholder"))}">${escapeHtml(current.notes || "")}</textarea>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.animation"))}</span>
-        ${steps}
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("tree.title"))}</span>
-        ${
-          structureNodes.length
-            ? `<ul class="element-tree">${structureNodes
-                .map(
-                  (node) => `<li>
-                    <button type="button" class="element-tree-item${
-                      selectedElement && selectedElement.id === node.id ? " is-selected" : ""
-                    }" data-tree-id="${escapeHtml(node.id)}">
-                      <span class="element-tree-tag">${escapeHtml(node.tag)}</span>
-                      <span class="element-tree-id">#${escapeHtml(node.id)}</span>
-                      ${node.text ? `<span class="element-tree-text">${escapeHtml(node.text)}</span>` : ""}
-                    </button>
-                  </li>`
-                )
-                .join("")}</ul>`
-            : `<p class="hint">${escapeHtml(t("tree.empty"))}</p>`
-        }
-      </section>
-      <details class="dev">
-        <summary>${escapeHtml(t("inspector.developer"))}</summary>
-        <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
-        <pre class="dev-code">${escapeHtml(current.code)}</pre>
-      </details>`;
-
-    const showSlide = inspectorSubtab === "slide";
-    els.inspector.innerHTML = `
-      <div id="inspector-slide-section" ${showSlide ? "" : 'style="display:none"'}>
-        ${slideSection}
-      </div>
-      <div id="inspector-deck-section" ${showSlide ? 'style="display:none"' : ""}>
-        ${deckSection}
-      </div>`;
-
-    if (els.subtabSlide) {
-      els.subtabSlide.classList.toggle("active", showSlide);
-      els.subtabSlide.setAttribute("aria-selected", String(showSlide));
-    }
-    if (els.subtabDeck) {
-      els.subtabDeck.classList.toggle("active", !showSlide);
-      els.subtabDeck.setAttribute("aria-selected", String(!showSlide));
-    }
-
-    bindDeckControls();
-
-    els.inspector.querySelectorAll("[data-tree-id]").forEach((button) => {
-      button.addEventListener("click", () => selectElementById(button.dataset.treeId));
-    });
-
-    const dupBtn = $("inspector-duplicate-slide");
-    if (dupBtn) {
-      dupBtn.addEventListener("click", () => run("duplicate_slide", { slide_id: current.id }));
-    }
-
-    const notes = $("notes");
-    if (notes) {
-      notes.addEventListener("input", () => {
-        if (notesTimer) window.clearTimeout(notesTimer);
-        notesTimer = window.setTimeout(() => {
-          run("set_notes", { slide_id: current.id, notes: notes.value || null }, { silent: true });
-        }, 450);
-      });
-    }
-
-    bindAnimationEditor(current);
-
-    const remove = $("delete-slide");
-    if (remove) {
-      remove.addEventListener("click", async () => {
-        const ok = await run("remove_slide", { slide_id: current.id }, { silent: true });
-        if (ok) {
-          selectedId = null;
-          stageKey = "";
-          applyView(view);
-        }
-      });
-    }
-
-    if (notesFocused && notes) {
-      notes.focus();
-      if (notesCaret) {
-        try {
-          notes.setSelectionRange(notesCaret.start, notesCaret.end);
-        } catch {
-          // Browsers throw on detached nodes; focus alone is still an improvement.
-        }
-        notes.scrollTop = notesCaret.scroll;
-      }
-    }
-    applyI18n(els.inspector);
-  }
-
-  function bindDeckControls() {
-    const theme = $("theme-select");
-    if (theme) theme.addEventListener("change", () => run("set_theme", { theme_id: theme.value }));
-
-    els.inspector.querySelectorAll(".theme-swatch").forEach((swatch) => {
-      swatch.addEventListener("click", () => {
-        const themeId = swatch.dataset.theme;
-        const themeSelect = $("theme-select");
-        if (themeSelect) themeSelect.value = themeId;
-        run("set_theme", { theme_id: themeId });
-      });
-    });
-
-    const ratio = $("ratio-select");
-    if (ratio) {
-      ratio.addEventListener("change", () => {
-        stageKey = "";
-        thumbsKey = "";
-        run("set_aspect_ratio", { ratio: ratio.value });
-      });
-    }
-
-    const save = $("save-deck");
-    if (save) {
-      save.addEventListener("click", () => {
-        // A download link is the browser-native "save as": it lands in the
-        // user's downloads folder with the deck name, no extension prompt.
+  const inspector = createInspector({
+    root: els.inspector,
+    t,
+    escapeHtml,
+    actions: {
+      command: run,
+      selectElement: selectElementById,
+      pickImage: (file) => canvas.insertFile(file),
+      saveDeck: () => {
         const link = document.createElement("a");
         link.href = `/api/deck?t=${encodeURIComponent(sessionToken)}`;
         link.download = "";
@@ -1401,35 +808,63 @@ function boot(sessionToken) {
         link.click();
         link.remove();
         toast(t("toast.downloaded"));
-      });
-    }
-
-    const open = $("open-deck");
-    const file = $("deck-file");
-    if (open && file) {
-      open.addEventListener("click", () => file.click());
-      file.addEventListener("change", async () => {
-        const chosen = file.files && file.files[0];
-        if (!chosen) return;
+      },
+      openDeckFile: async (text) => {
         try {
-          const payload = await client.openDeck(await chosen.text());
+          const payload = await client.openDeck(text);
           selectedId = null;
           stageKey = "";
-          thumbsKey = "";
+          storyboard.invalidate();
           applyView(payload.view);
           toast(t("toast.opened"));
         } catch (error) {
           toast(`${t("toast.error")} — ${error.message}`);
         }
-        file.value = "";
-      });
-    }
+      },
+      exportDeck: (format) => startExport(format),
+      removeSlide: async (slideId) => {
+        const ok = await run("remove_slide", { slide_id: slideId }, { silent: true });
+        if (ok) {
+          selectedId = null;
+          stageKey = "";
+          applyView(view);
+        }
+      },
+      aspectRatioChanged: (ratio) => {
+        stageKey = "";
+        storyboard.invalidate();
+        run("set_aspect_ratio", { ratio });
+      },
+      applyI18n,
+      onEmptyDeck: () => {
+        if (els.subtabSlide) els.subtabSlide.disabled = true;
+        if (els.subtabDeck) {
+          els.subtabDeck.classList.add("active");
+          els.subtabDeck.setAttribute("aria-selected", "true");
+        }
+      },
+      onSubtabs: (showSlide) => {
+        if (els.subtabSlide) {
+          els.subtabSlide.disabled = false;
+          els.subtabSlide.classList.toggle("active", showSlide);
+          els.subtabSlide.setAttribute("aria-selected", String(showSlide));
+        }
+        if (els.subtabDeck) {
+          els.subtabDeck.classList.toggle("active", !showSlide);
+          els.subtabDeck.setAttribute("aria-selected", String(!showSlide));
+        }
+      },
+    },
+  });
 
-    const exportPdf = $("export-pdf");
-    if (exportPdf) exportPdf.addEventListener("click", () => startExport("pdf"));
-    const exportPng = $("export-png");
-    if (exportPng) exportPng.addEventListener("click", () => startExport("png"));
-    syncExportUi();
+  /// Renders the inspector from the current read model.
+  function renderInspector(d) {
+    inspector.render({
+      deck: d,
+      slide: slide(),
+      selectedElement: canvas.selectedElement,
+      structureNodes: canvas.structureNodes,
+    });
   }
 
   /// Renders and packages the deck with headless Chrome. The HTTP call only
@@ -1446,8 +881,16 @@ function boot(sessionToken) {
 
     try {
       const { blob, filename } = await client.exportDeck(format);
-      saveBlob(blob, filename || (format === "pdf" ? "deck.pdf" : "deck.zip"));
-      toast(t(format === "pdf" ? "toast.exportedPdf" : "toast.exportedPng"));
+      const fallbackName =
+        format === "pdf" ? "deck.pdf" : format === "pptx" ? "deck.pptx" : "deck.zip";
+      saveBlob(blob, filename || fallbackName);
+      const readyKey =
+        format === "pdf"
+          ? "toast.exportedPdf"
+          : format === "pptx"
+            ? "toast.exportedPptx"
+            : "toast.exportedPng";
+      toast(t(readyKey));
     } catch (error) {
       console.error("export failed", error);
       toast(exportErrorText(error));
@@ -1463,7 +906,7 @@ function boot(sessionToken) {
 
     const busy = Boolean(exportJob);
     section.setAttribute("aria-busy", String(busy));
-    ["export-pdf", "export-png"].forEach((id) => {
+    ["export-pdf", "export-png", "export-pptx"].forEach((id) => {
       const button = $(id);
       if (button) button.disabled = busy;
     });
@@ -1579,16 +1022,14 @@ function boot(sessionToken) {
   onLangChange(() => {
     syncLangButtons();
     applyI18n();
-    if (elementHud) {
-      applyI18n(elementHud);
-      renderElementHud();
-    }
+    if (canvas.selectedElement) canvas.refreshHud();
     if (view) {
-      thumbsKey = "";
+      storyboard.invalidate();
       applyView(view);
     }
     renderAgentActivity({ announce: false });
     if (view) setStatus(els.statusDot.dataset.state || "connecting");
+    if (library) library.setI18n(applyI18n);
   });
 
   // Auto-follow is only for people watching, not for people editing.
@@ -1645,7 +1086,7 @@ function boot(sessionToken) {
   window.addEventListener("resize", () => {
     if (resizeTimer) window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
-      thumbsKey = "";
+      storyboard.invalidate();
       if (view) applyView(view);
     }, 120);
   });
@@ -1723,6 +1164,12 @@ function boot(sessionToken) {
         startExport("png");
       });
     }
+    if (els.topbarExportPptx) {
+      els.topbarExportPptx.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        startExport("pptx");
+      });
+    }
     if (els.topbarSaveDeck) {
       els.topbarSaveDeck.addEventListener("click", () => {
         els.exportMenu.hidden = true;
@@ -1743,14 +1190,14 @@ function boot(sessionToken) {
   let presentSpeakerMode = false;
   let presentBlackout = false;
   let presentSlideKey = "";
-  let presentPendingSteps = [];
+
   // Steps can only be delivered once the sandboxed document has registered
   // its message listener. Messages posted before that are silently dropped,
   // which left every animated element frozen at `opacity: 0` (a black slide).
-  let presentFrameReady = false;
-  // The first step plays as the slide appears; the rest wait for a click, which
-  // is what "advances step-by-step" promises the author.
-  let presentIntroPlayed = false;
+  // Reveal state (slide + queued steps + frame readiness) lives in
+  // `presenter-core.js`, shared with the standalone presenter so the two can
+  // never disagree about when a step plays.
+  const presentReveal = createReveal([]);
   // Set right before a deliberate exit from fullscreen (F), so leaving
   // fullscreen does not end the presentation.
   let presentKeepWindowed = false;
@@ -1924,16 +1371,14 @@ function boot(sessionToken) {
     if (presentEls.current) presentEls.current.textContent = String(presentIndex + 1);
     if (presentEls.total) presentEls.total.textContent = String(slides.length);
 
-    const percent = Math.round(((presentIndex + 1) / slides.length) * 100);
+    const percent = progressPercent(presentIndex, slides.length);
     if (presentEls.progressFill) presentEls.progressFill.style.width = `${percent}%`;
     if (presentEls.progress) presentEls.progress.setAttribute("aria-valuenow", String(percent));
 
     const key = `${s.id}:${s.code.length}:${s.animation.length}`;
     if (key !== presentSlideKey) {
       presentSlideKey = key;
-      presentPendingSteps = s.animation.slice();
-      presentFrameReady = false;
-      presentIntroPlayed = false;
+      presentReveal.reload();
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
         presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
@@ -1953,38 +1398,34 @@ function boot(sessionToken) {
 
   /** Plays the slide's first step once the document is listening. */
   function flushPresentSteps() {
-    if (!presentFrameReady || presentIntroPlayed) return;
-    presentIntroPlayed = true;
-    if (presentPendingSteps.length > 0) {
-      postPresentStep(presentPendingSteps.shift());
-    }
+    const step = presentReveal.takeIntro();
+    if (step) postPresentStep(step);
   }
+
   function advancePresentSlide() {
-    if (presentPendingSteps.length > 0) {
-      // Still loading: keep the step queued so it is not lost.
-      if (!presentFrameReady) return;
-      postPresentStep(presentPendingSteps.shift());
+    const action = presentReveal.advance();
+    if (action.type === "step") {
+      postPresentStep(action.step);
       return;
     }
-    goPresentDelta(1);
+    if (action.type === "slide") showPresentSlide(action);
   }
 
   function goPresentDelta(delta) {
     if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, presentIndex + delta));
-    if (next === presentIndex) return;
-    presentIndex = next;
-    presentSlideKey = "";
-    renderPresentSlide();
+    const action = presentReveal.delta(delta);
+    if (action) showPresentSlide(action);
   }
 
   function jumpPresentIndex(target) {
     if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, target));
-    if (next === presentIndex) return;
-    presentIndex = next;
+    const action = presentReveal.goTo(target);
+    if (action) showPresentSlide(action);
+  }
+
+  /// Renders the slide the reveal controller just loaded.
+  function showPresentSlide(action) {
+    presentIndex = action.index;
     presentSlideKey = "";
     renderPresentSlide();
   }
@@ -2005,36 +1446,42 @@ function boot(sessionToken) {
 
   function handlePresentKeydown(event) {
     if (!isPresenting) return;
-    if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
-      event.preventDefault();
-      advancePresentSlide();
-    } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
-      event.preventDefault();
-      goPresentDelta(-1);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      jumpPresentIndex(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      if (view) jumpPresentIndex(view.presentation.slides.length - 1);
-    } else if (event.key.toLowerCase() === "b" || event.key === ".") {
-      event.preventDefault();
-      togglePresentBlackout();
-    } else if (event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      togglePresentSpeakerMode();
-    } else if (event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      togglePresentFullscreen();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      if (presentBlackout) {
+    const action = keyToAction(event);
+    if (!action) return;
+    event.preventDefault();
+    switch (action) {
+      case "advance":
+        advancePresentSlide();
+        break;
+      case "back":
+        goPresentDelta(-1);
+        break;
+      case "first":
+        jumpPresentIndex(0);
+        break;
+      case "last":
+        if (view) jumpPresentIndex(view.presentation.slides.length - 1);
+        break;
+      case "blackout":
         togglePresentBlackout();
-      } else if (presentSpeakerMode) {
-        togglePresentSpeakerMode(false);
-      } else {
-        closePresentation();
-      }
+        break;
+      case "speaker":
+        togglePresentSpeakerMode();
+        break;
+      case "fullscreen":
+        togglePresentFullscreen();
+        break;
+      case "escape":
+        if (presentBlackout) {
+          togglePresentBlackout();
+        } else if (presentSpeakerMode) {
+          togglePresentSpeakerMode(false);
+        } else {
+          closePresentation();
+        }
+        break;
+      default:
+        break;
     }
   }
 
@@ -2079,7 +1526,9 @@ function boot(sessionToken) {
     }
     isPresenting = true;
     presentBlackout = false;
+    presentReveal.setSlides(d.slides);
     presentIndex = Math.max(0, d.slides.findIndex((s) => s.id === selectedId));
+    presentReveal.goTo(presentIndex, { force: true });
     presentSlideKey = "";
 
     if (presentEls.overlay) presentEls.overlay.hidden = false;
@@ -2189,8 +1638,7 @@ function boot(sessionToken) {
         // `load` fires after the slide runtime installed its listener, and it is
         // the only signal tied to *this* document. A stale `ready` from the
         // document being replaced must never consume the intro step.
-        presentFrameReady = true;
-        presentIntroPlayed = false;
+        presentReveal.markReady();
         flushPresentSteps();
       });
     }
@@ -2199,7 +1647,7 @@ function boot(sessionToken) {
       if (!data || data.__slyde !== true) return;
       const frameWindow = presentEls.frame && presentEls.frame.contentWindow;
       if (data.type === "ready") {
-        presentFrameReady = true;
+        presentReveal.markReady();
         return;
       }
       if (data.type === "key") {
@@ -2266,9 +1714,60 @@ function boot(sessionToken) {
     }
   }
 
+  function openLibrary() {
+    if (!library) {
+      toast(t("library.unavailable"));
+      return;
+    }
+    library.open();
+  }
+
+  /// Applies the read model a library operation returns.
+  ///
+  /// Opening, creating and duplicating a deck all end with a different deck in
+  /// the studio, so the stage, the storyboard selection and the canvas selection
+  /// have to be rebuilt from scratch rather than patched.
+  function applyLibraryPayload(payload) {
+    if (!payload) return;
+    // A different deck means a different conversation.
+    if (typeof payload.active === "string" && payload.active !== activeDeckId) {
+      activeDeckId = payload.active;
+      if (copilot && typeof copilot.refreshThread === "function") copilot.refreshThread();
+    }
+    if (!payload.view) return;
+    stageKey = "";
+    storyboard.invalidate();
+    canvas.clearSelection({ notifySandbox: false });
+    selectedId = payload.view.presentation.slides[0]?.id || "";
+    applyView(payload.view);
+  }
+
   function setupDeckQuickTools() {
+    if (els.topbarLibrary) {
+      els.topbarLibrary.addEventListener("click", () => {
+        openLibrary();
+      });
+    }
+
     if (els.topbarNewDeck) {
       els.topbarNewDeck.addEventListener("click", async () => {
+        // With a deck library, "new" creates another deck file instead of
+        // replacing the one the user has open. Without one (memory-only server)
+        // it falls back to the in-place command.
+        if (library) {
+          try {
+            // Name it in the user's language: the file is theirs, so the title
+            // should not be an English default.
+            const payload = await client.deckNew(t("deck.untitled"));
+            applyLibraryPayload(payload);
+            toast(t("library.created"));
+            els.title?.focus();
+            els.title?.select?.();
+          } catch (error) {
+            toast(`${t("toast.error")} — ${error.message}`);
+          }
+          return;
+        }
         if (!confirm(t("action.confirmNewDeck"))) return;
         // `new_deck` is a UI command: `create_presentation` belongs to the agent
         // surface and `/api/command` rejects it, so the button used to do
@@ -2328,14 +1827,12 @@ function boot(sessionToken) {
 
   if (els.subtabSlide) {
     els.subtabSlide.addEventListener("click", () => {
-      inspectorSubtab = "slide";
-      if (view) applyView(view);
+      inspector.showSubtabs(true);
     });
   }
   if (els.subtabDeck) {
     els.subtabDeck.addEventListener("click", () => {
-      inspectorSubtab = "deck";
-      if (view) applyView(view);
+      inspector.showSubtabs(false);
     });
   }
 
@@ -2346,6 +1843,7 @@ function boot(sessionToken) {
       const payload = await client.getState();
       sandboxOrigin = payload.sandbox_origin;
       sandboxToken = payload.sandbox_token || "";
+      activeDeckId = payload.active_deck || null;
       sourceQuery = sandboxToken ? `&t=${encodeURIComponent(sandboxToken)}` : "";
       setStatus("connecting");
       setupTemplatePicker();
@@ -2361,11 +1859,20 @@ function boot(sessionToken) {
         t,
         buildActions: buildPaletteActions,
       });
+      library = mountDeckLibrary({
+        root: $("deck-library"),
+        client,
+        t,
+        notify: toast,
+        onApplied: applyLibraryPayload,
+      });
+      library.setI18n(applyI18n);
       copilot = mountCopilot({
         client,
         getSelectedSlideId: () => selectedId,
-        getSelectedElementId: () => (selectedElement ? selectedElement.id : null),
+        getSelectedElementId: () => (canvas.selectedElement ? canvas.selectedElement.id : null),
         notify: toast,
+        getDeckId: () => activeDeckId,
       });
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {

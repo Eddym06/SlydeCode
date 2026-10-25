@@ -8,7 +8,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use slyde_core::{AspectRatio, CoreError, ProjectFile, Theme};
+use slyde_core::{AspectRatio, CoreError, Theme};
 use tower_http::services::ServeDir;
 
 use crate::agent::{self, AgentCommand};
@@ -55,6 +55,18 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(api_deck_open).layer(DefaultBodyLimit::max(MAX_DECK_UPLOAD_BYTES)),
         )
         .route(
+            "/api/assets",
+            post(crate::asset_api::api_upload)
+                .layer(DefaultBodyLimit::max(crate::assets::MAX_IMAGE_BYTES + 4096)),
+        )
+        .route("/assets/{name}", get(crate::asset_api::serve_asset))
+        .route("/api/decks", get(crate::deck_api::api_list))
+        .route("/api/decks/new", post(crate::deck_api::api_new))
+        .route("/api/decks/open", post(crate::deck_api::api_open))
+        .route("/api/decks/rename", post(crate::deck_api::api_rename))
+        .route("/api/decks/duplicate", post(crate::deck_api::api_duplicate))
+        .route("/api/decks/delete", post(crate::deck_api::api_delete))
+        .route(
             "/api/copilot/config",
             get(crate::copilot::routes::api_config),
         )
@@ -63,6 +75,14 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             get(crate::copilot::routes::api_models),
         )
         .route("/api/copilot/key", post(crate::copilot::routes::api_key))
+        .route(
+            "/api/copilot/cancel",
+            post(crate::copilot::routes::api_cancel),
+        )
+        .route(
+            "/api/copilot/thread",
+            get(crate::copilot::routes::api_thread).post(crate::copilot::routes::api_save_thread),
+        )
         .route(
             "/api/copilot/chat",
             post(crate::copilot::routes::api_chat).layer(DefaultBodyLimit::max(
@@ -78,6 +98,7 @@ pub fn app_router(state: Arc<AppState>) -> Router {
 pub fn sandbox_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/assets/{name}", get(crate::asset_api::serve_asset))
         .route("/print", get(print_document))
         .route("/s/{id}", get(sandbox_slide))
         .with_state(state)
@@ -134,11 +155,14 @@ async fn api_state(
     if !is_authorized(&state, &headers, &auth) {
         return unauthorized();
     }
+    let active_deck = state.library.as_ref().and_then(|library| library.active());
     Json(json!({
         "ok": true,
         "sandbox_origin": state.sandbox_origin,
         // Embedded in every `<iframe src>`: authorizes slide documents only.
         "sandbox_token": state.sandbox_token,
+        // Which deck the conversation and autosave belong to.
+        "active_deck": active_deck,
         "view": state.view().await
     }))
     .into_response()
@@ -263,6 +287,26 @@ async fn apply_command(
             slide_id,
             animation,
         } => core.set_animation(&slide_id, animation).map(|_| None),
+        UiCommand::InsertImage {
+            slide_id,
+            src,
+            x,
+            y,
+            w,
+            h,
+        } => core
+            .insert_image(&slide_id, &src, slyde_core::ImageRect { x, y, w, h })
+            .map(|_| None),
+        UiCommand::SetGeometry {
+            slide_id,
+            element_id,
+            x,
+            y,
+            w,
+            h,
+        } => core
+            .set_element_geometry(&slide_id, &element_id, slyde_core::ImageRect { x, y, w, h })
+            .map(|_| None),
     }
 }
 
@@ -314,7 +358,11 @@ async fn api_deck_download(
     }
 
     let deck = state.core.read().await.presentation().clone();
-    let body = match ProjectFile::new(deck.clone()).to_json() {
+    // A deck that references stored images is downloaded as a bundle so the file
+    // still has its pictures on another machine; a deck without them stays JSON.
+    let assets = asset_payload(&state, &deck);
+    let bundled = !assets.is_empty();
+    let body = match crate::storage::write_deck_file(&deck, &assets) {
         Ok(body) => body,
         Err(err) => return bad_request(&err.to_string()),
     };
@@ -332,7 +380,11 @@ async fn api_deck_download(
     let out = response.headers_mut();
     out.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json; charset=utf-8"),
+        HeaderValue::from_static(if bundled {
+            "application/zip"
+        } else {
+            "application/json; charset=utf-8"
+        }),
     );
     out.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     if let Ok(value) = HeaderValue::from_str(&disposition) {
@@ -358,18 +410,20 @@ async fn api_deck_open(
         return unauthorized();
     }
 
-    let raw = match std::str::from_utf8(&body) {
-        Ok(raw) => raw,
-        Err(_) => return bad_request("deck file must be UTF-8 text"),
-    };
-    let file = match ProjectFile::from_json(raw) {
-        Ok(file) => file,
+    // Either a JSON deck or a bundle with its images; the reader sniffs which.
+    let (deck, assets) = match crate::storage::read_deck_file(&body) {
+        Ok(parsed) => parsed,
         Err(err) => return bad_request(&err.to_string()),
     };
+    for (name, bytes) in &assets {
+        if let Err(err) = state.assets.restore(name, bytes) {
+            return bad_request(&err.to_string());
+        }
+    }
 
     {
         let mut core = state.core.write().await;
-        if let Err(err) = core.replace(file.presentation) {
+        if let Err(err) = core.replace(deck) {
             return bad_request(&err.to_string());
         }
     }
@@ -378,7 +432,25 @@ async fn api_deck_open(
     Json(json!({ "ok": true, "view": state.view().await })).into_response()
 }
 
-fn bad_request(message: &str) -> Response {
+/// Reads the assets a deck references out of the store, skipping missing files.
+///
+/// A missing image must not fail the download: the deck still opens, with the
+/// reference pointing at a file that can be re-added later.
+fn asset_payload(state: &AppState, deck: &slyde_core::Presentation) -> Vec<(String, Vec<u8>)> {
+    let mut assets = Vec::new();
+    for name in crate::storage::referenced_assets(deck) {
+        let Some(path) = state.assets.path_for(&name) else {
+            continue;
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => assets.push((name, bytes)),
+            Err(error) => tracing::warn!(asset = %name, %error, "deck references a missing asset"),
+        }
+    }
+    assets
+}
+
+pub(crate) fn bad_request(message: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({ "ok": false, "error": message })),
@@ -444,7 +516,7 @@ async fn sandbox_slide(
     response
 }
 
-fn unauthorized() -> Response {
+pub(crate) fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({ "ok": false, "error": "missing or invalid token" })),
@@ -452,7 +524,7 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
-fn forbidden() -> Response {
+pub(crate) fn forbidden() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({ "ok": false, "error": "origin not allowed" })),
@@ -465,7 +537,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use slyde_core::{PresentationState, TemplateType};
+    use slyde_core::{PresentationState, ProjectFile, TemplateType};
     use tower::util::ServiceExt;
 
     use crate::state::{AgentAction, AgentPhase};
