@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 15:05
+> Last updated: 2026-10-25 15:30
 
 ## Current Phase
 
@@ -238,6 +238,11 @@ Nothing partially implemented on the branch.
   `slyde-server` cannot be cross-built from Windows (`ring` needs a C toolchain
   for the target), so CI's ubuntu job is the real Linux verification. No manual
   pass on either OS yet.
+- `clippy -D warnings` is now clean on the Windows target **and** on the Linux
+  cfg paths touched by the browser discovery work: the module is checked in
+  isolation with `clippy-driver --target x86_64-unknown-linux-gnu` (see
+  MEMORY.md for the recipe), because the full workspace cross-check stops at
+  `ring`.
 
 ## Backlog (Prioritized)
 
@@ -260,6 +265,10 @@ Nothing partially implemented on the branch.
 
 ## Completed
 
+- [x] Fixed the first CI run: browser discovery now builds its candidate list
+      per OS, so no platform leaves a dead `mut` (`unused_mut` under
+      `-D warnings` on Linux); Linux also gained absolute snap/flatpak paths, and
+      a test guards against an empty candidate list — 2026-10-25
 - [x] Canvas extracted (selection, HUD, inline editing, image placement) and the
       storyboard extracted (thumbnails, drag-and-drop, hover actions) — 2026-10-25
 - [x] Inspector extracted to its own module (markup, animation timeline, notes

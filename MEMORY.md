@@ -233,6 +233,11 @@ MIT and the license is compatible with a commercial product.
 - **`cargo clippy` and `cargo fmt` must run through the gnu toolchain on this Windows machine.** The default MSVC toolchain cannot link build scripts (`link.exe` not found, missing Windows SDK), so `cargo clippy` fails while `cargo +stable-x86_64-pc-windows-gnu clippy` works. The CI workflow uses plain `stable` on Linux, where this does not apply.
 - **A browser cannot set headers on a navigation.** The session token still has to travel in the query string for the WebSocket handshake (the browser WebSocket API has no header option), `<a download>` links and `window.open`; every `fetch` uses `Authorization: Bearer` instead. Do not "clean up" the remaining `?t=` usages — they are the ones that cannot be fixed client-side.
 - **Restoring `focus()` on a rebuilt textarea loses the caret.** The inspector re-renders with `innerHTML` on every state change, which replaced the notes textarea mid-typing and dropped the cursor to the end every 450 ms. Capture `selectionStart`/`selectionEnd`/`scrollTop` before the rebuild and restore them after; the deeper fix is to stop rebuilding the whole panel (tracked in `STATE.md`).
+- **`cfg`-gated code hides `clippy -D warnings` failures from the host platform.** `let mut out = Vec::new()` followed by `#[cfg(target_os = "windows")] { out.push(..) }` compiles fine on Windows and fails on Linux with `unused_mut` — the first CI run died there after every local gate was green. Build per-OS lists from per-OS functions so no platform leaves a dead binding. The full workspace cannot be cross-checked from Windows (`ring` needs a C compiler for the target), so check a cfg branch in isolation:
+  ```powershell
+  clippy-driver.exe --edition 2024 --crate-type lib --target x86_64-unknown-linux-gnu -D warnings <file>.rs --emit metadata -o out.rmeta
+  ```
+  with `#![allow(dead_code)]` and the file's own type stubs; it reproduces "variable does not need to be mutable" exactly.
 
 ## Design System Reference
 
