@@ -1141,6 +1141,42 @@ test("copilot streams text and localized tool status into the thread", async () 
     assert.equal(thread.tools[0].label, "Escribiendo la diapositiva…");
     assert.equal(thread.sendDisabled, true);
 
+    // The conversation is stored per deck...
+    const decks = await page.evaluate(
+      `fetch("/api/decks?t=${token}").then((r) => r.json())`
+    );
+    assert.ok(decks.active, "a deck is active");
+    const saved = await page.evaluate(
+      `fetch("/api/copilot/thread?deck=${decks.active}&t=${token}").then((r) => r.json())`
+    );
+    assert.equal(saved.ok, true);
+    assert.ok(saved.messages.length >= 2, "the turn was stored");
+    assert.equal(saved.messages[0].role, "user");
+    assert.equal(saved.messages[0].text, "Crea una portada");
+
+    // ...and reloading the studio brings it back instead of an empty panel.
+    const reloadedAt = await page.evaluate("performance.timeOrigin");
+    await page.send("Page.reload", { ignoreCache: true });
+    await page.waitFor(
+      `performance.timeOrigin !== ${JSON.stringify(reloadedAt)} &&
+       document.querySelectorAll(".thumb").length >= 1`,
+      { timeout: 15000 }
+    );
+    await page.waitFor(
+      `document.getElementById("copilot-thread").textContent.includes("Crea una portada")`,
+      { timeout: 10000 }
+    );
+    const restored = await page.evaluate(`(() => ({
+      user: document.querySelector(".msg-user .msg-text")?.textContent || "",
+      assistant: document.querySelector(".msg-assistant .msg-text")?.textContent || ""
+    }))()`);
+    assert.equal(restored.user, "Crea una portada", "the question survived the reload");
+    assert.equal(
+      restored.assistant,
+      "I'll build a cover slide.",
+      "the answer survived the reload"
+    );
+
     assert.ok(chatPayload, "the UI posted a chat request");
     assert.equal(chatPayload.provider, "openai");
     assert.equal(chatPayload.model, "free-model");
@@ -1232,6 +1268,16 @@ test("a failed turn explains itself without echoing provider text", async () => 
     await page.evaluate(`document.getElementById("tab-copilot").click(); true`);
     await page.waitFor(
       `document.getElementById("copilot-provider-name").textContent === "ChatGPT"`
+    );
+
+    // Conversations persist per deck now, so this test starts from a clean one
+    // (which also exercises the new-chat path and its stored-thread clearing).
+    await page.evaluate(`document.getElementById("copilot-new").click(); true`);
+    await sleep(300);
+    assert.equal(
+      await page.evaluate(`document.querySelectorAll("#copilot-thread .msg").length`),
+      0,
+      "a new chat clears the restored thread"
     );
 
     await page.evaluate(`(() => {
