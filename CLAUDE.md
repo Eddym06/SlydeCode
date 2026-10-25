@@ -1,4 +1,4 @@
-# CLAUDE.md — SlydeCode Engineering Charter
+# AGENTS.md — SlydeCode Engineering Charter
 
 > This document defines how any AI agent (Claude Code, autonomous coding agents, etc.) must operate when working on the **SlydeCode** codebase. It governs behavior, workflow, documentation discipline, quality bar, and communication rules. Follow it strictly and without exception.
 
@@ -292,7 +292,5 @@ The MCP tool surface is a **public contract** with external AI agents. Breaking 
 - You are empowered to propose and justify improvements beyond the literal ask (better libraries, better UX patterns, performance optimizations) — always explain the trade-off in chat (Spanish) before committing to a non-trivial architectural change.
 - If a requirement is ambiguous or conflicts with the premium product vision, ask the user in Spanish rather than guessing silently.
 - Never degrade an already-working premium experience to "ship something" — a smaller, polished increment beats a larger, rough one.
-
----
 
 No leas el AGENTS.md

@@ -25,6 +25,8 @@ pub const REMOVE_SLIDE: &str = "remove_slide";
 pub const MOVE_SLIDE: &str = "move_slide";
 pub const TRIGGER_ANIMATION: &str = "trigger_animation";
 pub const SET_NOTES: &str = "set_notes";
+pub const MUTATE_ELEMENT: &str = "mutate_element";
+pub const GET_SELECTED_ELEMENT: &str = "get_selected_element";
 
 pub fn definitions() -> Vec<ToolDef> {
     vec![
@@ -151,6 +153,37 @@ pub fn definitions() -> Vec<ToolDef> {
                 })
             },
         },
+        ToolDef {
+            name: MUTATE_ELEMENT,
+            description: "Apply surgical edits (text, styles, inner HTML) to a specific element by ID (e.g. #title-1) without re-rendering or altering the rest of the slide.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "element_id": { "type": "string", "description": "Element ID inside the slide document." },
+                        "text": { "type": "string", "description": "Replacement plain text content." },
+                        "style": { "type": "string", "description": "CSS style directives to add/update." },
+                        "html": { "type": "string", "description": "Replacement inner HTML snippet." }
+                    },
+                    "required": ["element_id"],
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
+            name: GET_SELECTED_ELEMENT,
+            description: "Read properties, tag name and text of the element the user has currently focused or selected in the canvas.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "element_id": { "type": "string", "description": "Element ID." }
+                    },
+                    "required": ["element_id"],
+                    "additionalProperties": false
+                })
+            },
+        },
     ]
 }
 
@@ -202,10 +235,61 @@ pub async fn execute(
     match name {
         READ_DECK => read_deck(state).await,
         READ_SLIDE => read_slide(state, &arguments).await,
+        GET_SELECTED_ELEMENT => get_selected_element(state, &arguments).await,
         CREATE_PRESENTATION | UPSERT_SLIDE | REMOVE_SLIDE | MOVE_SLIDE | TRIGGER_ANIMATION
-        | SET_NOTES => mutate(state, name, arguments).await,
+        | SET_NOTES | MUTATE_ELEMENT => mutate(state, name, arguments).await,
         _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+async fn get_selected_element(state: &AppState, arguments: &Value) -> Result<ToolOutcome, String> {
+    let element_id = arguments
+        .get("element_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "element_id is required".to_string())?;
+    let view = state.view().await;
+    let id_needle = format!("id=\"{element_id}\"");
+    let data_needle = format!("data-id=\"{element_id}\"");
+
+    for (index, slide) in view.presentation.slides.iter().enumerate() {
+        let structured = slide.find_element(element_id);
+        let marker = slide
+            .code
+            .find(&id_needle)
+            .or_else(|| slide.code.find(&data_needle));
+        if structured.is_none() && marker.is_none() {
+            continue;
+        }
+        // Return the element itself, not the head of the slide: an agent asking
+        // about one block needs that block.
+        let markup = marker.map(|position| {
+            let start = slide.code[..position].rfind('<').unwrap_or(position);
+            slide.code[start..].chars().take(240).collect::<String>()
+        });
+        return Ok(ToolOutcome {
+            result: json!({
+                "ok": true,
+                "element_id": element_id,
+                "slide_id": slide.id,
+                "slide_index": index,
+                "found": true,
+                "element": structured,
+                "markup": markup
+            }),
+            slide_id: Some(slide.id.clone()),
+            slide_index: Some(index),
+        });
+    }
+
+    Ok(ToolOutcome {
+        result: json!({
+            "ok": true,
+            "element_id": element_id,
+            "found": false
+        }),
+        slide_id: None,
+        slide_index: None,
+    })
 }
 
 async fn read_deck(state: &AppState) -> Result<ToolOutcome, String> {

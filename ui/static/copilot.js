@@ -36,7 +36,7 @@ const TEXT_EXT = new Set([
 
 const $ = (id) => document.getElementById(id);
 
-export function mountCopilot({ client, getSelectedSlideId, notify }) {
+export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify }) {
   const els = {
     panel: $("copilot-panel"),
     thread: $("copilot-thread"),
@@ -630,6 +630,8 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
       model: modelId,
       messages: history,
       selected_slide_id: getSelectedSlideId() || null,
+      selected_element_id:
+        typeof getSelectedElementId === "function" ? getSelectedElementId() || null : null,
       language: lang(),
     };
 
@@ -902,6 +904,13 @@ export function mountCopilot({ client, getSelectedSlideId, notify }) {
     },
     open() {
       openSheet();
+    },
+    /** Runs an action pill from the canvas or the command palette. */
+    ask(text) {
+      if (!text) return;
+      els.input.value = text;
+      updateSendEnabled();
+      send();
     },
     isStreaming() {
       return streaming;

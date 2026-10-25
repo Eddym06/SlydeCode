@@ -174,12 +174,51 @@ impl Theme {
         }
     }
 
+    pub fn terminal() -> Self {
+        Self {
+            id: "terminal".into(),
+            name: "Terminal".into(),
+            background: "#0B0C0E".into(),
+            foreground: "#00FF66".into(),
+            muted: "rgba(0,255,102,.50)".into(),
+            accent: "#00E5FF".into(),
+            font_family: "Geist Mono, JetBrains Mono, monospace".into(),
+        }
+    }
+
+    pub fn academic() -> Self {
+        Self {
+            id: "academic".into(),
+            name: "Academic Minimal".into(),
+            background: "#FFFFFF".into(),
+            foreground: "#111111".into(),
+            muted: "rgba(17,17,17,.60)".into(),
+            accent: "#0055D4".into(),
+            font_family: "Geist, Cambria, serif".into(),
+        }
+    }
+
+    pub fn pitch() -> Self {
+        Self {
+            id: "pitch".into(),
+            name: "Corporate Pitch".into(),
+            background: "#0F172A".into(),
+            foreground: "#F8FAFC".into(),
+            muted: "rgba(248,250,252,.60)".into(),
+            accent: "#38BDF8".into(),
+            font_family: "Geist, Inter, sans-serif".into(),
+        }
+    }
+
     /// Accepts either a known theme id or a full theme payload (custom themes).
     pub fn resolve(id_or_name: &str) -> Option<Self> {
         match id_or_name.trim().to_ascii_lowercase().as_str() {
             "studio" => Some(Self::studio()),
             "paper" => Some(Self::paper()),
             "night" => Some(Self::night()),
+            "terminal" => Some(Self::terminal()),
+            "academic" => Some(Self::academic()),
+            "pitch" => Some(Self::pitch()),
             _ => None,
         }
     }
@@ -226,6 +265,76 @@ fn is_css_color(value: &str) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitMode {
+    Contain,
+    Cover,
+    Fill,
+}
+
+impl Default for FitMode {
+    fn default() -> Self {
+        Self::Cover
+    }
+}
+
+/// Structured elements that can be embedded, manipulated or extracted inside slides.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SlideElement {
+    Image {
+        element_id: String,
+        src: String,
+        #[serde(default)]
+        alt: Option<String>,
+        #[serde(default)]
+        caption: Option<String>,
+        #[serde(default)]
+        fit: FitMode,
+    },
+    Diagram {
+        element_id: String,
+        /// Diagram definition as code (e.g. Mermaid or Graphviz source)
+        source: String,
+        #[serde(default)]
+        engine: Option<String>, // "mermaid", "graphviz"
+        #[serde(default)]
+        caption: Option<String>,
+    },
+    CodeBlock {
+        element_id: String,
+        code: String,
+        #[serde(default)]
+        language: Option<String>,
+        #[serde(default)]
+        highlighted_lines: Vec<usize>,
+    },
+    SpeakerNotes {
+        element_id: String,
+        notes: String,
+    },
+    Custom {
+        element_id: String,
+        tag: String,
+        content: String,
+        #[serde(default)]
+        attributes: std::collections::BTreeMap<String, String>,
+    },
+}
+
+impl SlideElement {
+    pub fn element_id(&self) -> &str {
+        match self {
+            SlideElement::Image { element_id, .. } => element_id,
+            SlideElement::Diagram { element_id, .. } => element_id,
+            SlideElement::CodeBlock { element_id, .. } => element_id,
+            SlideElement::SpeakerNotes { element_id, .. } => element_id,
+            SlideElement::Custom { element_id, .. } => element_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Slide {
     pub id: SlideId,
     /// AI-authored HTML/CSS fragment. Rendered inside a cross-origin sandbox.
@@ -238,6 +347,8 @@ pub struct Slide {
     pub notes: Option<String>,
     #[serde(default)]
     pub generated_by: Author,
+    #[serde(default)]
+    pub elements: Vec<SlideElement>,
 }
 
 impl Slide {
@@ -249,7 +360,16 @@ impl Slide {
             animation: Vec::new(),
             notes: None,
             generated_by: Author::default(),
+            elements: Vec::new(),
         }
+    }
+
+    pub fn find_element(&self, element_id: &str) -> Option<&SlideElement> {
+        self.elements.iter().find(|el| el.element_id() == element_id)
+    }
+
+    pub fn find_element_mut(&mut self, element_id: &str) -> Option<&mut SlideElement> {
+        self.elements.iter_mut().find(|el| el.element_id() == element_id)
     }
 }
 
@@ -285,6 +405,15 @@ impl Presentation {
 
     pub fn size_px(&self) -> (u32, u32) {
         self.aspect_ratio.size_px()
+    }
+
+    pub fn find_element(&self, element_id: &str) -> Option<(&Slide, &SlideElement)> {
+        for s in &self.slides {
+            if let Some(el) = s.find_element(element_id) {
+                return Some((s, el));
+            }
+        }
+        None
     }
 }
 

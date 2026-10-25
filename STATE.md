@@ -1,13 +1,13 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-24 21:10
+> Last updated: 2026-10-25 01:10
 
 ## Current Phase
 Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust tests (+3 new tests for slide duplication, custom index, and reasoning content capture) are green. Resolved DeepSeek integration end-to-end: added live `Thinking` SSE event streaming so reasoning tokens from models like DeepSeek-V4.1-Flash provide instant visual feedback (under 300ms) instead of silent delays, fixed typing indicator retention during multi-round tool execution, fixed event dispatch on prompt suggestion pills, and added reasoning fallback to prevent false "empty response" errors. Verified end-to-end with real DeepSeek API creating 4 editorial slides with custom layouts, motion, and notes.
 
 ## Implemented & Working
 
-### Backend (Rust workspace, 5 crates, 129 tests green)
+### Backend (Rust workspace, 5 crates, 142 tests green)
 - `slyde-core`: `Presentation`/`Slide`/`Theme`/`AnimationStep` model, `PresentationState` with undo/redo, history limits, validation (`max_slides` 200, `max_code_bytes` 512 KiB, non-empty code, CSS-valid colors), and the `.slyde` project file (versioned JSON, validated on read). 29 tests.
 - `slyde-server`: two listeners (app + sandbox origin), `/health`, `/api/state`, `/api/command`, `/api/agent`, `/api/export`, `/api/deck`, `/api/deck/open`, `/api/copilot/*`, `/print`, `/s/{id}`, `/fonts`, WS event stream, token + Origin guards. Chrome discovery/launch, runtime rendezvous file, agent command handling, structured `agent_activity` events, starter templates, atomic deck storage with debounced autosave. Added `DuplicateSlide` and `AddSlide` with explicit index target. Added `ChatEvent::Thinking` and reasoning content capture in `OpenAiAccum` and `AnthropicAccum`. 85 tests, including the copilot.
 - **Copilot backend:** provider catalog for eight vendors, OpenAI-compatible transport for seven plus a native Anthropic Messages adapter, SSE assembly for fragmented tool calls, eight deck tools that call the shared `agent::run` path, typed error mapping, server-side key storage with env fallback, model normalization with free/vision/context metadata, and bounded image/PDF/DOCX/PPTX/text attachment extraction. `POST /api/copilot/chat` is a typed SSE stream with keep-alives; cancellation drops the upstream response.
@@ -48,23 +48,27 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
 - Copilot provider path: `cargo test -p slyde-server` covers catalog endpoints, model normalization/free flags, key rejection before network, attachment extraction, tool schemas, OpenAI fragmented tool calls, Anthropic streaming (including parallel tool results in one user turn) and deck-summary context.
 - Copilot browser E2E: provider config/key/model responses are mocked with CDP `Fetch.fulfillRequest`, so the suite proves the eight-provider sheet, key form focus, model search, Free filter, selection persistence, attachment chip/remove, and typed SSE text + tool rows + completion announcement without a real key or network.
-- UI suite: 19 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 11 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads from the inspector, agent activity + conditional auto-follow, sandbox document, presenter progress, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
+- UI suite: 23 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 15 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
 
 ## In Progress
 - Real-provider manual validation (needs user keys): OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, DeepSeek and NVIDIA. Endpoints and wire formats are unit-tested/mocked; vendor-specific tool-calling quirks are not yet proven in this environment.
 
 ## Current Task
-- [x] Ship the in-app copilot
-  - [x] Provider catalog, key storage/validation, model discovery and free filter
-  - [x] OpenAI-compatible + Anthropic streaming transports with fragmented tool calls
-  - [x] Eight deck tools through the shared `agent::run` path
-  - [x] Bounded image/PDF/DOCX/PPTX/text attachments
-  - [x] Presentation-quality system prompt with deck context
-  - [x] Dedicated POST SSE chat channel with cancellation and typed errors
-  - [x] Tabbed right panel, thread, composer, attachments, provider sheet, EN/ES
-  - [x] Backend, transport, state-machine and mocked browser E2E tests
-  - [x] Visual pass at 1440×900
-  - [x] Docs updated (`README.md`, `STATE.md`, `MEMORY.md`, `docs/copilot.md`, design system)
+- [x] Plan execution: bimodal canvas, technical blocks, palette, teleprompter, structure tree
+  - [x] **Bimodal canvas**: every block gets a persisted `data-id` (`slyde_core::ensure_element_ids` on write and on load), the studio stage runs an edit layer (`?edit=1`) with hover-free click selection, an in-canvas outline, a floating HUD (align, padding, AI, deselect), double-click inline editing committed through `mutate_element`, and the copilot pill shows `Target: #id`
+  - [x] **Command palette** (`⌘K` / `Ctrl+K`): present, export, add slide, themes, ratios, undo/redo, language, and selection-scoped AI actions
+  - [x] **Technical blocks**: vendored KaTeX 0.19.1, highlight.js 11.12.0 and Mermaid 11.12.0 on the sandbox origin; lazy loading, per-line code wrappers with numbers and `data-emphasis`, theme-aware syntax palette, export waits via `--virtual-time-budget=15000`
+  - [x] **Teleprompter**: reading-time estimate from speaker notes (130 wpm) with on/behind/ahead pace in both speaker consoles
+  - [x] **Structure tree**: the sandbox publishes its block list; the inspector lists it and selects by id
+  - [x] Tests: canvas + palette + tree E2E, technical-blocks E2E, `html` id injector unit tests; Rust 142 green, UI 23 green
+  - [x] Docs updated (`STATE.md`, `MEMORY.md`, `assets/vendor/README.md`)
+
+## Not Implemented Yet (audited 2026-10-24)
+- **QR / LAN remote control**: needs a non-loopback listener plus a QR encoder. Opening `0.0.0.0` contradicts the documented security model (loopback + token + Origin check), so it needs an explicit product decision before implementation
+- Timeline scrubbing bar (the storyboard already covers thumbnails and drag reordering)
+- Drag & drop assets with an `assets/images` store and a `.slyde` bundle format for them
+- Optimistic DOM updates / `startViewTransition` morphs; token-by-token visual fill
+- `SlideElement.elements` is modelled and reachable through tools, but the canvas still edits one HTML blob per slide; nothing populates the structured array yet
 
 ## Known Issues / Bugs
 - MSVC target cannot link on this machine (Windows SDK missing). Only `x86_64-pc-windows-gnu` is verified.
@@ -102,6 +106,10 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] Plan phases A–D: bimodal canvas, `⌘K` palette, KaTeX/hljs/Mermaid rendering, teleprompter pace, structure tree — 2026-10-25
+- [x] Spec audit + fixes: `mutate_element` nested-markup corruption, `get_selected_element` payload, honest `search_asset`/`generate_image` contracts, truthful technical-slide prompt — 2026-10-24
+- [x] Presenter keyboard: non-interactive slide frame, key forwarding, Escape from fullscreen — 2026-10-24
+- [x] Presenter black-screen fix: hidden speaker console, lost animation steps, clipped present menu — 2026-10-24
 - [x] In-app copilot: eight providers, streaming SSE, deck tools, attachments, tabbed panel, EN/ES, mocked E2E — 2026-10-24
 - [x] Add the AI activity signal for external MCP agents (structured WS events, chip, scanline, conditional follow, EN/ES, tests) — 2026-10-24
 - [x] Integrate and harden PDF/PNG export (UI + API + MCP, ZIP, progress, E2E) — 2026-10-24

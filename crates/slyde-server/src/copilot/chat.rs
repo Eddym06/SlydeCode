@@ -44,6 +44,8 @@ pub struct ChatRequest {
     #[serde(default)]
     pub selected_slide_id: Option<String>,
     #[serde(default)]
+    pub selected_element_id: Option<String>,
+    #[serde(default)]
     pub language: Option<String>,
 }
 
@@ -114,7 +116,7 @@ async fn run_inner(
         if tx.is_closed() {
             return Err(CopilotError::Cancelled);
         }
-        let system = prompt::system_prompt(deck, selected, language);
+        let system = prompt::system_prompt(deck, selected, request.selected_element_id.as_deref(), language);
         let assistant = transport::stream(
             state.copilot.http(),
             provider,

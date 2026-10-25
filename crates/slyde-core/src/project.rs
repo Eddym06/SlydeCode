@@ -54,10 +54,15 @@ impl ProjectFile {
     /// Validation runs here rather than at the transport layer so every caller
     /// — autosave restore, file upload, tests — enforces the same limits.
     pub fn from_json(raw: &str) -> Result<Self, CoreError> {
-        let parsed: Self = serde_json::from_str(raw).map_err(|err| {
+        let mut parsed: Self = serde_json::from_str(raw).map_err(|err| {
             CoreError::InvalidProject(format!("not a valid .slyde document: {err}"))
         })?;
         parsed.validate()?;
+        // Decks written before element handles existed get them on load, so the
+        // canvas can select any block without a migration step.
+        for slide in &mut parsed.presentation.slides {
+            slide.code = crate::html::ensure_element_ids(&slide.code);
+        }
         Ok(parsed)
     }
 
@@ -134,7 +139,13 @@ mod tests {
         let file = ProjectFile::new(original.clone());
         let json = file.to_json().unwrap();
         let parsed = ProjectFile::from_json(&json).unwrap();
-        assert_eq!(parsed.presentation, original);
+        // Loading assigns a persistent handle to every block, so the round trip
+        // is compared against the normalised form of the same deck.
+        let mut normalised = original;
+        for slide in &mut normalised.slides {
+            slide.code = crate::html::ensure_element_ids(&slide.code);
+        }
+        assert_eq!(parsed.presentation, normalised);
         assert_eq!(parsed.format, FORMAT_ID);
         assert_eq!(parsed.version, FORMAT_VERSION);
         assert!(parsed.saved_at_ms > 0);

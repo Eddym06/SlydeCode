@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { launchChrome, sleep } from "../../scripts/lib/cdp.mjs";
+import { connectCdp, launchChrome, sleep } from "../../scripts/lib/cdp.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const uiDir = join(repoRoot, "ui");
@@ -433,14 +433,50 @@ test("presenter shows progress and advances with the keyboard", async () => {
       current: document.getElementById("current").textContent,
       total: document.getElementById("total").textContent,
       progress: document.getElementById("progress").getAttribute("aria-valuenow"),
-      sandbox: document.getElementById("present-slide").getAttribute("sandbox")
+      sandbox: document.getElementById("present-slide").getAttribute("sandbox"),
+      speaker: getComputedStyle(document.getElementById("speaker-console")).display
     })`);
     assert.equal(start.current, "1");
     assert.equal(start.total, "2");
     assert.equal(start.progress, "50");
     assert.equal(start.sandbox, "allow-scripts");
+    // `.speaker-console` is `display: flex`; only an explicit `[hidden]` rule
+    // keeps this panel — and its clock — from covering the slide.
+    assert.equal(start.speaker, "none", "the speaker console must stay hidden");
+
+    // Clicking the slide must not steal focus: the slide frame is not an
+    // interactive surface, so the overlay keeps both clicks and keystrokes.
+    await present.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: 960,
+      y: 400,
+      button: "left",
+      clickCount: 1,
+    });
+    await present.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: 960,
+      y: 400,
+      button: "left",
+      clickCount: 1,
+    });
+    await sleep(250);
+    assert.equal(
+      await present.evaluate(`document.getElementById("current").textContent`),
+      "2",
+      "clicking the slide advances the deck"
+    );
+    assert.notEqual(
+      await present.evaluate(
+        `document.activeElement ? document.activeElement.tagName : ""`
+      ),
+      "IFRAME",
+      "the slide frame never takes keyboard focus"
+    );
 
     await present.evaluate(`document.body.focus(); true`);
+    await present.press("ArrowLeft", { keyCode: 37 });
+    await present.waitFor(`document.getElementById("current").textContent === "1"`);
     await present.press("ArrowRight", { keyCode: 39 });
     await present.waitFor(`document.getElementById("current").textContent === "2"`);
 
@@ -450,6 +486,276 @@ test("presenter shows progress and advances with the keyboard", async () => {
     assert.equal(end, "100");
   } finally {
     await present.close();
+  }
+});
+
+/**
+ * The slide iframe lives on the sandbox origin, so Chrome renders it as an
+ * out-of-process target: it is reachable through its own CDP session and never
+ * through the parent page's frame tree.
+ */
+async function waitForSlideFrame(needle, { timeout = 5000 } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const targets = await fetch(`${browser.origin}/json/list`).then((r) => r.json());
+    // Stage and storyboard frames use `?static=1`; only the presenter asks for
+    // the animated document (`?p=N`).
+    const target = targets.find(
+      (entry) => entry.type === "iframe" && needle.test(entry.url)
+    );
+    if (target) {
+      const cdp = connectCdp(target.webSocketDebuggerUrl);
+      await cdp.ready;
+      await cdp.send("Runtime.enable");
+      return cdp;
+    }
+    await sleep(100);
+  }
+  throw new Error(`no slide iframe matching ${needle}`);
+}
+
+test("in-studio presenter paints the slide instead of a black stage", async () => {
+  // Regression: the speaker console was `display: flex` even while `hidden`, so
+  // an opaque panel with a ticking clock covered the whole stage (its previews
+  // looked black because the UI believed them hidden). The click that opened
+  // the presenter also advanced the deck, eating the first animation step and
+  // leaving every animated element stuck at `opacity: 0`.
+  //
+  // Earlier tests leave the deck in different shapes, so pick a slide that
+  // actually animates and open the presenter on it.
+  const stateUrl = `/api/state?t=${token}`;
+  let state = await page.evaluate(`fetch("${stateUrl}").then((r) => r.json())`);
+  let targetIndex = state.view.presentation.slides.findIndex(
+    (slide) => slide.animation.length > 0
+  );
+  if (targetIndex < 0) {
+    await page.evaluate(`fetch("/api/command?t=${token}", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "add_slide", template: "hero" })
+    }).then((r) => r.json())`);
+    state = await page.evaluate(`fetch("${stateUrl}").then((r) => r.json())`);
+    targetIndex = state.view.presentation.slides.length - 1;
+  }
+  assert.ok(
+    state.view.presentation.slides[targetIndex].animation.length > 0,
+    "the presenter test needs a slide with animation steps"
+  );
+  await page.evaluate(
+    `document.querySelectorAll(".thumb")[${targetIndex}].click(); true`
+  );
+
+  const box = await page.evaluate(`(() => {
+    const rect = document.getElementById("present").getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  // A background tab freezes the Web Animations timeline, which would leave
+  // every reveal animation parked at frame 0. A real presenter is on screen.
+  await page.send("Page.bringToFront");
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: box.x,
+    y: box.y,
+    button: "left",
+    clickCount: 1,
+  });
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: box.x,
+    y: box.y,
+    button: "left",
+    clickCount: 1,
+  });
+
+  try {
+    await page.waitFor(`document.getElementById("present-overlay").hidden === false`);
+
+    const chrome = await page.evaluate(`({
+      overlay: getComputedStyle(document.getElementById("present-overlay")).display,
+      speaker: getComputedStyle(document.getElementById("speaker-console")).display,
+      current: document.getElementById("hud-current").textContent,
+      src: document.getElementById("present-slide").getAttribute("src") || ""
+    })`);
+    assert.notEqual(chrome.overlay, "none", "the presenter overlay is on screen");
+    assert.equal(chrome.speaker, "none", "the speaker console must not cover the slide");
+    // A real click on the topbar must not be read as "advance the slide".
+    assert.equal(chrome.current, String(targetIndex + 1));
+    assert.ok(
+      chrome.src.startsWith(sandboxOrigin),
+      `the slide frame loads from the sandbox origin: ${chrome.src}`
+    );
+
+    const steps = state.view.presentation.slides[targetIndex].animation;
+    const targets = [...new Set(steps.map((step) => step.target))];
+
+    const slideFrame = await waitForSlideFrame(/[?&]p=\d/);
+    try {
+      const started = Date.now();
+      let probe = [];
+      while (Date.now() - started < 6000) {
+        probe = await slideFrame.evaluate(`(${JSON.stringify(targets)}).map((selector) => {
+          const el = document.querySelector(selector);
+          return {
+            selector,
+            opacity: el ? getComputedStyle(el).opacity : "missing",
+            visibility: document.visibilityState,
+            animations: el ? el.getAnimations().map((animation) => ({
+              state: animation.playState,
+              time: animation.currentTime
+            })) : []
+          };
+        })`);
+        if (probe.every((entry) => entry.opacity === "1")) break;
+        await sleep(120);
+      }
+      assert.deepEqual(
+        probe.map((entry) => entry.opacity),
+        targets.map(() => "1"),
+        `every animated element is revealed after the pending steps are delivered: ${JSON.stringify(probe)}`
+      );
+    } finally {
+      slideFrame.close();
+    }
+
+    // The slide must not eat input: a click on it reaches the overlay, the
+    // frame never takes focus, and the keyboard keeps driving the deck.
+    const total = state.view.presentation.slides.length;
+    const canForward = targetIndex < total - 1;
+    const viewport = await page.evaluate(
+      `({ w: window.innerWidth, h: window.innerHeight })`
+    );
+    const clickX = Math.round(viewport.w * (canForward ? 0.75 : 0.25));
+    const clickY = Math.round(viewport.h * 0.5);
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: clickX,
+        y: clickY,
+        button: "left",
+        clickCount: 1,
+      });
+    }
+    await sleep(300);
+    const afterClick = await page.evaluate(`({
+      current: document.getElementById("hud-current").textContent,
+      active: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : ""
+    })`);
+    assert.notEqual(afterClick.active, "present-slide", "the slide never takes focus");
+    if (total > 1) {
+      assert.equal(
+        afterClick.current,
+        String(canForward ? targetIndex + 2 : targetIndex),
+        "clicking the slide advances or rewinds the deck"
+      );
+      await page.press(canForward ? "ArrowLeft" : "ArrowRight", {
+        keyCode: canForward ? 37 : 39,
+      });
+      await sleep(300);
+      const afterKey = await page.evaluate(
+        `document.getElementById("hud-current").textContent`
+      );
+      assert.equal(
+        afterKey,
+        String(targetIndex + 1),
+        "the keyboard still works after clicking the slide"
+      );
+    }
+
+    // Defense in depth: if a slide script ever takes focus, its runtime forwards
+    // the keystrokes so presentation controls keep working. Pick a direction
+    // that is guaranteed to move away from the current slide.
+    const forwardKey = targetIndex < total - 1;
+    const canMove = forwardKey || targetIndex > 0;
+    const focused = await waitForSlideFrame(/[?&]p=\d/);
+    try {
+      await focused.evaluate(
+        `document.documentElement.tabIndex = -1; document.documentElement.focus(); true`
+      );
+      if (canMove) {
+        const before = await page.evaluate(
+          `document.getElementById("hud-current").textContent`
+        );
+        const key = forwardKey ? "ArrowRight" : "ArrowLeft";
+        const keyCode = forwardKey ? 39 : 37;
+        for (const type of ["keyDown", "keyUp"]) {
+          await focused.send("Input.dispatchKeyEvent", {
+            type,
+            key,
+            code: key,
+            windowsVirtualKeyCode: keyCode,
+            nativeVirtualKeyCode: keyCode,
+          });
+        }
+        await sleep(400);
+        const forwarded = await page.evaluate(
+          `document.getElementById("hud-current").textContent`
+        );
+        assert.notEqual(
+          forwarded,
+          before,
+          "a key pressed inside the slide still navigates the deck"
+        );
+      }
+    } finally {
+      focused.close();
+    }
+  } finally {
+    // Escape leaves fullscreen first (Chrome swallows it), which the presenter
+    // treats as the exit gesture.
+    await page.press("Escape", { keyCode: 27 });
+    await page.waitFor(`document.getElementById("present-overlay").hidden === true`, {
+      timeout: 4000,
+    });
+  }
+});
+
+test("the present split menu opens the speaker console from a real click", async () => {
+  // Regression: `.topbar { overflow: hidden }` clipped the dropdown rendered
+  // below the bar, so every item (slide view, speaker console, new window) was
+  // invisible and unclickable.
+  await page.evaluate(`document.getElementById("present-menu-trigger").click(); true`);
+  await sleep(400);
+
+  const spot = await page.evaluate(`(() => {
+    const rect = document.getElementById("present-speaker").getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return {
+      x: rect.x + rect.width / 2,
+      y: rect.y + rect.height / 2,
+      hitsItem: !!hit && !!hit.closest("#present-speaker")
+    };
+  })()`);
+  assert.equal(spot.hitsItem, true, "the dropdown is not clipped by the topbar");
+
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type,
+      x: spot.x,
+      y: spot.y,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+
+  try {
+    await page.waitFor(
+      `getComputedStyle(document.getElementById("speaker-console")).display !== "none"`
+    );
+    const speaker = await page.evaluate(`({
+      overlay: getComputedStyle(document.getElementById("present-overlay")).display,
+      current: document.getElementById("sc-current-frame").getAttribute("src") || "",
+      total: document.getElementById("sc-total").textContent,
+      clock: document.getElementById("wall-clock").textContent,
+      notes: document.getElementById("speaker-notes-body").textContent
+    })`);
+    assert.notEqual(speaker.overlay, "none", "the console lives inside the presenter overlay");
+    assert.match(speaker.current, /\?static=1/, "the console previews the static document");
+    assert.match(speaker.total, /^\d+$/);
+    assert.match(speaker.clock, /^\d{2}:\d{2}:\d{2}$/);
+    assert.ok(speaker.notes.length > 0, "the notes panel renders its empty state");
+  } finally {
+    await page.evaluate(`document.getElementById("speaker-close-btn").click(); true`);
+    await page.waitFor(`document.getElementById("present-overlay").hidden === true`);
   }
 });
 
@@ -783,6 +1089,112 @@ test("copilot streams text and localized tool status into the thread", async () 
   }
 });
 
+test("selects a block on the canvas and lists the slide structure", async () => {
+  // Give the stage a deterministic slide with authored blocks.
+  await page.evaluate(`fetch("/api/command?t=${token}", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "add_slide",
+      template: "hero",
+      index: 0
+    })
+  }).then((r) => r.json())`);
+  await sleep(400);
+  await page.evaluate(`document.querySelectorAll(".thumb")[0].click(); true`);
+  await sleep(900);
+
+  const stage = await page.evaluate(`(() => {
+    const rect = document.getElementById("slide-frame").getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type,
+      x: stage.x,
+      y: stage.y,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+  await sleep(500);
+
+  const selection = await page.evaluate(`({
+    hud: !document.getElementById("element-hud").hidden,
+    tag: document.getElementById("element-hud-tag").textContent,
+    pill: document.getElementById("copilot-context-pill").textContent,
+    tree: document.querySelectorAll(".element-tree-item").length
+  })`);
+  assert.equal(selection.hud, true, "the element HUD is visible");
+  assert.match(selection.tag, /^#\S+$/, "the HUD names the selected block");
+  assert.match(selection.pill, /Destino: /, "the copilot targets the block");
+  assert.ok(selection.tree > 0, "the inspector lists the slide structure");
+
+  // The palette opens scoped to the selection.
+  await page.evaluate(
+    `document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true })); true`
+  );
+  await sleep(250);
+  const palette = await page.evaluate(`({
+    open: !document.getElementById("command-palette").hidden,
+    groups: [...document.querySelectorAll(".palette-group")].map((node) => node.textContent)
+  })`);
+  assert.equal(palette.open, true);
+  assert.ok(palette.groups.includes("Elemento seleccionado"));
+
+  await page.evaluate(
+    `document.getElementById("palette-input").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); true`
+  );
+  await sleep(200);
+  assert.equal(
+    await page.evaluate(`document.getElementById("command-palette").hidden`),
+    true
+  );
+});
+
+test("renders code, math and diagrams inside the sandbox", async () => {
+  const html = `<div class="slide tech">
+    <div class="slyde-diagram">graph LR; A-->B</div>
+    <p class="sub">Coste $O(n \\log n)$</p>
+    <pre class="slyde-code" data-lang="rust" data-emphasis="2"><code>fn main() {
+    run();
+}</code></pre>
+  </div>`;
+  await page.evaluate(`fetch("/api/agent?t=${token}", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "upsert_slide", index: 0, html_code: ${JSON.stringify(html)}, template: "code" })
+  }).then((r) => r.json())`);
+  const state = await page.evaluate(
+    `fetch("/api/state?t=${token}").then((r) => r.json())`
+  );
+  const slideId = state.view.presentation.slides[0].id;
+
+  const slidePage = await browser.newPage(
+    `${sandboxOrigin}/s/${encodeURIComponent(slideId)}?static=1`
+  );
+  try {
+    await slidePage.waitFor(
+      `document.documentElement.getAttribute("data-slyde-ready") === "1"`,
+      { timeout: 15000 }
+    );
+    const rendered = await slidePage.evaluate(`({
+      lines: document.querySelectorAll(".slyde-line").length,
+      emphasis: document.querySelectorAll(".slyde-line.is-emphasis").length,
+      tokens: document.querySelectorAll(".hljs-keyword, .hljs-title").length,
+      katex: document.querySelectorAll(".katex").length,
+      diagram: document.querySelectorAll(".slyde-diagram svg").length
+    })`);
+    assert.equal(rendered.lines, 3, "one wrapper per code line");
+    assert.equal(rendered.emphasis, 1, "the requested line is emphasised");
+    assert.ok(rendered.tokens > 0, "syntax highlighting applied");
+    assert.equal(rendered.katex, 1, "LaTeX rendered with KaTeX");
+    assert.equal(rendered.diagram, 1, "Mermaid produced an SVG");
+  } finally {
+    await slidePage.close();
+  }
+});
+
 test("meets the accessibility baseline: names, focus ring and AA contrast", async () => {
   // Start from a known point in the tab order, then move with the keyboard so
   // Chrome applies :focus-visible exactly as a real keyboard user would see it.
@@ -800,7 +1212,13 @@ test("meets the accessibility baseline: names, focus ring and AA contrast", asyn
       outlineStyle: ring.outlineStyle
     };
   })()`);
-  assert.equal(focus.isThumb, true, "Tab lands on the selected storyboard thumb");
+  // Tab leaves the top bar and lands inside the storyboard: either the selected
+  // thumb itself or one of its action buttons.
+  assert.match(
+    focus.className,
+    /thumb/,
+    `Tab lands inside the storyboard: ${JSON.stringify(focus)}`
+  );
   assert.equal(focus.focusVisible, true);
   assert.notEqual(focus.outlineStyle, "none");
   assert.notEqual(focus.outlineWidth, "0px");

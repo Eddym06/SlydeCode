@@ -13,9 +13,9 @@
 use slyde_core::{Presentation, Slide};
 
 const CSP: &str = "default-src 'none'; \
-style-src 'unsafe-inline'; \
-script-src 'unsafe-inline'; \
-img-src data: blob:; \
+style-src 'self' 'unsafe-inline'; \
+script-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob:; \
 font-src 'self' data:; \
 media-src data: blob:; \
 connect-src 'none'; \
@@ -63,7 +63,12 @@ pub fn csp_header() -> &'static str {
 ///
 /// `static_mode` skips the "hide until animated" step, used for thumbnails and
 /// for export, where nothing will trigger the timeline.
-pub fn render_document(deck: &Presentation, slide: &Slide, static_mode: bool) -> String {
+pub fn render_document(
+    deck: &Presentation,
+    slide: &Slide,
+    static_mode: bool,
+    edit_mode: bool,
+) -> String {
     let (width, height) = deck.aspect_ratio.size_px();
     let steps_json = serde_json::to_string(&slide.animation)
         .unwrap_or_else(|_| "[]".to_string())
@@ -136,16 +141,16 @@ pub fn render_document(deck: &Presentation, slide: &Slide, static_mode: bool) ->
         code = slide.code,
         steps = steps_json,
         base_css = crate::starter::base_css(),
-        runtime = runtime_script(width, height, static_mode),
+        runtime = runtime_script(width, height, static_mode, edit_mode),
     )
 }
 
-fn runtime_script(width: u32, height: u32, static_mode: bool) -> String {
+fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -> String {
     // Plain ES5-ish JavaScript: no build step, no modules, works in every
     // Chromium version we support.
     let template = r#"
 (function () {
-  var W = __W__, H = __H__, STATIC = __STATIC__;
+  var W = __W__, H = __H__, STATIC = __STATIC__, EDIT = __EDIT__;
   var stage = document.getElementById('slyde-stage');
 
   function fit() {
@@ -165,6 +170,199 @@ fn runtime_script(width: u32, height: u32, static_mode: bool) -> String {
   }
   requestAnimationFrame(fit);
   fit();
+
+  // ---- Technical blocks: code, math and diagrams ----
+  // Renderers are vendored on this origin and loaded only when the slide needs
+  // them, so a deck without technical blocks pays nothing.
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = src;
+      script.onload = function () { resolve(); };
+      script.onerror = function () { reject(new Error('failed to load ' + src)); };
+      document.head.appendChild(script);
+    });
+  }
+
+  function loadStyle(href) {
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
+
+  // The token palette flips with the deck theme, not the editor theme.
+  (function detectScheme() {
+    var bg = getComputedStyle(document.documentElement).getPropertyValue('--slyde-bg') ||
+      getComputedStyle(document.body).backgroundColor;
+    var value = String(bg).trim();
+    var rgb = null;
+    if (value.charAt(0) === '#') {
+      var hex = value.slice(1);
+      if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+      rgb = [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+    } else {
+      var match = value.match(/rgba?\(([^)]+)\)/);
+      if (match) rgb = match[1].split(',').slice(0, 3).map(Number);
+    }
+    var luminance = 0;
+    if (rgb && rgb.length === 3 && rgb.every(function (n) { return !isNaN(n); })) {
+      luminance = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+    }
+    document.documentElement.setAttribute('data-slyde-scheme', luminance > 0.55 ? 'light' : 'dark');
+  })();
+
+  // Splits highlighted HTML into balanced per-line fragments so every line can
+  // carry a number and an emphasis state without corrupting nested spans.
+  function splitHighlightedLines(html) {
+    var lines = [];
+    var open = [];
+    var buffer = '';
+    var tokenizer = /<[^>]+>|[^<]+/g;
+    var token;
+    function closeTag(tag) {
+      var name = tag.replace(/^<\s*/, '').split(/[\s/>]/)[0];
+      return '</' + name + '>';
+    }
+    function flush() {
+      var closing = open.slice().reverse().map(closeTag).join('');
+      lines.push(buffer + closing);
+      buffer = open.join('');
+    }
+    while ((token = tokenizer.exec(html))) {
+      var value = token[0];
+      if (value.charAt(0) === '<') {
+        var closing = value.charAt(1) === '/';
+        var selfClosing = /\/>$/.test(value) || /^<(br|hr|img|input|wbr)\b/i.test(value);
+        if (closing) open.pop();
+        else if (!selfClosing) open.push(value);
+        buffer += value;
+      } else {
+        var parts = value.split('\n');
+        for (var i = 0; i < parts.length; i += 1) {
+          if (i > 0) flush();
+          buffer += parts[i];
+        }
+      }
+    }
+    lines.push(buffer + open.slice().reverse().map(closeTag).join(''));
+    return lines;
+  }
+
+  function emphasisSet(raw) {
+    var set = {};
+    String(raw || '').split(',').forEach(function (part) {
+      var range = part.trim().split('-');
+      if (!range[0]) return;
+      var from = parseInt(range[0], 10);
+      var to = range.length > 1 ? parseInt(range[1], 10) : from;
+      if (isNaN(from) || isNaN(to)) return;
+      for (var n = from; n <= to; n += 1) set[n] = true;
+    });
+    return set;
+  }
+
+  function renderCodeBlocks(blocks) {
+    return loadScript('/vendor/hljs/highlight.min.js').then(function () {
+      Array.prototype.forEach.call(blocks, function (block) {
+        var codeEl = block.querySelector('code') || block;
+        var language = (block.getAttribute('data-lang') || '').trim();
+        if (!language) {
+          var match = (codeEl.className || '').match(/language-([\w+-]+)/);
+          if (match) language = match[1];
+        }
+        var html;
+        try {
+          if (language && window.hljs.getLanguage(language)) {
+            html = window.hljs.highlight(codeEl.textContent, { language: language }).value;
+          } else {
+            html = window.hljs.highlightAuto(codeEl.textContent).value;
+          }
+        } catch (e) {
+          html = null;
+        }
+        if (html) {
+          var lines = splitHighlightedLines(html);
+          var emphasis = emphasisSet(block.getAttribute('data-emphasis'));
+          codeEl.innerHTML = lines.map(function (line, index) {
+            var classes = 'slyde-line' + (emphasis[index + 1] ? ' is-emphasis' : '');
+            return '<span class="' + classes + '"><span class="slyde-ln">' + (index + 1) +
+              '</span><span class="slyde-lc">' + line + '</span></span>';
+          }).join('');
+        }
+        block.classList.add('slyde-code-ready');
+      });
+    }).catch(function () {
+      /* Highlighting is a progressive enhancement: the code stays readable. */
+    });
+  }
+
+  function renderMath() {
+    loadStyle('/vendor/katex/katex.min.css');
+    return loadScript('/vendor/katex/katex.min.js')
+      .then(function () { return loadScript('/vendor/katex/auto-render.min.js'); })
+      .then(function () {
+        if (typeof window.renderMathInElement !== 'function') return;
+        window.renderMathInElement(document.body, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '\\(', right: '\\)', display: false },
+            { left: '$', right: '$', display: false }
+          ],
+          ignoredTags: ['style', 'script', 'pre', 'code', 'noscript', 'textarea'],
+          throwOnError: false
+        });
+        document.body.classList.add('slyde-math-ready');
+      })
+      .catch(function () {
+        /* Without KaTeX the source stays visible instead of disappearing. */
+      });
+  }
+
+  function renderDiagrams(nodes) {
+    return loadScript('/vendor/mermaid/mermaid.min.js')
+      .then(function () {
+        var scheme = document.documentElement.getAttribute('data-slyde-scheme');
+        window.mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: scheme === 'light' ? 'default' : 'dark',
+          fontFamily: 'inherit'
+        });
+        return window.mermaid.run({ nodes: Array.prototype.slice.call(nodes) });
+      })
+      .catch(function () {
+        /* A broken definition must never take the whole slide down. */
+        Array.prototype.forEach.call(nodes, function (node) {
+          node.setAttribute('data-slyde-diagram-error', '1');
+        });
+      });
+  }
+
+  (function renderTechnicalBlocks() {
+    // Only `pre` blocks: matching `pre > code` as well would process the same
+    // block twice and destroy the line wrapper the first pass created.
+    var codeBlocks = document.querySelectorAll('pre');
+    var diagrams = document.querySelectorAll('.slyde-diagram');
+    var text = document.body.innerText || '';
+    var hasMath = /\$[^$\n]+\$|\\\(|\\\[/.test(text);
+    var jobs = [];
+    if (codeBlocks.length) jobs.push(renderCodeBlocks(codeBlocks));
+    if (hasMath) jobs.push(renderMath());
+    if (diagrams.length) jobs.push(renderDiagrams(diagrams));
+    var done = function () {
+      document.documentElement.setAttribute('data-slyde-ready', '1');
+      if (window.parent !== window) {
+        window.parent.postMessage({ __slyde: true, type: 'rendered' }, '*');
+      }
+    };
+    if (!jobs.length) {
+      done();
+    } else {
+      Promise.all(jobs).then(done, done);
+    }
+  })();
 
   var steps = [];
   try { steps = JSON.parse(document.getElementById('slyde-steps').textContent || '[]'); } catch (e) {}
@@ -216,16 +414,200 @@ fn runtime_script(width: u32, height: u32, static_mode: bool) -> String {
     if (data.type === 'reset') location.reload();
   });
 
+  // The keyboard belongs to whoever is presenting, never to the slide. If a
+  // slide document ends up focused, forward every keystroke to the parent so
+  // navigation (arrows, B, S, F, Escape) keeps working.
+  window.addEventListener('keydown', function (event) {
+    if (STATIC || window.parent === window) return;
+    try {
+      window.parent.postMessage({
+        __slyde: true,
+        type: 'key',
+        key: event.key,
+        code: event.code,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey
+      }, '*');
+    } catch (e) {}
+  });
+
+  // ---- Visual editing layer (studio stage only) ----
+  if (EDIT) {
+    var selection = null;
+    var editingNode = null;
+    var outline = null;
+
+    var post = function (message) {
+      if (window.parent === window) return;
+      message.__slyde = true;
+      try { window.parent.postMessage(message, '*'); } catch (e) {}
+    };
+
+    // Every block gets a stable handle `mutate_element` can target: the
+    // authored id, an existing data-id, or a generated one.
+    (function assignIds() {
+      var nodes = stage.querySelectorAll('*');
+      for (var i = 0; i < nodes.length; i += 1) {
+        var el = nodes[i];
+        var handle = el.getAttribute('id') || el.getAttribute('data-id');
+        if (!handle) {
+          handle = 'slyde-' + (i + 1);
+          el.setAttribute('data-id', handle);
+        }
+        el.setAttribute('data-slyde-id', handle);
+      }
+    })();
+
+    function ensureOutline() {
+      if (outline) return outline;
+      outline = document.createElement('div');
+      outline.setAttribute('data-slyde-ui', '1');
+      outline.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;display:none;' +
+        'z-index:2147483646;box-sizing:border-box;border-radius:2px;' +
+        'box-shadow:0 0 0 2px #FF6B4A, 0 0 0 3px rgba(255,107,74,.22);';
+      document.body.appendChild(outline);
+      return outline;
+    }
+
+    function paint() {
+      var layer = ensureOutline();
+      if (!selection) { layer.style.display = 'none'; return; }
+      var rect = selection.getBoundingClientRect();
+      if (!rect.width && !rect.height) { layer.style.display = 'none'; return; }
+      layer.style.display = 'block';
+      layer.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)';
+      layer.style.width = Math.round(rect.width) + 'px';
+      layer.style.height = Math.round(rect.height) + 'px';
+    }
+
+    function describe(el) {
+      var rect = el.getBoundingClientRect();
+      return {
+        type: 'select',
+        id: el.getAttribute('data-slyde-id'),
+        tag: el.tagName ? el.tagName.toLowerCase() : 'div',
+        text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+        rect: { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
+        viewport: { w: window.innerWidth, h: window.innerHeight }
+      };
+    }
+
+    function select(el) {
+      selection = el;
+      paint();
+      post(el ? describe(el) : { type: 'deselect' });
+    }
+
+    function closestBlock(node) {
+      var el = node;
+      while (el && el !== stage) {
+        if (el.getAttribute && el.getAttribute('data-slyde-id')) return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+
+    stage.addEventListener('click', function (event) {
+      if (editingNode) return;
+      event.preventDefault();
+      select(closestBlock(event.target));
+    }, true);
+
+    document.addEventListener('dblclick', function (event) {
+      var block = closestBlock(event.target);
+      if (!block || editingNode) return;
+      event.preventDefault();
+      beginEdit(block);
+    }, true);
+
+    function beginEdit(el) {
+      editingNode = el;
+      el.__slydeBackup = el.innerHTML;
+      el.setAttribute('contenteditable', 'true');
+      el.style.caretColor = '#FF6B4A';
+      el.focus();
+      try {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var current = window.getSelection();
+        current.removeAllRanges();
+        current.addRange(range);
+      } catch (e) {}
+      post({ type: 'editing', id: el.getAttribute('data-slyde-id') });
+    }
+
+    function finishEdit(commit) {
+      if (!editingNode) return;
+      var el = editingNode;
+      editingNode = null;
+      el.removeAttribute('contenteditable');
+      el.style.caretColor = '';
+      if (commit) {
+        var value = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        post({ type: 'text', id: el.getAttribute('data-slyde-id'), value: value });
+      } else {
+        el.innerHTML = el.__slydeBackup || '';
+      }
+      paint();
+    }
+
+    document.addEventListener('keydown', function (event) {
+      if (!editingNode) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finishEdit(false);
+      } else if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        finishEdit(true);
+      }
+    }, true);
+
+    document.addEventListener('focusout', function (event) {
+      if (editingNode && event.target === editingNode) finishEdit(true);
+    }, true);
+
+    window.addEventListener('resize', paint);
+    window.addEventListener('scroll', paint, true);
+
+    window.addEventListener('message', function (event) {
+      var data = event.data;
+      if (!data || data.__slyde !== true) return;
+      if (data.type === 'select-by-id') {
+        select(data.id ? stage.querySelector('[data-slyde-id="' + data.id + '"]') : null);
+      } else if (data.type === 'clear-selection') {
+        select(null);
+      }
+    });
+
+    // The document tree: the studio lists it as "Structure" and every entry can
+    // be selected without touching the canvas.
+    (function emitTree() {
+      var nodes = [];
+      var all = stage.querySelectorAll('[data-slyde-id]');
+      for (var i = 0; i < all.length && nodes.length < 80; i += 1) {
+        var el = all[i];
+        nodes.push({
+          id: el.getAttribute('data-slyde-id'),
+          tag: el.tagName ? el.tagName.toLowerCase() : 'div',
+          text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 48)
+        });
+      }
+      post({ type: 'tree', nodes: nodes });
+    })();
+  }
+
   if (window.parent !== window) {
     window.parent.postMessage({ __slyde: true, type: 'ready' }, '*');
   }
 })();
 "#;
-
     template
         .replace("__W__", &width.to_string())
         .replace("__H__", &height.to_string())
         .replace("__STATIC__", if static_mode { "true" } else { "false" })
+        .replace("__EDIT__", if edit_mode { "true" } else { "false" })
 }
 
 /// One document, one page per slide, each slide in its own iframe so slide CSS
@@ -323,7 +705,7 @@ mod tests {
     fn document_contains_slide_markup_and_theme_tokens() {
         let slide = Slide::new("a".into(), "<h1 class=\"t\">Hello</h1>".into());
         let deck = deck_with(slide.clone());
-        let html = render_document(&deck, &slide, true);
+        let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("<h1 class=\"t\">Hello</h1>"));
         assert!(html.contains("--slyde-bg: #17161A"));
         assert!(html.contains("width: 1280px"));
@@ -339,7 +721,7 @@ mod tests {
     fn title_is_escaped() {
         let slide = Slide::new("a".into(), "<p>x</p>".into());
         let deck = deck_with(slide.clone());
-        let html = render_document(&deck, &slide, true);
+        let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("<title>Q3 &lt;Review&gt;</title>"));
         assert!(!html.contains("<title>Q3 <Review>"));
     }
@@ -355,7 +737,7 @@ mod tests {
             easing: "ease-out".into(),
         });
         let deck = deck_with(slide.clone());
-        let html = render_document(&deck, &slide, false);
+        let html = render_document(&deck, &slide, false, false);
         assert!(html.contains("\"kind\":\"fade_up\""));
         assert!(html.contains("var W = 1280"));
         assert!(html.contains("STATIC = false"));
@@ -365,8 +747,19 @@ mod tests {
     fn static_mode_is_flagged_for_thumbnails() {
         let slide = Slide::new("a".into(), "<p>x</p>".into());
         let deck = deck_with(slide.clone());
-        let html = render_document(&deck, &slide, true);
+        let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("STATIC = true"));
+        assert!(html.contains("EDIT = false"));
+    }
+
+    #[test]
+    fn edit_mode_enables_the_selection_layer() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let html = render_document(&deck, &slide, true, true);
+        assert!(html.contains("EDIT = true"));
+        assert!(html.contains("data-slyde-id"));
+        assert!(html.contains("contenteditable"));
     }
 
     #[test]
@@ -374,7 +767,7 @@ mod tests {
         let slide = Slide::new("a".into(), "<p>x</p>".into());
         let mut deck = deck_with(slide.clone());
         deck.aspect_ratio = AspectRatio::R9x16;
-        let html = render_document(&deck, &slide, true);
+        let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("width: 720px"));
         assert!(html.contains("height: 1280px"));
     }

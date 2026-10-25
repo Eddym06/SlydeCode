@@ -1,5 +1,6 @@
 import { createClient, readToken } from "./api.js";
 import { apply as applyI18n, t } from "./i18n.js";
+import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
 const token = readToken();
 const frame = document.getElementById("present-slide");
@@ -29,6 +30,7 @@ const hudSpeaker = document.getElementById("hud-speaker");
 const hudExit = document.getElementById("hud-exit");
 const notesFontDown = document.getElementById("notes-font-down");
 const notesFontUp = document.getElementById("notes-font-up");
+const notesPace = document.getElementById("notes-pace");
 
 let view = null;
 let index = 0;
@@ -43,10 +45,12 @@ let pendingSteps = [];
 let timerSeconds = 0;
 let timerRunning = false;
 let timerInterval = null;
+let slideStartSeconds = 0;
 let notesFontSize = 18;
 let isSpeakerMode = new URLSearchParams(window.location.search).get("speaker") === "1";
 let isBlackout = false;
 let client = null;
+let keepWindowedOnExit = false;
 
 applyI18n();
 
@@ -72,6 +76,7 @@ function startTimer() {
   timerInterval = setInterval(() => {
     timerSeconds += 1;
     if (timerDisplay) timerDisplay.textContent = formatTime(timerSeconds);
+    updatePace();
   }, 1000);
 }
 
@@ -111,8 +116,7 @@ function renderSpeakerConsole() {
   if (!speakerConsole || speakerConsole.hidden || !view) return;
   const slides = view.presentation.slides;
   if (!slides.length) return;
-  const slide = slides[index];
-  if (speakerTitle) speakerTitle.textContent = view.presentation.title || "SlydeCode";
+  const slide = slides[index];  if (speakerTitle) speakerTitle.textContent = view.presentation.title || "SlydeCode";
   if (scCurrent) scCurrent.textContent = String(index + 1);
   if (scTotal) scTotal.textContent = String(slides.length);
   if (scCurrentFrame) {
@@ -137,6 +141,25 @@ function renderSpeakerConsole() {
       speakerNotesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
     }
   }
+  updatePace();
+}
+
+/** Reading-time estimate and pace for the current slide. */
+function updatePace() {
+  if (!notesPace) return;
+  const slide = view && view.presentation.slides[index];
+  const expected = readingSeconds(slide && slide.notes);
+  if (!expected) {
+    notesPace.dataset.state = "none";
+    notesPace.textContent = "";
+    return;
+  }
+  const elapsed = Math.max(0, timerSeconds - slideStartSeconds);
+  const state = paceState(elapsed, expected);
+  notesPace.dataset.state = state;
+  notesPace.textContent = `${t("present.pace.estimate", {
+    time: formatClock(expected),
+  })} · ${t(`present.pace.${state}`)}`;
 }
 
 function applyView(next) {
@@ -166,6 +189,7 @@ function applyView(next) {
   const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
   if (key !== slideKey) {
     slideKey = key;
+    slideStartSeconds = timerSeconds;
     pendingSteps = slide.animation.slice();
     if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
   }
@@ -245,9 +269,14 @@ function exitToStudio() {
 
 async function toggleFullscreen() {
   try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await document.documentElement.requestFullscreen();
+    if (document.fullscreenElement) {
+      keepWindowedOnExit = true;
+      await document.exitFullscreen();
+    } else {
+      await document.documentElement.requestFullscreen();
+    }
   } catch {
+    keepWindowedOnExit = false;
     /* Fullscreen can be denied; presenting still works. */
   }
 }
@@ -283,7 +312,27 @@ if (notesFontUp) {
 window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.__slyde !== true) return;
-  if (data.type === "ready") playPending();
+  if (data.type === "ready") {
+    playPending();
+    return;
+  }
+  if (data.type === "key") {
+    // A focused slide document owns the keyboard; the sandbox runtime forwards
+    // each key so navigation never dies after touching the slide.
+    if (!frame || event.source !== frame.contentWindow) return;
+    onKeydown(
+      new KeyboardEvent("keydown", {
+        key: data.key,
+        code: data.code,
+        altKey: !!data.altKey,
+        ctrlKey: !!data.ctrlKey,
+        metaKey: !!data.metaKey,
+        shiftKey: !!data.shiftKey,
+        bubbles: false,
+        cancelable: true,
+      })
+    );
+  }
 });
 
 if (frame) {
@@ -297,7 +346,7 @@ window.addEventListener("resize", () => {
   if (view) fit();
 });
 
-document.addEventListener("keydown", (event) => {
+function onKeydown(event) {
   if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
     event.preventDefault();
     advance();
@@ -330,6 +379,18 @@ document.addEventListener("keydown", (event) => {
       exitToStudio();
     }
   }
+}
+
+document.addEventListener("keydown", onKeydown);
+
+// Chrome consumes Escape to leave fullscreen instead of dispatching it, so an
+// unexpected exit from fullscreen ends the presentation.
+document.addEventListener("fullscreenchange", () => {
+  if (document.fullscreenElement || keepWindowedOnExit) {
+    keepWindowedOnExit = false;
+    return;
+  }
+  exitToStudio();
 });
 
 document.addEventListener("click", (event) => {

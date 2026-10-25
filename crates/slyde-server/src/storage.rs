@@ -146,7 +146,8 @@ mod tests {
         let loaded = load(&path).unwrap().unwrap();
         assert_eq!(loaded.title, "Landing <v2>");
         assert_eq!(loaded.slides.len(), 1);
-        assert_eq!(loaded.slides[0].code, "<h1>A</h1>");
+        // Loading assigns a persistent handle to every block.
+        assert_eq!(loaded.slides[0].code, "<h1 data-id=\"slyde-1\">A</h1>");
     }
 
     #[tokio::test]

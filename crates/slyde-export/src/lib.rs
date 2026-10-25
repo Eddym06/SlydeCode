@@ -74,7 +74,9 @@ pub async fn export_pdf(
         .arg("--no-default-browser-check")
         .arg("--no-pdf-header-footer")
         .arg("--run-all-compositor-stages-before-draw")
-        .arg("--virtual-time-budget=5000")
+        // Math, diagrams and syntax highlighting render after the load event;
+        // the virtual time budget gives them room before the page is captured.
+        .arg("--virtual-time-budget=15000")
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(format!("--print-to-pdf={}", output.display()))
         .arg(print_url)
@@ -126,6 +128,7 @@ pub async fn export_png(
                 .arg("--hide-scrollbars")
                 .arg("--no-first-run")
                 .arg("--no-default-browser-check")
+                .arg("--virtual-time-budget=15000")
                 .arg(format!("--user-data-dir={}", profile.display()))
                 .arg(format!("--window-size={width},{height}"))
                 .arg(format!("--screenshot={}", file.display()))

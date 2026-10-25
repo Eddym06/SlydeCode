@@ -4,11 +4,13 @@
 //! export pipeline depend on it; it never depends on them.
 
 pub mod error;
+pub mod html;
 pub mod model;
 pub mod project;
 pub mod state;
 
 pub use error::CoreError;
+pub use html::ensure_element_ids;
 pub use model::{
     AnimationKind, AnimationStep, AspectRatio, Author, Presentation, Slide, SlideId, StateView,
     TemplateType, Theme,

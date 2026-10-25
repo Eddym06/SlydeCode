@@ -159,6 +159,18 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
         None => {}
     }
 
+    // Vendored renderers (KaTeX, highlight.js) live on the sandbox origin only:
+    // a slide document may load same-origin assets, never the network.
+    match config.assets_dir.as_ref().map(|dir| dir.join("vendor")) {
+        Some(vendor) if vendor.is_dir() => {
+            sandbox = sandbox.nest_service("/vendor", ServeDir::new(&vendor));
+        }
+        Some(vendor) => {
+            tracing::warn!(dir = %vendor.display(), "vendor directory not found; math and code blocks degrade to plain text");
+        }
+        None => {}
+    }
+
     let mut app_shutdown = shutdown.subscribe();
     tokio::spawn(async move {
         let server = axum::serve(app_listener, app).with_graceful_shutdown(async move {

@@ -35,6 +35,12 @@ pub enum CoreError {
     #[error("animation step {index} does not exist on slide {slide_id}")]
     AnimationStepNotFound { slide_id: String, index: usize },
 
+    #[error("element {element_id} does not exist in slide or presentation")]
+    ElementNotFound { element_id: String },
+
+    #[error("element {element_id} has no inner content to replace (void or self-closing tag)")]
+    ElementHasNoContent { element_id: String },
+
     #[error("invalid project: {0}")]
     InvalidProject(String),
 }

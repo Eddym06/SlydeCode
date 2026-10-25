@@ -9,13 +9,26 @@ use slyde_core::Presentation;
 
 use super::tools::deck_summary;
 
-pub fn system_prompt(deck: &Presentation, selected_id: Option<&str>, language: &str) -> String {
+pub fn system_prompt(
+    deck: &Presentation,
+    selected_id: Option<&str>,
+    selected_element: Option<&str>,
+    language: &str,
+) -> String {
     let language = if language == "es" {
         "Spanish"
     } else {
         "English"
     };
     let summary = deck_summary(deck, selected_id);
+    let selection = match selected_element.filter(|id| !id.trim().is_empty()) {
+        Some(id) => format!(
+            "- Element selected on canvas: `{id}`. The user is looking at that block: prefer \
+             `mutate_element(element_id=\"{id}\")` for this request and only touch the whole slide \
+             when they ask for a broader change."
+        ),
+        None => "- No element is selected on the canvas.".to_string(),
+    };
     format!(
         r#"You are SlydeCode's presentation designer and engineer. You turn plain language into
 editorial-quality slide decks that are already rendered as real HTML and CSS inside a
@@ -107,6 +120,10 @@ Slides come alive with smooth, high-fidelity animations. Combine continuous CSS 
 
 {summary}
 
+## Selection
+
+{selection}
+
 ## Tools
 
 You can only change the deck through the provided tools.
@@ -116,21 +133,33 @@ You can only change the deck through the provided tools.
 - `create_presentation` — reset to a new deck. Use only when the user asks for a new deck.
 - `upsert_slide` — insert at `index` or replace with `slide_id`; always pass the complete
   `html_code`, a `template` and, when useful, an `animation` array.
+- `get_selected_element` — inspect one element by id: a structured element or a node marked with `id="…"`/`data-id="…"` in the slide HTML.
+- `mutate_element` — apply surgical changes (text, styles, inner HTML) to a specific element by ID (for example: mutate_element with element_id="title-1"). Prefer this over replacing the entire slide whenever the user asks for a local modification.
 - `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`.
 
 Rules:
 
-1. If the deck is empty and the user asks for a presentation, call
+1. If the user asks to modify or refine a specific block, use `mutate_element` (it needs the id that
+   appears in the slide source) or a surgical `upsert_slide`, never a full rewrite of the deck.
+2. If the deck is empty and the user asks for a presentation, call
    `create_presentation`, then write slides with `upsert_slide` in order.
-2. For edits, keep the existing deck. Use the exact `slide_id` from the context. Inserting
+3. For edits of full slides, keep the existing deck. Use the exact `slide_id` from the context. Inserting
    a new slide uses its zero-based `index`.
-3. Write a deck as a story: a hook, the argument, the proof, the decision. Typical decks are
+4. Technical slides. The sandbox renders HTML, inline CSS, inline SVG, Mermaid, LaTeX and
+   syntax highlighting natively:
+   - Code: `<pre class="slyde-code" data-lang="ts" data-emphasis="3,5-7"><code>…</code></pre>`.
+     Escape `<`, `>` and `&` inside the code. `data-emphasis` highlights 1-based lines.
+   - Math: `$inline$` or `$$display$$` (KaTeX). Escape anything that looks like a price.
+   - Diagrams: `<div class="slyde-diagram">graph TD; A-->B;</div>` with Mermaid source only.
+   - Images: `data:` or `blob:` URIs or `/vendor` assets; the sandbox has no network.
+   Keep line lengths short (the canvas is a slide, not an editor) and never paste raw Markdown.
+5. Write a deck as a story: a hook, the argument, the proof, the decision. Typical decks are
    5–9 slides unless the user asks for another length.
-4. Use speaker notes for narrative or data-heavy slides. They should sound like a person
+6. Use speaker notes for narrative or data-heavy slides. They should sound like a person
    talking, not a summary of the visible text.
-5. After finishing, stop calling tools and give the short chat summary. Do not call
+7. After finishing, stop calling tools and give the short chat summary. Do not call
    `read_deck` just to confirm a change that the tool already confirmed.
-6. If a tool returns an error, correct the arguments and try once; if it still fails, explain
+8. If a tool returns an error, correct the arguments and try once; if it still fails, explain
    the specific problem in plain language.
 "#,
         language = language,
@@ -149,11 +178,22 @@ mod tests {
         let mut deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
         deck.slides
             .push(Slide::new("sld_a".into(), "<h1>Hello</h1>".into()));
-        let prompt = system_prompt(&deck, Some("sld_a"), "es");
+        let prompt = system_prompt(&deck, Some("sld_a"), None, "es");
         assert!(prompt.contains("Spanish"));
         assert!(prompt.contains("16:9"));
         assert!(prompt.contains("sld_a"));
         assert!(prompt.contains("Never paste HTML"));
         assert!(prompt.contains("upsert_slide"));
+        assert!(prompt.contains("No element is selected on the canvas"));
+    }
+
+    #[test]
+    fn prompt_targets_the_selected_element() {
+        let mut deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
+        deck.slides
+            .push(Slide::new("sld_a".into(), "<h1>Hello</h1>".into()));
+        let prompt = system_prompt(&deck, Some("sld_a"), Some("title-1"), "en");
+        assert!(prompt.contains("Element selected on canvas: `title-1`"));
+        assert!(prompt.contains("mutate_element(element_id=\"title-1\")"));
     }
 }

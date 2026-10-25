@@ -24,6 +24,9 @@ pub struct SandboxQuery {
     /// `static=1` renders the slide fully revealed (thumbnails, export).
     #[serde(default, rename = "static")]
     pub static_mode: Option<String>,
+    /// `edit=1` enables the studio selection and inline-editing layer.
+    #[serde(default)]
+    pub edit: Option<String>,
     #[serde(default)]
     pub t: Option<String>,
 }
@@ -233,6 +236,14 @@ async fn apply_command(
                 step,
             }))
         }
+        UiCommand::MutateElement {
+            element_id,
+            text,
+            style,
+            html,
+        } => core
+            .mutate_element(&element_id, text, style, html)
+            .map(|_| None),
     }
 }
 
@@ -387,7 +398,8 @@ async fn sandbox_slide(
     };
 
     let is_static = query.static_mode.as_deref() == Some("1");
-    let html = sandbox::render_document(deck, slide, is_static);
+    let is_edit = query.edit.as_deref() == Some("1");
+    let html = sandbox::render_document(deck, slide, is_static, is_edit);
 
     let mut response = Html(html).into_response();
     let headers = response.headers_mut();

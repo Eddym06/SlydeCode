@@ -6,7 +6,9 @@ import {
   tickActivity,
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
+import { mountCommandPalette } from "./command-palette.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
+import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -108,7 +110,173 @@ function boot(sessionToken) {
   let saveTimer = null;
 
   let copilot = null;
+  let palette = null;
   let activePanel = "inspector";
+
+  // ---------- Command palette ----------
+  const PALETTE_THEMES = ["studio", "paper", "night", "terminal", "academic"];
+  const PALETTE_RATIOS = ["16:9", "4:3", "9:16"];
+
+  function openPalette(scope = {}) {
+    if (palette) palette.open(scope);
+  }
+
+  function askCopilotForElement(text) {
+    setPanel("copilot");
+    if (copilot && typeof copilot.ask === "function") {
+      copilot.ask(text);
+      return;
+    }
+    const input = $("copilot-input");
+    if (input) {
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    }
+  }
+
+  function buildPaletteActions(scope = {}) {
+    const element = scope.element || selectedElement;
+    const d = deck();
+    const actions = [];
+
+    if (element) {
+      ["concise", "bullets", "technical", "icon"].forEach((key) => {
+        actions.push({
+          id: `element.ai.${key}`,
+          group: t("palette.group.element"),
+          label: t(`element.ai.${key}`),
+          hint: `#${element.id}`,
+          run: () => askCopilotForElement(t(`element.ai.${key}`)),
+        });
+      });
+      actions.push({
+        id: "element.deselect",
+        group: t("palette.group.element"),
+        label: t("elementHud.deselect"),
+        hint: "esc",
+        run: deselectElement,
+      });
+    }
+
+    actions.push(
+      {
+        id: "present",
+        group: t("palette.group.present"),
+        label: t("action.fullscreen"),
+        hint: "f",
+        run: () => openPresentationInStudio(false),
+      },
+      {
+        id: "present.speaker",
+        group: t("palette.group.present"),
+        label: t("action.speakerConsole"),
+        hint: "s",
+        run: () => openPresentationInStudio(true),
+      },
+      {
+        id: "present.window",
+        group: t("palette.group.present"),
+        label: t("action.presentWindow"),
+        run: () => els.presentWindow.click(),
+      }
+    );
+
+    if (d && d.slides.length) {
+      actions.push(
+        {
+          id: "export.pdf",
+          group: t("palette.group.export"),
+          label: t("export.asPdf"),
+          hint: "pdf",
+          run: () => els.topbarExportPdf.click(),
+        },
+        {
+          id: "export.png",
+          group: t("palette.group.export"),
+          label: t("export.asPng"),
+          hint: "zip",
+          run: () => els.topbarExportPng.click(),
+        },
+        {
+          id: "export.slyde",
+          group: t("palette.group.export"),
+          label: t("export.asSlyde"),
+          hint: ".slyde",
+          run: () => els.topbarSaveDeck.click(),
+        }
+      );
+    }
+
+    TEMPLATES.forEach((template) => {
+      actions.push({
+        id: `slide.add.${template.id}`,
+        group: t("palette.group.slide"),
+        label: t(`template.${template.id}`),
+        hint: `+ ${template.icon}`,
+        run: () => run("add_slide", { template: template.id }),
+      });
+    });
+
+    PALETTE_THEMES.forEach((themeId) => {
+      actions.push({
+        id: `theme.${themeId}`,
+        group: t("palette.group.view"),
+        label: t(`theme.${themeId}`),
+        hint: t("palette.hint.theme"),
+        run: () => run("set_theme", { theme_id: themeId }),
+      });
+    });
+
+    PALETTE_RATIOS.forEach((ratio) => {
+      actions.push({
+        id: `ratio.${ratio}`,
+        group: t("palette.group.view"),
+        label: t("palette.ratio", { ratio }),
+        hint: t("palette.hint.ratio"),
+        run: () => run("set_aspect_ratio", { ratio }),
+      });
+    });
+
+    actions.push(
+      {
+        id: "undo",
+        group: t("palette.group.view"),
+        label: t("action.undo"),
+        hint: "mod+z",
+        run: () => run("undo"),
+      },
+      {
+        id: "redo",
+        group: t("palette.group.view"),
+        label: t("action.redo"),
+        hint: "mod+shift+z",
+        run: () => run("redo"),
+      },
+      {
+        id: "theme.toggle",
+        group: t("palette.group.view"),
+        label: t("action.toggleTheme"),
+        run: () => $("theme-toggle").click(),
+      },
+      {
+        id: "lang.en",
+        group: t("palette.group.view"),
+        label: "English",
+        hint: "en",
+        run: () => setLang("en"),
+      },
+      {
+        id: "lang.es",
+        group: t("palette.group.view"),
+        label: "Español",
+        hint: "es",
+        run: () => setLang("es"),
+      }
+    );
+
+    return actions;
+  }
 
   function setPanel(name, { focus = false } = {}) {
     activePanel = name === "copilot" ? "copilot" : "inspector";
@@ -422,15 +590,22 @@ function boot(sessionToken) {
     if (!els.copilotContextPill || !els.copilotPromptPills) return;
     const current = slide();
     const idx = current ? d.slides.findIndex((s) => s.id === current.id) : -1;
-    if (current && idx >= 0) {
+    if (selectedElement) {
+      els.copilotContextPill.textContent = t("copilot.contextElement", {
+        id: selectedElement.id,
+      });
+      els.copilotContextPill.dataset.target = "element";
+    } else if (current && idx >= 0) {
       els.copilotContextPill.textContent = t("copilot.contextSlide", {
         n: idx + 1,
         template: t(`template.${current.template}`),
       });
+      delete els.copilotContextPill.dataset.target;
     } else {
       els.copilotContextPill.textContent = t("copilot.contextDeck", {
         n: d.slides.length,
       });
+      delete els.copilotContextPill.dataset.target;
     }
 
     const suggestions = [
@@ -602,7 +777,8 @@ function boot(sessionToken) {
     const key = `${current.id}:${hash(current.code)}:${hash(JSON.stringify(current.animation))}:${d.aspect_ratio}`;
     if (key !== stageKey) {
       stageKey = key;
-      els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1`;
+      structureNodes = [];
+      els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1&edit=1`;
     }
     fitStage(d);
   }
@@ -625,6 +801,183 @@ function boot(sessionToken) {
     const height = baseH * scale;
     els.frameWrap.style.width = `${Math.round(width)}px`;
     els.frameWrap.style.height = `${Math.round(height)}px`;
+  }
+
+  // ---------- Bimodal canvas: element selection & inline editing ----------
+  //
+  // The sandbox owns hit-testing (it sees the real DOM), the studio owns the
+  // state and the chrome. Nothing here rewrites a slide: every change goes
+  // through `mutate_element`, so undo/redo and autosave keep working.
+
+  let selectedElement = null; // { id, tag, text, rect, viewport, slideId }
+  let elementHud = null;
+  let elementPaddingStep = 0;
+  let elementEditing = false;
+  let structureNodes = [];
+
+  function ensureElementHud() {
+    if (elementHud) return elementHud;
+    const wrap = document.querySelector(".stage-wrap");
+    if (!wrap) return null;
+    elementHud = document.createElement("div");
+    elementHud.className = "element-hud";
+    elementHud.id = "element-hud";
+    elementHud.setAttribute("role", "toolbar");
+    elementHud.setAttribute("data-i18n-aria", "elementHud.label");
+    elementHud.hidden = true;
+    elementHud.innerHTML = `
+      <span class="element-hud-tag" id="element-hud-tag"></span>
+      <span class="element-hud-sep" aria-hidden="true"></span>
+      <button type="button" class="element-hud-btn" data-element-action="align-left"
+              data-i18n-title="elementHud.alignLeft" data-i18n-aria="elementHud.alignLeft">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6h16M4 12h10M4 18h13"/>
+        </svg>
+      </button>
+      <button type="button" class="element-hud-btn" data-element-action="align-center"
+              data-i18n-title="elementHud.alignCenter" data-i18n-aria="elementHud.alignCenter">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6h16M7 12h10M6 18h12"/>
+        </svg>
+      </button>
+      <button type="button" class="element-hud-btn" data-element-action="align-right"
+              data-i18n-title="elementHud.alignRight" data-i18n-aria="elementHud.alignRight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 6h16M10 12h10M7 18h13"/>
+        </svg>
+      </button>
+      <button type="button" class="element-hud-btn" data-element-action="padding"
+              data-i18n-title="elementHud.padding" data-i18n-aria="elementHud.padding">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>
+        </svg>
+      </button>
+      <button type="button" class="element-hud-btn element-hud-accent" data-element-action="ai"
+              data-i18n-title="elementHud.ai" data-i18n-aria="elementHud.ai">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/>
+        </svg>
+      </button>
+      <button type="button" class="element-hud-btn" data-element-action="close"
+              data-i18n-title="elementHud.deselect" data-i18n-aria="elementHud.deselect">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="m6 6 12 12M18 6 6 18"/>
+        </svg>
+      </button>`;
+    wrap.append(elementHud);
+    applyI18n(elementHud);
+    elementHud.addEventListener("click", onElementHudClick);
+    return elementHud;
+  }
+
+  function renderElementHud() {
+    const hud = ensureElementHud();
+    if (!hud) return;
+    if (!selectedElement || !els.frame) {
+      hud.hidden = true;
+      return;
+    }
+    const frameRect = els.frame.getBoundingClientRect();
+    const viewport = selectedElement.viewport || { w: frameRect.width, h: frameRect.height };
+    const scale = viewport.w ? frameRect.width / viewport.w : 1;
+    const rect = selectedElement.rect;
+    const left = frameRect.left + rect.x * scale;
+    const top = frameRect.top + rect.y * scale;
+    const width = rect.w * scale;
+
+    hud.hidden = false;
+    const tag = hud.querySelector("#element-hud-tag");
+    if (tag) tag.textContent = `#${selectedElement.id}`;
+    const hudWidth = hud.offsetWidth;
+    const x = Math.min(
+      Math.max(8, left + width / 2 - hudWidth / 2),
+      Math.max(8, window.innerWidth - hudWidth - 8)
+    );
+    const y = Math.max(8, top - hud.offsetHeight - 10);
+    hud.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+
+  function onElementHudClick(event) {
+    const button = event.target.closest("[data-element-action]");
+    if (!button || !selectedElement) return;
+    const action = button.dataset.elementAction;
+    if (action === "close") {
+      deselectElement();
+    } else if (action === "ai") {
+      openPalette({ element: selectedElement });
+    } else if (action === "padding") {
+      const steps = ["padding: 0.35em 0.5em", "padding: 1.1em 1.4em", "padding: 2em 2.4em"];
+      elementPaddingStep = (elementPaddingStep + 1) % steps.length;
+      applyElementStyle(steps[elementPaddingStep]);
+    } else if (action.startsWith("align-")) {
+      applyElementStyle(`text-align: ${action.slice(6)}`);
+    }
+  }
+
+  function applyElementStyle(style) {
+    if (!selectedElement) return;
+    run("mutate_element", { element_id: selectedElement.id, style });
+  }
+
+  function deselectElement() {
+    const id = selectedElement && selectedElement.id;
+    selectedElement = null;
+    renderElementHud();
+    if (view) updateCopilotContext(view.presentation);
+    if (id && els.frame && els.frame.contentWindow) {
+      els.frame.contentWindow.postMessage({ __slyde: true, type: "clear-selection" }, "*");
+    }
+  }
+
+  function handleStageMessage(event) {
+    if (!els.frame || event.source !== els.frame.contentWindow) return;
+    const data = event.data;
+    if (!data || data.__slyde !== true) return;
+    if (data.type === "select") {
+      const changed = !selectedElement || selectedElement.id !== data.id;
+      selectedElement = { ...data, slideId: selectedId };
+      elementPaddingStep = 0;
+      renderElementHud();
+      if (view) updateCopilotContext(view.presentation);
+      // Pull focus back to the studio so its shortcuts keep working. Skip it
+      // on the second click of a double-click and while editing, otherwise the
+      // sandbox loses focus mid-edit and commits immediately.
+      if (changed && !elementEditing) {
+        document.body.tabIndex = -1;
+        document.body.focus({ preventScroll: true });
+      }
+    } else if (data.type === "editing") {
+      elementEditing = true;
+    } else if (data.type === "deselect") {
+      elementEditing = false;
+      selectedElement = null;
+      renderElementHud();
+      if (view) updateCopilotContext(view.presentation);
+    } else if (data.type === "text") {
+      elementEditing = false;
+      const id = data.id;
+      const value = typeof data.value === "string" ? data.value : "";
+      if (id) run("mutate_element", { element_id: id, text: value });
+    } else if (data.type === "tree") {
+      structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
+      if (view && inspectorSubtab === "slide") renderInspector(view.presentation);
+    }
+  }
+
+  window.addEventListener("message", handleStageMessage);
+
+  els.frame.addEventListener("load", () => {
+    if (selectedElement && els.frame.contentWindow) {
+      els.frame.contentWindow.postMessage(
+        { __slyde: true, type: "select-by-id", id: selectedElement.id },
+        "*"
+      );
+    }
+  });
+
+  function selectElementById(id) {
+    if (!id || !els.frame || !els.frame.contentWindow) return;
+    els.frame.contentWindow.postMessage({ __slyde: true, type: "select-by-id", id }, "*");
   }
 
   function renderChips(d) {
@@ -765,6 +1118,26 @@ function boot(sessionToken) {
         <span class="field-label">${escapeHtml(t("inspector.animation"))}</span>
         ${steps}
       </section>
+      <section class="field">
+        <span class="field-label">${escapeHtml(t("tree.title"))}</span>
+        ${
+          structureNodes.length
+            ? `<ul class="element-tree">${structureNodes
+                .map(
+                  (node) => `<li>
+                    <button type="button" class="element-tree-item${
+                      selectedElement && selectedElement.id === node.id ? " is-selected" : ""
+                    }" data-tree-id="${escapeHtml(node.id)}">
+                      <span class="element-tree-tag">${escapeHtml(node.tag)}</span>
+                      <span class="element-tree-id">#${escapeHtml(node.id)}</span>
+                      ${node.text ? `<span class="element-tree-text">${escapeHtml(node.text)}</span>` : ""}
+                    </button>
+                  </li>`
+                )
+                .join("")}</ul>`
+            : `<p class="hint">${escapeHtml(t("tree.empty"))}</p>`
+        }
+      </section>
       <details class="dev">
         <summary>${escapeHtml(t("inspector.developer"))}</summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
@@ -790,6 +1163,10 @@ function boot(sessionToken) {
     }
 
     bindDeckControls();
+
+    els.inspector.querySelectorAll("[data-tree-id]").forEach((button) => {
+      button.addEventListener("click", () => selectElementById(button.dataset.treeId));
+    });
 
     const dupBtn = $("inspector-duplicate-slide");
     if (dupBtn) {
@@ -1043,6 +1420,10 @@ function boot(sessionToken) {
   onLangChange(() => {
     syncLangButtons();
     applyI18n();
+    if (elementHud) {
+      applyI18n(elementHud);
+      renderElementHud();
+    }
     if (view) {
       thumbsKey = "";
       applyView(view);
@@ -1204,8 +1585,16 @@ function boot(sessionToken) {
   let presentBlackout = false;
   let presentSlideKey = "";
   let presentPendingSteps = [];
+  // Steps can only be delivered once the sandboxed document has registered
+  // its message listener. Messages posted before that are silently dropped,
+  // which left every animated element frozen at `opacity: 0` (a black slide).
+  let presentFrameReady = false;
+  // Set right before a deliberate exit from fullscreen (F), so leaving
+  // fullscreen does not end the presentation.
+  let presentKeepWindowed = false;
   let presentTimerSeconds = 0;
   let presentTimerRunning = false;
+  let presentSlideStartSeconds = 0;
   let presentTimerInterval = null;
   let presentHudTimer = null;
   let presentClockInterval = null;
@@ -1241,6 +1630,7 @@ function boot(sessionToken) {
     notesBody: $("speaker-notes-body"),
     notesDown: $("notes-font-down"),
     notesUp: $("notes-font-up"),
+    notesPace: $("notes-pace"),
   };
 
   function formatPresentTime(sec) {
@@ -1256,6 +1646,7 @@ function boot(sessionToken) {
     presentTimerInterval = setInterval(() => {
       presentTimerSeconds += 1;
       if (presentEls.timerDisplay) presentEls.timerDisplay.textContent = formatPresentTime(presentTimerSeconds);
+      updatePresentPace();
     }, 1000);
   }
 
@@ -1333,6 +1724,25 @@ function boot(sessionToken) {
         presentEls.notesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
       }
     }
+    updatePresentPace();
+  }
+
+  /** Reading-time estimate and pace for the current slide. */
+  function updatePresentPace() {
+    if (!presentEls.notesPace) return;
+    const current = view && view.presentation.slides[presentIndex];
+    const expected = readingSeconds(current && current.notes);
+    if (!expected) {
+      presentEls.notesPace.dataset.state = "none";
+      presentEls.notesPace.textContent = "";
+      return;
+    }
+    const elapsed = Math.max(0, presentTimerSeconds - presentSlideStartSeconds);
+    const state = paceState(elapsed, expected);
+    presentEls.notesPace.dataset.state = state;
+    presentEls.notesPace.textContent = `${t("present.pace.estimate", {
+      time: formatClock(expected),
+    })} · ${t(`present.pace.${state}`)}`;
   }
 
   function renderPresentSlide() {
@@ -1360,6 +1770,8 @@ function boot(sessionToken) {
     if (key !== presentSlideKey) {
       presentSlideKey = key;
       presentPendingSteps = s.animation.slice();
+      presentFrameReady = false;
+      presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
         presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}`;
       }
@@ -1370,12 +1782,25 @@ function boot(sessionToken) {
     showPresentHud();
   }
 
+  function postPresentStep(step) {
+    const win = presentEls.frame && presentEls.frame.contentWindow;
+    if (!win) return;
+    win.postMessage({ __slyde: true, type: "animate", step }, "*");
+  }
+
+  /** Sends every queued step; only safe once the slide document is listening. */
+  function flushPresentSteps() {
+    if (!presentFrameReady) return;
+    while (presentPendingSteps.length > 0) {
+      postPresentStep(presentPendingSteps.shift());
+    }
+  }
+
   function advancePresentSlide() {
     if (presentPendingSteps.length > 0) {
-      const step = presentPendingSteps.shift();
-      if (presentEls.frame && presentEls.frame.contentWindow) {
-        presentEls.frame.contentWindow.postMessage({ __slyde: true, type: "animate", step }, "*");
-      }
+      // Still loading: keep the step queued so it is not lost.
+      if (!presentFrameReady) return;
+      postPresentStep(presentPendingSteps.shift());
       return;
     }
     goPresentDelta(1);
@@ -1437,8 +1862,7 @@ function boot(sessionToken) {
       togglePresentSpeakerMode();
     } else if (event.key.toLowerCase() === "f") {
       event.preventDefault();
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      else document.documentElement.requestFullscreen().catch(() => {});
+      togglePresentFullscreen();
     } else if (event.key === "Escape") {
       event.preventDefault();
       if (presentBlackout) {
@@ -1453,9 +1877,35 @@ function boot(sessionToken) {
 
   function handlePresentClick(event) {
     if (!isPresenting) return;
+    // The click that opens the presenter is registered on `document` while it
+    // is still bubbling, so it would otherwise advance the deck and consume the
+    // first animation step. Only clicks landing inside the overlay count.
+    if (!presentEls.overlay || !presentEls.overlay.contains(event.target)) return;
     if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
     if (event.clientX < window.innerWidth / 2) goPresentDelta(-1);
     else advancePresentSlide();
+  }
+
+  function togglePresentFullscreen() {
+    if (document.fullscreenElement) {
+      presentKeepWindowed = true;
+      document.exitFullscreen().catch(() => {
+        presentKeepWindowed = false;
+      });
+    } else {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  }
+
+  // Chrome consumes Escape to leave fullscreen instead of dispatching it to the
+  // page, so an unexpected exit from fullscreen is the presenter's exit gesture.
+  function handlePresentFullscreenChange() {
+    if (!isPresenting || document.fullscreenElement) return;
+    if (presentKeepWindowed) {
+      presentKeepWindowed = false;
+      return;
+    }
+    closePresentation();
   }
 
   function openPresentationInStudio(speaker = false) {
@@ -1487,6 +1937,7 @@ function boot(sessionToken) {
 
     document.addEventListener("keydown", handlePresentKeydown);
     document.addEventListener("click", handlePresentClick);
+    document.addEventListener("fullscreenchange", handlePresentFullscreenChange);
     window.addEventListener("mousemove", showPresentHud);
     window.addEventListener("resize", fitPresentFrame);
   }
@@ -1501,6 +1952,7 @@ function boot(sessionToken) {
 
     document.removeEventListener("keydown", handlePresentKeydown);
     document.removeEventListener("click", handlePresentClick);
+    document.removeEventListener("fullscreenchange", handlePresentFullscreenChange);
     window.removeEventListener("mousemove", showPresentHud);
     window.removeEventListener("resize", fitPresentFrame);
 
@@ -1539,8 +1991,7 @@ function boot(sessionToken) {
     if (presentEls.hudFullscreen) {
       presentEls.hudFullscreen.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-        else document.documentElement.requestFullscreen().catch(() => {});
+        togglePresentFullscreen();
       });
     }
     if (presentEls.timerToggle) {
@@ -1572,12 +2023,39 @@ function boot(sessionToken) {
     }
     if (presentEls.frame) {
       presentEls.frame.addEventListener("load", () => {
-        while (presentPendingSteps.length) {
-          const step = presentPendingSteps.shift();
-          presentEls.frame.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
-        }
+        // `load` fires after the slide runtime has installed its listener, so
+        // it is a safe fallback for the `ready` handshake below.
+        presentFrameReady = true;
+        flushPresentSteps();
       });
     }
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data || data.__slyde !== true) return;
+      const frameWindow = presentEls.frame && presentEls.frame.contentWindow;
+      if (data.type === "ready") {
+        presentFrameReady = true;
+        flushPresentSteps();
+        return;
+      }
+      if (data.type === "key") {
+        // A focused slide document owns the keyboard; the sandbox runtime
+        // forwards each key so navigation never dies after touching the slide.
+        if (!isPresenting || !frameWindow || event.source !== frameWindow) return;
+        handlePresentKeydown(
+          new KeyboardEvent("keydown", {
+            key: data.key,
+            code: data.code,
+            altKey: !!data.altKey,
+            ctrlKey: !!data.ctrlKey,
+            metaKey: !!data.metaKey,
+            shiftKey: !!data.shiftKey,
+            bubbles: false,
+            cancelable: true,
+          })
+        );
+      }
+    });
   }
 
   function setupPresentGroup() {
@@ -1710,9 +2188,15 @@ function boot(sessionToken) {
       syncLangButtons();
       syncThemeToggle();
       applyI18n();
+      palette = mountCommandPalette({
+        root: $("command-palette"),
+        t,
+        buildActions: buildPaletteActions,
+      });
       copilot = mountCopilot({
         client,
         getSelectedSlideId: () => selectedId,
+        getSelectedElementId: () => (selectedElement ? selectedElement.id : null),
         notify: toast,
       });
       client.connect({ onEvent: handleEvent, onStatus: setStatus });

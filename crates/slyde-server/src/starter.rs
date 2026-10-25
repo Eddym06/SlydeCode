@@ -63,6 +63,81 @@ const BASE_CSS: &str = r#"
   .sub { margin: 0; font-size: 22px; line-height: 1.5; color: var(--slyde-muted); max-width: 46ch; }
   .accent { color: var(--slyde-accent); }
   .grad { background: linear-gradient(135deg, #7c3aed, #ff6b4a); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  /* Technical blocks: code, line numbers, emphasis, diagrams and math. */
+  pre.slyde-code, pre.block {
+    margin: 0;
+    padding: 18px 22px;
+    border-radius: 12px;
+    background: rgba(127, 127, 127, 0.10);
+    border: 1px solid rgba(127, 127, 127, 0.18);
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+    font-size: 15px;
+    line-height: 1.65;
+    overflow: hidden;
+  }
+  pre.slyde-code code, pre.block code {
+    font: inherit;
+    color: inherit;
+    background: none;
+    padding: 0;
+  }
+  .slyde-line { display: block; white-space: pre; }
+  .slyde-ln {
+    display: inline-block;
+    width: 2.2em;
+    margin-right: 1.1em;
+    text-align: right;
+    opacity: 0.45;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .slyde-line.is-emphasis {
+    background: rgba(255, 107, 74, 0.16);
+    box-shadow: -22px 0 0 rgba(255, 107, 74, 0.16);
+  }
+  .slyde-diagram { display: flex; justify-content: center; }
+  .slyde-diagram svg { max-width: 100%; height: auto; }
+  .slyde-diagram[data-slyde-diagram-error] {
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 14px;
+    color: var(--slyde-muted);
+    border: 1px dashed rgba(127, 127, 127, 0.4);
+    border-radius: 10px;
+    padding: 16px;
+    justify-content: flex-start;
+    white-space: pre-wrap;
+  }
+  .katex-display { margin: 0.4em 0; }
+
+  /* Syntax tokens: one palette per canvas scheme so code reads on both. */
+  [data-slyde-scheme="dark"] .hljs-keyword,
+  [data-slyde-scheme="dark"] .hljs-selector-tag,
+  [data-slyde-scheme="dark"] .hljs-literal { color: #c792ea; }
+  [data-slyde-scheme="dark"] .hljs-string,
+  [data-slyde-scheme="dark"] .hljs-regexp { color: #a5e075; }
+  [data-slyde-scheme="dark"] .hljs-number,
+  [data-slyde-scheme="dark"] .hljs-symbol { color: #f78c6c; }
+  [data-slyde-scheme="dark"] .hljs-comment { color: #6b7280; font-style: italic; }
+  [data-slyde-scheme="dark"] .hljs-title,
+  [data-slyde-scheme="dark"] .hljs-function { color: #82aaff; }
+  [data-slyde-scheme="dark"] .hljs-type,
+  [data-slyde-scheme="dark"] .hljs-attr { color: #ffcb6b; }
+  [data-slyde-scheme="dark"] .hljs-built_in { color: #89ddff; }
+
+  [data-slyde-scheme="light"] .hljs-keyword,
+  [data-slyde-scheme="light"] .hljs-selector-tag,
+  [data-slyde-scheme="light"] .hljs-literal { color: #7c3aed; }
+  [data-slyde-scheme="light"] .hljs-string,
+  [data-slyde-scheme="light"] .hljs-regexp { color: #047857; }
+  [data-slyde-scheme="light"] .hljs-number,
+  [data-slyde-scheme="light"] .hljs-symbol { color: #b45309; }
+  [data-slyde-scheme="light"] .hljs-comment { color: #6b7280; font-style: italic; }
+  [data-slyde-scheme="light"] .hljs-title,
+  [data-slyde-scheme="light"] .hljs-function { color: #1d4ed8; }
+  [data-slyde-scheme="light"] .hljs-type,
+  [data-slyde-scheme="light"] .hljs-attr { color: #b45309; }
+  [data-slyde-scheme="light"] .hljs-built_in { color: #0e7490; }
 "#;
 
 const HERO: &str = r#"<div class="slide hero">

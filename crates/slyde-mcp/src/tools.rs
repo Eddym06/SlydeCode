@@ -133,6 +133,59 @@ pub fn definitions() -> Value {
                 },
                 "additionalProperties": false
             }
+        },
+        {
+            "name": "get_selected_element",
+            "description": "Inspect one element by id: either a structured slide element (Image, Diagram, CodeBlock, SpeakerNotes, Custom) or a node marked with id=/data-id= inside the slide HTML. Returns the slide it lives in plus its markup or data.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element_id": { "type": "string", "description": "Identifier of the element (e.g. title-1, or a structured element id)." }
+                },
+                "required": ["element_id"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "mutate_element",
+            "description": "Apply surgical style, layout, inner HTML or text changes to a specific component element without reloading the entire slide.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element_id": { "type": "string", "description": "The element ID to mutate." },
+                    "text": { "type": "string", "description": "New plain text content for the element." },
+                    "style": { "type": "string", "description": "CSS style directives to merge into the element style attribute." },
+                    "html": { "type": "string", "description": "New inner HTML markup for the element." }
+                },
+                "required": ["element_id"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "search_asset",
+            "description": "Return inline SVG markup for a keyword (cloud, database, server, arrow, code, …) from the built-in curated icon set. Offline by design: local asset files and stock photo catalogs are not wired yet, and asset_type=image reports found=false.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search keyword (e.g. 'arrow', 'cloud', 'database')." },
+                    "asset_type": { "type": "string", "enum": ["icon", "image"], "default": "icon" }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "generate_image",
+            "description": "Reserve an image slot with a placeholder inline SVG that echoes the prompt and style. No image model is wired yet: the response is marked placeholder=true and nothing is written to assets/images/.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "Visual prompt describing the desired graphic or image." },
+                    "style": { "type": "string", "enum": ["minimal_vector", "photographic", "diagrammatic", "editorial"], "default": "minimal_vector" }
+                },
+                "required": ["prompt"],
+                "additionalProperties": false
+            }
         }
     ])
 }
@@ -351,6 +404,131 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
             }
         }
 
+        "get_selected_element" => {
+            let element_id = require_str(args, "element_id")?;
+            let url = format!(
+                "http://127.0.0.1:{}/api/state?t={}",
+                runtime.port, runtime.token
+            );
+            let response = get_json(&url, REQUEST_TIMEOUT)
+                .await
+                .map_err(|err| ToolFailure(format!("could not read state: {err}")))?;
+            let slides = response
+                .pointer("/view/presentation/slides")
+                .and_then(Value::as_array);
+
+            if let Some(slides) = slides {
+                let id_needle = format!("id=\"{element_id}\"");
+                let data_needle = format!("data-id=\"{element_id}\"");
+                for s in slides {
+                    let structured = s
+                        .get("elements")
+                        .and_then(Value::as_array)
+                        .and_then(|list| {
+                            list.iter().find(|element| {
+                                element.get("element_id").and_then(Value::as_str)
+                                    == Some(element_id)
+                            })
+                        });
+                    let code = s.get("code").and_then(Value::as_str).unwrap_or("");
+                    let marker = code
+                        .find(&id_needle)
+                        .or_else(|| code.find(&data_needle));
+                    if structured.is_none() && marker.is_none() {
+                        continue;
+                    }
+                    let markup = marker.map(|position| {
+                        let start = code[..position].rfind('<').unwrap_or(position);
+                        code[start..].chars().take(240).collect::<String>()
+                    });
+                    return Ok(json!({
+                        "element_id": element_id,
+                        "slide_id": s.get("id"),
+                        "found": true,
+                        "element": structured,
+                        "markup": markup
+                    })
+                    .to_string());
+                }
+            }
+            Ok(json!({
+                "element_id": element_id,
+                "found": false
+            }).to_string())
+        }
+
+        "mutate_element" => {
+            let element_id = require_str(args, "element_id")?;
+            let mut command = json!({
+                "action": "mutate_element",
+                "element_id": element_id
+            });
+            if let Some(t) = optional_str(args, "text") {
+                command["text"] = json!(t);
+            }
+            if let Some(s) = optional_str(args, "style") {
+                command["style"] = json!(s);
+            }
+            if let Some(h) = optional_str(args, "html") {
+                command["html"] = json!(h);
+            }
+            let res = post(runtime, &command).await?;
+            Ok(format!("Mutated element {element_id} successfully: {res}"))
+        }
+
+        "search_asset" => {
+            let query = require_str(args, "query")?.to_lowercase();
+            let asset_type = optional_str(args, "asset_type").unwrap_or("icon");
+            if asset_type == "image" {
+                return Ok(json!({
+                    "query": query,
+                    "asset_type": asset_type,
+                    "source": "builtin",
+                    "found": false,
+                    "note": "image asset search is not wired yet; only the built-in SVG icon set is available"
+                })
+                .to_string());
+            }
+            // Curated SVG icons for common technical & design domains. This set is
+            // fixed and offline; there is no catalog or network lookup behind it.
+            let icon_result = match query.as_str() {
+                q if q.contains("cloud") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z\"/></svg>",
+                q if q.contains("database") || q.contains("db") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"/><path d=\"M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5\"/><path d=\"M3 12c0 1.66 4 3 9 3s9-1.34 9-3\"/></svg>",
+                q if q.contains("server") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"/><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"/><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"/><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"/></svg>",
+                q if q.contains("arrow") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg>",
+                q if q.contains("code") || q.contains("terminal") => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><polyline points=\"16 18 22 12 16 6\"/><polyline points=\"8 6 2 12 8 18\"/></svg>",
+                _ => "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/></svg>",
+            };
+            Ok(json!({
+                "query": query,
+                "asset_type": asset_type,
+                "source": "builtin",
+                "found": true,
+                "svg": icon_result,
+                "usable_markup": format!("<span class=\"slyde-icon\">{}</span>", icon_result)
+            }).to_string())
+        }
+
+        "generate_image" => {
+            let prompt = require_str(args, "prompt")?;
+            let style = optional_str(args, "style").unwrap_or("minimal_vector");
+            // Placeholder only: no image model is wired, so the deck gets an
+            // inline, scalable SVG that reserves the slot and echoes the brief.
+            let placeholder_svg = format!(
+                "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 450' width='100%' height='100%'><rect width='100%' height='100%' fill='%23121214'/><rect x='40' y='40' width='720' height='370' rx='12' fill='none' stroke='rgba(255,255,255,0.1)' stroke-dasharray='4 4'/><text x='50%' y='48%' text-anchor='middle' fill='%23F4F3F1' font-family='sans-serif' font-size='20' font-weight='600'>{}</text><text x='50%' y='56%' text-anchor='middle' fill='%23FF6B4A' font-family='sans-serif' font-size='14'>Style: {}</text></svg>",
+                prompt.replace('\'', ""),
+                style
+            );
+            Ok(json!({
+                "prompt": prompt,
+                "style": style,
+                "placeholder": true,
+                "saved_path": null,
+                "note": "no image model is wired yet; this is a placeholder SVG, not a generated image",
+                "src": placeholder_svg
+            }).to_string())
+        }
+
         other => Err(ToolFailure(format!("unknown tool: {other}"))),
     }
 }
@@ -399,7 +577,7 @@ mod tests {
     fn every_tool_has_a_name_description_and_schema() {
         let tools = definitions();
         let list = tools.as_array().unwrap();
-        assert_eq!(list.len(), 7);
+        assert_eq!(list.len(), 11);
         for tool in list {
             assert!(tool["name"].as_str().unwrap().len() > 3);
             assert!(tool["description"].as_str().unwrap().len() > 20);

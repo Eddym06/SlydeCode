@@ -44,6 +44,15 @@ pub enum AgentCommand {
         slide_id: String,
         notes: Option<String>,
     },
+    MutateElement {
+        element_id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        style: Option<String>,
+        #[serde(default)]
+        html: Option<String>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +60,7 @@ pub struct AgentOutcome {
     pub upsert: Option<UpsertOutcome>,
     pub created: bool,
     pub animation: Option<ServerEvent>,
+    pub mutated_slide_id: Option<String>,
 }
 
 /// Structured descriptor of an agent command, used to announce activity before
@@ -114,6 +124,12 @@ impl AgentCommand {
                 phase: AgentPhase::Animating,
                 action: AgentAction::TriggerAnimation,
                 slide_id: Some(slide_id.clone()),
+                slide_index: None,
+            },
+            AgentCommand::MutateElement { element_id, .. } => Activity {
+                phase: AgentPhase::Writing,
+                action: AgentAction::MutateElement,
+                slide_id: Some(element_id.clone()),
                 slide_index: None,
             },
         }
@@ -193,6 +209,18 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
         AgentCommand::SetNotes { slide_id, notes } => {
             core.set_notes(&slide_id, notes)?;
             Ok(AgentOutcome::default())
+        }
+        AgentCommand::MutateElement {
+            element_id,
+            text,
+            style,
+            html,
+        } => {
+            let slide_id = core.mutate_element(&element_id, text, style, html)?;
+            Ok(AgentOutcome {
+                mutated_slide_id: Some(slide_id),
+                ..AgentOutcome::default()
+            })
         }
     }
 }

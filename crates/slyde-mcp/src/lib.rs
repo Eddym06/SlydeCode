@@ -241,10 +241,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_exposes_the_seven_tools() {
+    async fn tools_list_exposes_the_tools() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
         let response = handle_line(&runtime(), line).await.unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 11);
     }
 
     #[tokio::test]

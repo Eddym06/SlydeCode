@@ -178,6 +178,78 @@ impl PresentationState {
         Ok(())
     }
 
+    /// Mutates an element identified by `element_id` directly or updates its occurrence inside HTML code.
+    pub fn mutate_element(
+        &mut self,
+        element_id: &str,
+        text: Option<String>,
+        style: Option<String>,
+        html: Option<String>,
+    ) -> Result<String, CoreError> {
+        let mut next = self.presentation().clone();
+        let mut found_slide_id = None;
+
+        for slide in &mut next.slides {
+            let mut matched = false;
+            if let Some(el) = slide.find_element_mut(element_id) {
+                matched = true;
+                if let Some(ref t) = text {
+                    match el {
+                        crate::model::SlideElement::Diagram { source, .. } => *source = t.clone(),
+                        crate::model::SlideElement::CodeBlock { code, .. } => *code = t.clone(),
+                        crate::model::SlideElement::SpeakerNotes { notes, .. } => *notes = t.clone(),
+                        crate::model::SlideElement::Custom { content, .. } => *content = t.clone(),
+                        crate::model::SlideElement::Image { caption, .. } => *caption = Some(t.clone()),
+                    }
+                }
+            }
+
+            // Also mutate the matching node inside the slide HTML. The id can be
+            // declared as `id="…"` or `data-id="…"`.
+            if let Some(span) = find_element_span(&slide.code, element_id) {
+                matched = true;
+                if span.inner.is_none() && (html.is_some() || text.is_some()) {
+                    return Err(CoreError::ElementHasNoContent {
+                        element_id: element_id.to_string(),
+                    });
+                }
+                let source = &slide.code;
+                let open_tag = merge_style_attribute(&source[span.open.clone()], style.as_deref());
+                let new_inner = match (&html, &text) {
+                    (Some(markup), _) => Some(markup.clone()),
+                    (None, Some(plain)) => Some(escape_text(plain)),
+                    (None, None) => None,
+                };
+                let mut out = String::with_capacity(source.len() + 32);
+                out.push_str(&source[..span.open.start]);
+                out.push_str(&open_tag);
+                match (&span.inner, new_inner) {
+                    (Some(inner), Some(inner_html)) => {
+                        out.push_str(&source[span.open.end..inner.start]);
+                        out.push_str(&inner_html);
+                        out.push_str(&source[inner.end..]);
+                    }
+                    _ => out.push_str(&source[span.open.end..]),
+                }
+                slide.code = out;
+            }
+
+            if matched {
+                found_slide_id = Some(slide.id.clone());
+                break;
+            }
+        }
+
+        if let Some(s_id) = found_slide_id {
+            self.commit("mutate_element", next);
+            Ok(s_id)
+        } else {
+            Err(CoreError::ElementNotFound {
+                element_id: element_id.to_string(),
+            })
+        }
+    }
+
     /// Insert a new slide or update an existing one.
     ///
     /// `slide_id` is authoritative: if it matches an existing slide, that slide is
@@ -201,6 +273,9 @@ impl PresentationState {
                 max: self.limits.max_code_bytes,
             });
         }
+        // Every block gets a persistent handle so the canvas and the tools agree
+        // on what "this element" means.
+        let code = crate::html::ensure_element_ids(&code);
 
         let mut next = self.presentation().clone();
 
@@ -321,6 +396,170 @@ pub fn new_slide_id() -> SlideId {
     format!("sld_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Byte ranges of an element's opening tag and, when it has content, its inner
+/// HTML.
+struct ElementSpan {
+    /// `<tag …>` including both angle brackets.
+    open: std::ops::Range<usize>,
+    /// Content between the opening and the matching closing tag.
+    inner: Option<std::ops::Range<usize>>,
+}
+
+/// Locates `<tag id="…">…</tag>` (or `data-id="…"`) in a slide document.
+///
+/// The scan balances same-name tags, so nested markup is replaced as a whole.
+/// Cutting at the first `</` — the naive approach — turns
+/// `<h1 id="t">A <em>B</em></h1>` into `<h1 id="t">New</em></h1>`.
+fn find_element_span(code: &str, element_id: &str) -> Option<ElementSpan> {
+    let needles = [
+        format!("id=\"{element_id}\""),
+        format!("data-id=\"{element_id}\""),
+    ];
+    let marker = needles
+        .iter()
+        .filter_map(|needle| code.find(needle.as_str()))
+        .min()?;
+    let open_start = code[..marker].rfind('<')?;
+
+    let name: String = code[open_start + 1..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == ':')
+        .collect();
+    if name.is_empty() {
+        // A comment or a doctype, not an element.
+        return None;
+    }
+
+    let open_end = find_tag_end(code, open_start)?;
+    let open = open_start..open_end;
+    if is_self_closing(&code[open_start..open_end]) {
+        return Some(ElementSpan { open, inner: None });
+    }
+
+    // Case-insensitive search for balanced tags. ASCII lowercasing preserves
+    // byte offsets, so the ranges stay valid for the original source.
+    let lower = code.to_ascii_lowercase();
+    let open_needle = format!("<{name}");
+    let close_needle = format!("</{name}");
+    let mut depth = 1usize;
+    let mut cursor = open_end;
+
+    while cursor < code.len() {
+        let next_open = lower[cursor..].find(&open_needle).map(|i| cursor + i);
+        let next_close = lower[cursor..].find(&close_needle).map(|i| cursor + i);
+
+        let Some(close) = next_close else {
+            // Void element (`<img id="…">`) or an unclosed tag: no content.
+            return Some(ElementSpan { open, inner: None });
+        };
+
+        match next_open {
+            Some(open_at) if open_at < close => {
+                if !is_tag_name_end(&lower, open_at + open_needle.len()) {
+                    cursor = open_at + open_needle.len();
+                    continue;
+                }
+                let tag_end = find_tag_end(code, open_at)?;
+                if !is_self_closing(&code[open_at..tag_end]) {
+                    depth += 1;
+                }
+                cursor = tag_end;
+            }
+            _ => {
+                if !is_tag_name_end(&lower, close + close_needle.len()) {
+                    cursor = close + close_needle.len();
+                    continue;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(ElementSpan {
+                        open,
+                        inner: Some(open_end..close),
+                    });
+                }
+                cursor = close + close_needle.len();
+            }
+        }
+    }
+
+    Some(ElementSpan { open, inner: None })
+}
+
+fn is_self_closing(tag: &str) -> bool {
+    tag.trim_end_matches('>').trim_end().ends_with('/')
+}
+
+/// True when the byte after a tag name cannot continue that name.
+fn is_tag_name_end(lower: &str, index: usize) -> bool {
+    match lower.as_bytes().get(index) {
+        None => true,
+        Some(byte) => !(byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b':' || *byte == b'_'),
+    }
+}
+
+/// Index just past the `>` closing the tag that starts at `start`, ignoring
+/// `>` characters inside quoted attribute values.
+fn find_tag_end(code: &str, start: usize) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    for (offset, ch) in code[start..].char_indices() {
+        match (quote, ch) {
+            (None, '"') | (None, '\'') => quote = Some(ch),
+            (Some(open), current) if current == open => quote = None,
+            (None, '>') => return Some(start + offset + ch.len_utf8()),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Merges `style` into the opening tag, keeping declarations it already has.
+fn merge_style_attribute(open_tag: &str, style: Option<&str>) -> String {
+    let Some(style) = style else {
+        return open_tag.to_string();
+    };
+    let style = style.trim().trim_end_matches(';').trim();
+    if style.is_empty() {
+        return open_tag.to_string();
+    }
+
+    for quote in ['"', '\''] {
+        let needle = format!("style={quote}");
+        if let Some(position) = open_tag.find(&needle) {
+            let insert_at = position + needle.len();
+            let mut merged = String::with_capacity(open_tag.len() + style.len() + 2);
+            merged.push_str(&open_tag[..insert_at]);
+            merged.push_str(style);
+            merged.push_str("; ");
+            merged.push_str(&open_tag[insert_at..]);
+            return merged;
+        }
+    }
+
+    match open_tag.rfind('>') {
+        Some(position) => {
+            let mut merged = String::with_capacity(open_tag.len() + style.len() + 10);
+            merged.push_str(open_tag[..position].trim_end());
+            merged.push_str(&format!(" style=\"{style}\">"));
+            merged
+        }
+        None => open_tag.to_string(),
+    }
+}
+
+/// Escapes plain text so `text` never injects markup; use `html` for markup.
+fn escape_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,7 +654,7 @@ mod tests {
         assert_eq!(outcome.index, 0);
         assert_eq!(s.presentation().slides.len(), 1);
         let slide = &s.presentation().slides[0];
-        assert_eq!(slide.code, "<h1>A2</h1>");
+        assert_eq!(slide.code, "<h1 data-id=\"slyde-1\">A2</h1>");
         assert_eq!(slide.template, TemplateType::Chart);
         assert_eq!(slide.animation.len(), 1);
         assert_eq!(slide.generated_by, Author::Ai);
@@ -582,6 +821,123 @@ mod tests {
             s.move_slide(0, 9),
             Err(CoreError::IndexOutOfRange { .. })
         ));
+    }
+
+    #[test]
+    fn mutate_element_updates_html_code_surgically() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<div class=\"card\"><h1 id=\"title-1\">Original Title</h1><p id=\"desc-1\">Some body</p></div>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        let updated_slide_id = s.mutate_element("title-1", Some("New Concise Title".into()), None, None).unwrap();
+        assert_eq!(updated_slide_id, "sld1");
+        assert!(s.presentation().slides[0].code.contains("New Concise Title"));
+        assert!(s.presentation().slides[0].code.contains("<p id=\"desc-1\">Some body</p>"));
+
+        s.mutate_element("desc-1", None, Some("color: red".into()), None).unwrap();
+        assert!(s.presentation().slides[0].code.contains("style=\"color: red\""));
+
+        let err = s.mutate_element("non-existent", Some("test".into()), None, None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn mutate_element_replaces_nested_inner_html_without_corrupting_markup() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<div class=\"card\"><h1 id=\"title-1\">Original <em>Title</em></h1><p id=\"desc-1\">Body</p></div>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        s.mutate_element("title-1", Some("New Title".into()), None, None)
+            .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(
+            code.contains("<h1 id=\"title-1\">New Title</h1>"),
+            "nested content is replaced as a whole: {code}"
+        );
+        assert!(
+            !code.contains("<em>") && !code.contains("</em>"),
+            "no orphan nested tags survive: {code}"
+        );
+        assert!(
+            code.contains("<p id=\"desc-1\">Body</p>"),
+            "siblings are untouched: {code}"
+        );
+
+        s.mutate_element("desc-1", None, None, Some("<strong>Bold body</strong>".into()))
+            .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(
+            code.contains("<p id=\"desc-1\"><strong>Bold body</strong></p>"),
+            "html replacement keeps the element wrapper: {code}"
+        );
+    }
+
+    #[test]
+    fn mutate_element_escapes_plain_text_and_preserves_existing_styles() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<p id=\"t\" style=\"font-size: 20px\">Old</p>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        s.mutate_element("t", Some("<b>not markup</b>".into()), None, None)
+            .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(
+            code.contains("&lt;b&gt;not markup&lt;/b&gt;"),
+            "`text` stays plain text: {code}"
+        );
+
+        s.mutate_element("t", None, Some("color: red".into()), None)
+            .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(
+            code.contains("style=\"color: red; font-size: 20px\""),
+            "existing declarations are kept: {code}"
+        );
+    }
+
+    #[test]
+    fn mutate_element_rejects_content_changes_on_void_elements() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<div class=\"card\"><img id=\"hero\" src=\"data:image/png;base64,AA\"></div>".into(),
+            TemplateType::ImageLayout,
+            vec![],
+        )
+        .unwrap();
+
+        let err = s
+            .mutate_element("hero", Some("nope".into()), None, None)
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::ElementHasNoContent { .. }),
+            "a void element has no content: {err:?}"
+        );
+
+        s.mutate_element("hero", None, Some("border-radius: 8px".into()), None)
+            .unwrap();
+        assert!(s.presentation().slides[0]
+            .code
+            .contains("<img id=\"hero\" src=\"data:image/png;base64,AA\" style=\"border-radius: 8px\">"));
     }
 
     #[test]

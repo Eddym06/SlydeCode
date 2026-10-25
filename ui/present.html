@@ -14,7 +14,7 @@
 <body class="present-standalone">
   <main class="present" id="present">
     <div class="present-frame" id="present-frame">
-      <iframe id="present-slide" sandbox="allow-scripts" data-i18n-title="a11y.slideCanvas" title="Current slide"></iframe>
+      <iframe id="present-slide" sandbox="allow-scripts" tabindex="-1" data-i18n-title="a11y.slideCanvas" title="Current slide"></iframe>
     </div>
     <div class="present-empty" id="present-empty" role="status" hidden>
       <p data-i18n="present.empty">No slides yet. Add one in the studio.</p>
@@ -80,7 +80,7 @@
           </div>
           <div class="speaker-next-wrap">
             <iframe id="sc-next-frame" sandbox="allow-scripts" tabindex="-1" title="Next slide preview" aria-hidden="true"></iframe>
-            <div class="no-next-hint" id="no-next-hint" hidden>End of presentation</div>
+            <div class="no-next-hint" id="no-next-hint" hidden data-i18n="present.endOfDeck">End of presentation</div>
           </div>
         </div>
       </div>
@@ -89,6 +89,7 @@
         <div class="speaker-card notes-card">
           <div class="speaker-card-head">
             <span data-i18n="present.notesTitle">Speaker Notes</span>
+            <span class="notes-pace" id="notes-pace" data-state="none"></span>
             <div class="notes-font-controls">
               <button type="button" class="speaker-btn speaker-btn-sm" id="notes-font-down">A-</button>
               <button type="button" class="speaker-btn speaker-btn-sm" id="notes-font-up">A+</button>
