@@ -86,6 +86,72 @@ export function createClient(token) {
       return payload.models || [];
     },
 
+    /** Stops a running turn on the server (the local fetch is aborted too). */
+    copilotCancel(requestId) {
+      return json(`/api/copilot/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }),
+      });
+    },
+
+    /** Stores a pasted/uploaded image and returns its `/assets/…` URL. */
+    async uploadAsset(dataUrl) {
+      const payload = await json(`/api/assets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ data: dataUrl }),
+      });
+      return payload.url;
+    },
+
+    // ---------- deck library ----------
+
+    /** Every deck on disk plus the one that is currently open. */
+    decks() {
+      return json(`/api/decks`);
+    },
+
+    deckNew(title) {
+      return json(`/api/decks/new`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(title ? { title } : {}),
+      });
+    },
+
+    deckOpen(id) {
+      return json(`/api/decks/open`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    },
+
+    deckRename(id, title) {
+      return json(`/api/decks/rename`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, title }),
+      });
+    },
+
+    deckDuplicate(id) {
+      return json(`/api/decks/duplicate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    },
+
+    deckDelete(id) {
+      return json(`/api/decks/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    },
+
     /**
      * POSTs a chat turn and consumes the SSE response. The server frames each
      * event as a single `data:` JSON line, so the parser stays small and does

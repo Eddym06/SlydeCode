@@ -7,6 +7,7 @@ import {
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
+import { mountDeckLibrary } from "./deck-library.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -72,8 +73,10 @@ function boot(sessionToken) {
     exportMenu: $("export-menu"),
     topbarExportPdf: $("topbar-export-pdf"),
     topbarExportPng: $("topbar-export-png"),
+    topbarExportPptx: $("topbar-export-pptx"),
     topbarSaveDeck: $("topbar-save-deck"),
     topbarNewDeck: $("topbar-new-deck"),
+    topbarLibrary: $("topbar-library"),
     topbarOpenDeck: $("topbar-open-deck"),
     topbarSaveDeckBtn: $("topbar-save-deck-btn"),
     topbarFilePicker: $("topbar-file-picker"),
@@ -116,6 +119,7 @@ function boot(sessionToken) {
 
   let copilot = null;
   let palette = null;
+  let library = null;
   let activePanel = "inspector";
 
   // ---------- Command palette ----------
@@ -178,6 +182,19 @@ function boot(sessionToken) {
     }
 
     actions.push(
+      {
+        id: "deck.library",
+        group: t("palette.group.deck"),
+        label: t("action.library"),
+        hint: "L",
+        run: () => openLibrary(),
+      },
+      {
+        id: "deck.new",
+        group: t("palette.group.deck"),
+        label: t("library.new"),
+        run: () => els.topbarNewDeck?.click(),
+      },
       {
         id: "present",
         group: t("palette.group.present"),
@@ -942,6 +959,114 @@ function boot(sessionToken) {
     });
   }
 
+  // ---------- images ----------
+
+  /// Canvas size of the open deck, in CSS pixels.
+  function deckSize() {
+    const d = deck();
+    const ratio = d ? d.aspect_ratio : "16:9";
+    if (ratio === "4:3") return { w: 1024, h: 768 };
+    if (ratio === "9:16") return { w: 720, h: 1280 };
+    return { w: 1280, h: 720 };
+  }
+
+  /// Centres a new picture at 60% of the canvas width, keeping its aspect ratio.
+  function placementFor(natural) {
+    const { w: W, h: H } = deckSize();
+    const ratio =
+      natural && natural.w > 0 && natural.h > 0 ? natural.h / natural.w : 9 / 16;
+    let w = Math.round(W * 0.6);
+    let h = Math.round(w * ratio);
+    if (h > H * 0.9) {
+      h = Math.round(H * 0.9);
+      w = Math.round(h / ratio);
+    }
+    return {
+      x: Math.round((W - w) / 2),
+      y: Math.round((H - h) / 2),
+      w: Math.max(16, w),
+      h: Math.max(16, h),
+    };
+  }
+
+  /// Stores the image and appends it to the slide that is on screen.
+  async function insertPastedImage(dataUrl, natural) {
+    if (!dataUrl || !selectedId) return;
+    try {
+      const src = await client.uploadAsset(dataUrl);
+      const rect = placementFor(natural);
+      const inserted = await run("insert_image", {
+        slide_id: selectedId,
+        src,
+        ...rect,
+      });
+      if (inserted) toast(t("toast.imageAdded"));
+    } catch (error) {
+      toast(`${t("toast.error")} — ${error.message}`);
+    }
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error || new Error("could not read the file"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function imageSize(dataUrl) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve({ w: image.naturalWidth, h: image.naturalHeight });
+      image.onerror = () => resolve({ w: 1024, h: 576 });
+      image.src = dataUrl;
+    });
+  }
+
+  /// Paste or drop an image anywhere in the studio shell (the canvas has its own
+  /// listeners inside the iframe, so this only covers the panels).
+  function imageFromClipboard(event) {
+    const items = (event.clipboardData && event.clipboardData.items) || [];
+    for (const item of items) {
+      if (item.type && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) return file;
+      }
+    }
+    const files = (event.dataTransfer && event.dataTransfer.files) || [];
+    for (const file of files) {
+      if (file.type && file.type.startsWith("image/")) return file;
+    }
+    return null;
+  }
+
+  async function insertFromEvent(event) {
+    const target = event.target;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    const file = imageFromClipboard(event);
+    if (!file) return;
+    event.preventDefault();
+    const dataUrl = await fileToDataUrl(file);
+    insertPastedImage(dataUrl, await imageSize(dataUrl));
+  }
+
+  document.addEventListener("paste", insertFromEvent);
+  document.addEventListener("drop", insertFromEvent);
+
+  /// Persists the rectangle the canvas reported after a drag or a resize.
+  function commitGeometry(elementId, rect) {
+    if (!elementId || !rect || !selectedId) return;
+    run("set_geometry", {
+      slide_id: selectedId,
+      element_id: elementId,
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      w: Math.round(rect.w),
+      h: Math.round(rect.h),
+    });
+  }
+
   function deselectElement() {
     const id = selectedElement && selectedElement.id;
     selectedElement = null;
@@ -987,6 +1112,10 @@ function boot(sessionToken) {
           text: value,
         });
       }
+    } else if (data.type === "image-paste") {
+      insertPastedImage(data.dataUrl, data.natural);
+    } else if (data.type === "image-geometry") {
+      commitGeometry(data.id, data.rect);
     } else if (data.type === "tree") {
       structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
       if (view && inspectorSubtab === "slide") renderInspector(view.presentation);
@@ -1233,6 +1362,7 @@ function boot(sessionToken) {
         <div class="export-actions">
           <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
           <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
+          <button type="button" class="file-btn" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
         </div>
         <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
       </section>`;
@@ -1259,6 +1389,8 @@ function boot(sessionToken) {
         <div class="field-value">${escapeHtml(t(`template.${current.template}`))}</div>
         <div class="mono" title="${escapeHtml(current.id)}">${escapeHtml(current.id)}</div>
         <div class="slide-quick-actions">
+          <button type="button" class="btn" id="inspector-insert-image">${escapeHtml(t("inspector.insertImage"))}</button>
+          <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
           <button type="button" class="btn" id="inspector-duplicate-slide">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             ${escapeHtml(t("inspector.duplicate"))}
@@ -1323,6 +1455,19 @@ function boot(sessionToken) {
     els.inspector.querySelectorAll("[data-tree-id]").forEach((button) => {
       button.addEventListener("click", () => selectElementById(button.dataset.treeId));
     });
+
+    const insertImageBtn = $("inspector-insert-image");
+    const imageFile = $("inspector-image-file");
+    if (insertImageBtn && imageFile) {
+      insertImageBtn.addEventListener("click", () => imageFile.click());
+      imageFile.addEventListener("change", async () => {
+        const file = imageFile.files && imageFile.files[0];
+        imageFile.value = "";
+        if (!file) return;
+        const dataUrl = await fileToDataUrl(file);
+        insertPastedImage(dataUrl, await imageSize(dataUrl));
+      });
+    }
 
     const dupBtn = $("inspector-duplicate-slide");
     if (dupBtn) {
@@ -1429,6 +1574,8 @@ function boot(sessionToken) {
     if (exportPdf) exportPdf.addEventListener("click", () => startExport("pdf"));
     const exportPng = $("export-png");
     if (exportPng) exportPng.addEventListener("click", () => startExport("png"));
+    const exportPptx = $("export-pptx");
+    if (exportPptx) exportPptx.addEventListener("click", () => startExport("pptx"));
     syncExportUi();
   }
 
@@ -1446,8 +1593,16 @@ function boot(sessionToken) {
 
     try {
       const { blob, filename } = await client.exportDeck(format);
-      saveBlob(blob, filename || (format === "pdf" ? "deck.pdf" : "deck.zip"));
-      toast(t(format === "pdf" ? "toast.exportedPdf" : "toast.exportedPng"));
+      const fallbackName =
+        format === "pdf" ? "deck.pdf" : format === "pptx" ? "deck.pptx" : "deck.zip";
+      saveBlob(blob, filename || fallbackName);
+      const readyKey =
+        format === "pdf"
+          ? "toast.exportedPdf"
+          : format === "pptx"
+            ? "toast.exportedPptx"
+            : "toast.exportedPng";
+      toast(t(readyKey));
     } catch (error) {
       console.error("export failed", error);
       toast(exportErrorText(error));
@@ -1463,7 +1618,7 @@ function boot(sessionToken) {
 
     const busy = Boolean(exportJob);
     section.setAttribute("aria-busy", String(busy));
-    ["export-pdf", "export-png"].forEach((id) => {
+    ["export-pdf", "export-png", "export-pptx"].forEach((id) => {
       const button = $(id);
       if (button) button.disabled = busy;
     });
@@ -1589,6 +1744,7 @@ function boot(sessionToken) {
     }
     renderAgentActivity({ announce: false });
     if (view) setStatus(els.statusDot.dataset.state || "connecting");
+    if (library) library.setI18n(applyI18n);
   });
 
   // Auto-follow is only for people watching, not for people editing.
@@ -1721,6 +1877,12 @@ function boot(sessionToken) {
       els.topbarExportPng.addEventListener("click", () => {
         els.exportMenu.hidden = true;
         startExport("png");
+      });
+    }
+    if (els.topbarExportPptx) {
+      els.topbarExportPptx.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        startExport("pptx");
       });
     }
     if (els.topbarSaveDeck) {
@@ -2266,9 +2428,54 @@ function boot(sessionToken) {
     }
   }
 
+  function openLibrary() {
+    if (!library) {
+      toast(t("library.unavailable"));
+      return;
+    }
+    library.open();
+  }
+
+  /// Applies the read model a library operation returns.
+  ///
+  /// Opening, creating and duplicating a deck all end with a different deck in
+  /// the studio, so the stage, the storyboard selection and the canvas selection
+  /// have to be rebuilt from scratch rather than patched.
+  function applyLibraryPayload(payload) {
+    if (!payload || !payload.view) return;
+    stageKey = "";
+    thumbsKey = "";
+    selectedElement = null;
+    selectedId = payload.view.presentation.slides[0]?.id || "";
+    applyView(payload.view);
+  }
+
   function setupDeckQuickTools() {
+    if (els.topbarLibrary) {
+      els.topbarLibrary.addEventListener("click", () => {
+        openLibrary();
+      });
+    }
+
     if (els.topbarNewDeck) {
       els.topbarNewDeck.addEventListener("click", async () => {
+        // With a deck library, "new" creates another deck file instead of
+        // replacing the one the user has open. Without one (memory-only server)
+        // it falls back to the in-place command.
+        if (library) {
+          try {
+            // Name it in the user's language: the file is theirs, so the title
+            // should not be an English default.
+            const payload = await client.deckNew(t("deck.untitled"));
+            applyLibraryPayload(payload);
+            toast(t("library.created"));
+            els.title?.focus();
+            els.title?.select?.();
+          } catch (error) {
+            toast(`${t("toast.error")} — ${error.message}`);
+          }
+          return;
+        }
         if (!confirm(t("action.confirmNewDeck"))) return;
         // `new_deck` is a UI command: `create_presentation` belongs to the agent
         // surface and `/api/command` rejects it, so the button used to do
@@ -2361,6 +2568,14 @@ function boot(sessionToken) {
         t,
         buildActions: buildPaletteActions,
       });
+      library = mountDeckLibrary({
+        root: $("deck-library"),
+        client,
+        t,
+        notify: toast,
+        onApplied: applyLibraryPayload,
+      });
+      library.setI18n(applyI18n);
       copilot = mountCopilot({
         client,
         getSelectedSlideId: () => selectedId,

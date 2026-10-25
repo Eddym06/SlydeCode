@@ -3467,3 +3467,326 @@ body.has-thinking-expanded .copilot-panel {
   background: var(--surface-sunken);
   color: var(--ink);
 }
+
+/* ---------- Deck library sheet ----------
+   A modal sheet over the studio, same surface language as the copilot sheet:
+   warm surface, hairline border, one shadow-3 lift, no gradient chrome. */
+
+.library {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 7vh 20px 20px;
+}
+
+.library[hidden] {
+  display: none !important;
+}
+
+.library-scrim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, #000 30%, transparent);
+  backdrop-filter: blur(2px);
+  animation: library-fade var(--dur-fast) var(--ease-out);
+}
+
+.library-sheet {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: min(78vh, 720px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-modal);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: library-rise var(--dur-base) var(--ease-out);
+}
+
+@keyframes library-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes library-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library-scrim,
+  .library-sheet {
+    animation: none;
+  }
+}
+
+.library-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 20px 20px 0;
+}
+
+.library-title {
+  margin: 0 0 3px;
+  font-size: 20px;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.library-subtitle {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.library-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px 10px;
+}
+
+.library-toolbar .btn {
+  flex: 0 0 auto;
+  min-height: 36px;
+}
+
+.library-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--ink-subtle);
+}
+
+.library-search:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.library-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+}
+
+.library-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 2px 12px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.deck-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--r-card);
+}
+
+.deck-row:hover {
+  background: var(--surface-sunken);
+}
+
+.deck-row.is-active {
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
+  background: var(--brand-soft);
+}
+
+.deck-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  text-align: left;
+}
+
+.deck-title {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deck-meta {
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.deck-badge {
+  align-self: flex-start;
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: var(--r-chip);
+  background: var(--surface);
+  color: var(--brand-strong);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.deck-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.library .btn-sm {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.library .btn-danger {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.library .btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.deck-confirm {
+  color: var(--danger);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.deck-delete {
+  color: var(--ink-muted);
+}
+
+.deck-delete:hover {
+  color: var(--danger);
+}
+
+.deck-row.is-editing {
+  padding: 10px 12px;
+  border-color: var(--border-strong);
+  background: var(--surface-sunken);
+}
+
+.deck-rename {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+}
+
+.deck-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--brand);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+}
+
+.library-empty,
+.library-error {
+  margin: 0;
+  padding: 26px 20px 30px;
+  text-align: center;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.library-error {
+  padding: 8px 20px 14px;
+  color: var(--danger);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.library-empty[hidden],
+.library-error[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 720px) {
+  .library {
+    padding: 0;
+  }
+
+  .library-sheet {
+    max-height: 100vh;
+    height: 100%;
+    border-radius: 0;
+    border: 0;
+  }
+
+  .deck-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .deck-actions {
+    padding: 0 8px 8px;
+  }
+}
+
+/* The deck quick tools are text buttons, but the top bar also holds zoom, the
+   language switch, the theme toggle, undo/redo, export and present. Below this
+   width the labels collapse to icons (the titles and aria-labels stay), so the
+   Present button never gets pushed out of the bar. */
+@media (max-width: 1360px) {
+  .deck-quick-tools .btn span {
+    display: none;
+  }
+
+  .deck-quick-tools .btn {
+    padding: 0 8px;
+  }
+}
+
+.library .icon-btn {
+  width: 32px;
+  height: 32px;
+}

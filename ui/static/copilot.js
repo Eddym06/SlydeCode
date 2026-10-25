@@ -68,6 +68,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   let pending = [];
   let streaming = false;
   let controller = null;
+  let currentRequestId = null;
   let epoch = 0;
 
   const sheet = createModelSheet({
@@ -697,6 +698,16 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     updateSendEnabled();
   }
 
+  function stopTurn() {
+    const requestId = currentRequestId;
+    currentRequestId = null;
+    if (requestId) {
+      // Best effort: aborting the fetch is the local half of the cancel.
+      client.copilotCancel(requestId).catch(() => {});
+    }
+    if (controller) controller.abort();
+  }
+
   function send() {
     if (streaming) return;
     const text = els.input.value.trim();
@@ -756,6 +767,14 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     setComposerBusy(true);
     syncAssistant(assistant, true);
 
+    // The server keeps this id so Stop can cancel the turn server-side, not just
+    // abort the local stream (otherwise the tool rounds keep running).
+    const requestId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    currentRequestId = requestId;
+
     const payload = {
       provider: providerId,
       model: modelId,
@@ -764,6 +783,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       selected_element_id:
         typeof getSelectedElementId === "function" ? getSelectedElementId() || null : null,
       language: lang(),
+      request_id: requestId,
     };
 
     try {
@@ -848,7 +868,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function stopStream() {
     if (!streaming) return;
-    if (controller) controller.abort();
+    stopTurn();
   }
 
   function retry(message) {
@@ -869,8 +889,8 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function newChat() {
     if (streaming) {
+      stopTurn();
       epoch += 1;
-      if (controller) controller.abort();
       controller = null;
       setComposerBusy(false);
     }

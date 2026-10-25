@@ -260,9 +260,25 @@ test("autosaves speaker notes and exports a valid .slyde file", async () => {
   assert.equal(state.view.presentation.slides.length, 2);
   assert.equal(state.view.presentation.slides[1].notes, "Nota E2E");
 
-  const stored = JSON.parse(
-    readFileSync(join(dataDir, "decks", "current.slyde"), "utf8")
-  );
+  // Decks live in the library now: one file per deck, named after the active id.
+  // The save is debounced, so poll instead of racing the 300 ms window.
+  const library = await page.evaluate(`fetch("/api/decks?t=${token}").then((r) => r.json())`);
+  assert.ok(library.active, "a deck is active in the library");
+  const deckPath = join(dataDir, "decks", `${library.active}.slyde`);
+  let stored = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      const candidate = JSON.parse(readFileSync(deckPath, "utf8"));
+      if (candidate.presentation.slides.length === 2) {
+        stored = candidate;
+        break;
+      }
+    } catch (error) {
+      // The file may not exist yet on the very first pass.
+    }
+    await sleep(100);
+  }
+  assert.ok(stored, `the active deck file was written: ${deckPath}`);
   assert.equal(stored.format, "slydecore");
   assert.equal(stored.presentation.slides.length, 2);
   assert.equal(stored.presentation.slides[1].notes, "Nota E2E");
@@ -339,6 +355,18 @@ test("exports a PDF and a PNG bundle from the inspector with the deck name", asy
       ),
     ];
     assert.equal(names.length, 2, "one PNG per slide");
+
+    // The PNGs are rendered in one Chrome session at 2x; reading the IHDR of the
+    // first stored PNG proves both (a per-slide run would be 1x, and the old
+    // sequential path would report 1280). PNGs are stored in the ZIP, so the
+    // bytes appear verbatim in the archive.
+    const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const at = zip.indexOf(signature);
+    assert.ok(at >= 0, "the bundle contains a PNG");
+    const width = zip.readUInt32BE(at + 16);
+    const height = zip.readUInt32BE(at + 20);
+    assert.equal(width, 2560, "slides are rendered at 2x (2560px wide)");
+    assert.equal(height, 1440, "the 16:9 ratio is preserved at 2x");
   } finally {
     await page.send("Page.setDownloadBehavior", { behavior: "default" }).catch(() => {});
     try {
@@ -1254,45 +1282,133 @@ test("a failed turn explains itself without echoing provider text", async () => 
   }
 });
 
-test("the new presentation button actually replaces the deck", async () => {
-  // Two slides first, so "replaced" cannot be mistaken for "nothing changed".
-  // Added through the UI so the storyboard is guaranteed to have re-rendered.
+test("the new deck button starts a deck without destroying the previous one", async () => {
+  // The library changed the semantics of this button on purpose: it used to
+  // replace the open deck (recoverable only by undo), now it creates another
+  // deck file and leaves the previous one in the library.
   const start = await page.evaluate(`document.querySelectorAll(".thumb").length`);
   for (let index = start; index < 2; index += 1) {
     const expected = index + 1;
     await page.evaluate(`document.getElementById("add-slide").click(); true`);
     await page.waitFor(`document.querySelectorAll(".thumb").length === ${expected}`);
   }
-
-  const before = await page.evaluate(`(() => ({
-    slides: document.querySelectorAll(".thumb").length,
-    title: document.getElementById("deck-title").value
-  }))()`);
-  assert.equal(before.slides, 2);
-
   await page.evaluate(`(() => {
-    window.confirm = () => true;
-    document.getElementById("topbar-new-deck").click();
+    const title = document.getElementById("deck-title");
+    title.value = "E2E original deck";
+    title.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   })()`);
+  await sleep(700);
 
+  const before = await page.evaluate(
+    `fetch("/api/decks?t=${token}").then((r) => r.json())`
+  );
+  const previous = before.active;
+  const previousCount = before.decks.length;
+
+  await page.evaluate(`document.getElementById("topbar-new-deck").click(); true`);
   await page.waitFor(`document.querySelectorAll(".thumb").length === 1`, { timeout: 8000 });
+  await sleep(400);
+
   const after = await page.evaluate(`(() => ({
     slides: document.querySelectorAll(".thumb").length,
     title: document.getElementById("deck-title").value,
-    caption: document.querySelector(".thumb")?.getAttribute("aria-label") ?? "",
     toast: document.getElementById("toast")?.textContent ?? ""
   }))()`);
-  assert.equal(after.slides, 1, "the old slides are gone");
+  assert.equal(after.slides, 1, "the new deck starts empty");
   assert.match(after.title, /sin título|untitled/i);
+  assert.match(after.toast, /lista|ready/i, "the toast confirms the new deck");
 
-  // The command is undoable, so a stray confirmation is recoverable.
+  const list = await page.evaluate(`fetch("/api/decks?t=${token}").then((r) => r.json())`);
+  assert.equal(list.decks.length, previousCount + 1, "one more deck in the library");
+  assert.notEqual(list.active, previous, "a different deck is open now");
+  const survivor = list.decks.find((deck) => deck.id === previous);
+  assert.ok(survivor, "the previous deck survived");
+  assert.equal(survivor.slides, 2, "with all of its slides");
+  assert.equal(survivor.title, "E2E original deck");
+});
+
+test("the deck library sheet lists, renames and reopens decks", async () => {
+  // The previous test guarantees an "E2E original deck" with two slides plus the
+  // open one, so this test never depends on absolute deck counts.
+  await page.evaluate(`document.getElementById("topbar-library").click(); true`);
+  await page.waitFor(`!document.getElementById("deck-library").hidden`, { timeout: 5000 });
+  await sleep(300);
+
+  const opened = await page.evaluate(`(() => ({
+    rows: document.querySelectorAll(".deck-row").length,
+    badge: document.querySelector(".deck-badge")?.textContent ?? "",
+    title: document.getElementById("library-title").textContent
+  }))()`);
+  assert.ok(opened.rows >= 2, "every deck in the library is listed");
+  assert.match(opened.badge, /abierto|open/i, "the open deck is marked");
+  assert.ok(opened.title.length > 2, "the sheet is localized");
+
+  // Search narrows the list without touching the decks.
   await page.evaluate(`(() => {
-    document.getElementById("undo")?.click();
+    const search = document.getElementById("library-search");
+    search.value = "original deck";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
     return true;
   })()`);
+  await sleep(150);
+  assert.ok(
+    (await page.evaluate(`document.querySelectorAll(".deck-row").length`)) >= 1,
+    "the search keeps the matching deck"
+  );
+  assert.ok(
+    (await page.evaluate(`document.querySelectorAll(".deck-row").length`)) <
+      (await page.evaluate(`fetch("/api/decks?t=${token}").then((r) => r.json())`)).decks.length,
+    "the search hides the rest"
+  );
+  await page.evaluate(`(() => {
+    const search = document.getElementById("library-search");
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(150);
+
+  // Rename the open deck inline and check both the state and the file list.
+  await page.evaluate(
+    `document.querySelector('.deck-row.is-active [data-library-action="rename"]').click(); true`
+  );
+  await sleep(200);
+  await page.evaluate(`(() => {
+    const input = document.getElementById("deck-rename-input");
+    input.value = "Renamed from the sheet";
+    input.closest("form").requestSubmit();
+    return true;
+  })()`);
+  await sleep(600);
+  const renamed = await page.evaluate(
+    `fetch("/api/state?t=${token}").then((r) => r.json())`
+  );
+  assert.equal(renamed.view.presentation.title, "Renamed from the sheet");
+  assert.match(
+    await page.evaluate(`document.getElementById("deck-library").textContent`),
+    /Renamed from the sheet/,
+    "the list shows the new name"
+  );
+
+
+  // Reopen the old deck: its slides are still there and the sheet closes.
+  await page.evaluate(`(() => {
+    const row = [...document.querySelectorAll(".deck-row")].find((item) =>
+      item.textContent.includes("E2E original deck")
+    );
+    row.querySelector(".deck-open").click();
+    return true;
+  })()`);
+  await page.waitFor(`document.getElementById("deck-library").hidden`, { timeout: 5000 });
   await page.waitFor(`document.querySelectorAll(".thumb").length === 2`, { timeout: 8000 });
+  const reopened = await page.evaluate(
+    `fetch("/api/state?t=${token}").then((r) => r.json())`
+  );
+  assert.equal(reopened.view.presentation.title, "E2E original deck");
+  assert.equal(reopened.view.presentation.slides.length, 2);
 });
+
 
 test("opening a .slyde file from disk restores the deck and its title", async () => {
   const deckJson = await page.evaluate(`fetch("/api/deck?t=${token}").then((r) => r.text())`);
@@ -1329,6 +1445,148 @@ test("opening a .slyde file from disk restores the deck and its title", async ()
   assert.equal(opened.title, expectedTitle, "the file title wins over the edited one");
   assert.equal(opened.slides, expectedSlides);
   rmSync(filePath, { force: true });
+});
+
+test("inserts an image, moves it and keeps it inside the .slyde bundle", async () => {
+  // A 1x1 PNG is enough: the store sniffs the format, and the canvas places the
+  // picture by aspect ratio rather than by its own assumptions.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64"
+  );
+  const fixture = join(mkdtempSync(join(tmpdir(), "slyde-image-")), "pixel.png");
+  writeFileSync(fixture, png);
+
+  // Start from a known deck so the assertions are not at the mercy of prior tests.
+  await page.evaluate(`fetch("/api/command?t=${token}", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "new_deck", title: "Images E2E", template: "hero" })
+  }).then((r) => r.json())`);
+  await sleep(500);
+  await page.evaluate(`document.querySelectorAll(".thumb")[0].click(); true`);
+  await sleep(400);
+
+  // Drive the inspector's real file input through CDP, so the change event takes
+  // the same path a user's file picker would.
+  const { root } = await page.send("DOM.getDocument", { depth: -1 });
+  const { nodeId } = await page.send("DOM.querySelector", {
+    nodeId: root.nodeId,
+    selector: "#inspector-image-file",
+  });
+  assert.ok(nodeId, "the inspector exposes an image input");
+  await page.send("DOM.setFileInputFiles", { files: [fixture], nodeId });
+
+  // Upload + insert are two round trips; wait for the block to appear.
+  let state = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    state = await page.evaluate(`fetch("/api/state?t=${token}").then((r) => r.json())`);
+    const code = state.view.presentation.slides[0].code;
+    if (code.includes("/assets/") && code.includes('data-id="image-1"')) break;
+    await sleep(150);
+  }
+  const code = state.view.presentation.slides[0].code;
+  assert.match(code, /data-id="image-1"/, "the image becomes a block with a handle");
+  assert.match(code, /src="\/assets\/[0-9a-f]+\.png"/, "the image lives in the asset store");
+  assert.match(code, /position: absolute/, "it is positioned over the slide");
+  assert.match(code, /width: \d+px/, "it has a size");
+
+  // The slide document renders it from the sandbox origin.
+  const slideId = state.view.presentation.slides[0].id;
+  const slidePage = await browser.newPage(slideUrl(slideId, "static=1&edit=1"));
+  let rendered;
+  try {
+    await slidePage.waitFor(
+      `document.querySelectorAll("img[data-id='image-1']").length === 1`,
+      { timeout: 10000 }
+    );
+    rendered = await slidePage.evaluate(`(() => {
+      const img = document.querySelector("img[data-id='image-1']");
+      return {
+        src: img.getAttribute("src"),
+        complete: img.complete,
+        naturalWidth: img.naturalWidth,
+        left: img.style.left,
+        width: img.style.width
+      };
+    })()`);
+  } finally {
+    await slidePage.close();
+  }
+  assert.match(rendered.src, /^\/assets\/[0-9a-f]+\.png$/, "served from the sandbox origin");
+  assert.equal(rendered.complete, true, "the image actually loaded");
+  assert.equal(rendered.naturalWidth, 1, "the stored bytes are the uploaded pixels");
+
+  // Select it on the canvas and drag it: the geometry the canvas reports must
+  // reach the deck state (and survive a reload of the slide).
+  const frame = await page.evaluate(`(() => {
+    const rect = document.getElementById("slide-frame").getBoundingClientRect();
+    return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+  })()`);
+  const before = Number(rendered.left.replace("px", ""));
+  const beforeWidth = Number(rendered.width.replace("px", ""));
+  const cx = frame.x + (before + beforeWidth / 2) * (frame.w / 1280);
+  const cy = frame.y + frame.h / 2;
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type,
+      x: cx,
+      y: cy,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+  await sleep(300);
+
+  // Drag it 40 screen pixels to the right. The canvas is scaled to the stage, so
+  // the expected offset is that distance divided by the render scale.
+  const dragBy = 40;
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: cx,
+    y: cy,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  for (const step of [10, 20, 30, 40]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: cx + step,
+      y: cy,
+      button: "left",
+      buttons: 1,
+    });
+  }
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: cx + dragBy,
+    y: cy,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(800);
+
+  state = await page.evaluate(`fetch("/api/state?t=${token}").then((r) => r.json())`);
+  const moved = state.view.presentation.slides[0].code.match(/left: (\d+)px/);
+  assert.ok(moved, "the block still has a left offset");
+  const expected = before + Math.round(dragBy / (frame.w / 1280));
+  assert.ok(
+    Math.abs(Number(moved[1]) - expected) <= 2,
+    `dragging moved the image to ${moved[1]}px (expected ~${expected}px)`
+  );
+
+  // The saved deck is a bundle with the picture inside it.
+  const response = await fetch(`http://127.0.0.1:${new URL(appUrl).port}/api/deck?t=${token}`);
+  assert.equal(response.status, 200);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(
+    bytes.subarray(0, 2).toString("latin1"),
+    "PK",
+    "a deck with images downloads as a ZIP"
+  );
+  assert.ok(bytes.includes(Buffer.from("assets/")), "the bundle carries the asset folder");
 });
 
 test("the reasoning drawer follows the stream, scrolls and expands", async () => {
@@ -1805,10 +2063,14 @@ test("meets the accessibility baseline: names, focus ring and AA contrast", asyn
       return !(button.getAttribute("aria-label") || button.textContent.trim());
     }).length;
 
-    const iconTargets = [...document.querySelectorAll(".icon-btn")].map((button) => {
-      const box = button.getBoundingClientRect();
-      return Math.min(box.width, box.height);
-    });
+    // Only what is on screen: a hidden dialog's controls have a zero box and are
+    // not targets anyone can hit.
+    const iconTargets = [...document.querySelectorAll(".icon-btn")]
+      .filter((button) => button.getClientRects().length > 0)
+      .map((button) => {
+        const box = button.getBoundingClientRect();
+        return Math.min(box.width, box.height);
+      });
 
     const untitledFrames = [...document.querySelectorAll("iframe")].filter((frame) => {
       return !frame.title && frame.getAttribute("aria-hidden") !== "true";
