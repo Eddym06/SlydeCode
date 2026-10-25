@@ -5,6 +5,11 @@
 //! refer to the same thing. Ids are part of the stored code — not DOM state —
 //! because every mutation is a string edit over `Slide::code`.
 //!
+//! Handles are unique **within one slide document**, which is what a DOM needs.
+//! They are not unique across the deck (`slyde-1` exists in every slide), so
+//! deck-level edits must be scoped with a `slide_id`; `mutate_element` rejects an
+//! unscoped id that matches more than one slide.
+//!
 //! The scan is deliberately small: it only looks for element tags, skips
 //! comments, and skips the text inside `<style>`/`<script>` so CSS selectors and
 //! JS strings can never be mistaken for markup.
@@ -115,15 +120,17 @@ pub fn ensure_element_ids(code: &str) -> String {
 
 fn has_handle(tag: &str) -> bool {
     ["id=", "data-id="].iter().any(|needle| {
-        tag.to_ascii_lowercase().match_indices(needle).any(|(index, _)| {
-            // `id=` must start an attribute, not sit inside another name.
-            let before = tag.as_bytes().get(index.wrapping_sub(1)).copied();
-            let starts_attribute = match before {
-                Some(byte) => byte.is_ascii_whitespace(),
-                None => false,
-            };
-            starts_attribute && value_follows(tag, index + needle.len())
-        })
+        tag.to_ascii_lowercase()
+            .match_indices(needle)
+            .any(|(index, _)| {
+                // `id=` must start an attribute, not sit inside another name.
+                let before = tag.as_bytes().get(index.wrapping_sub(1)).copied();
+                let starts_attribute = match before {
+                    Some(byte) => byte.is_ascii_whitespace(),
+                    None => false,
+                };
+                starts_attribute && value_follows(tag, index + needle.len())
+            })
     })
 }
 
@@ -162,7 +169,10 @@ mod tests {
     #[test]
     fn adds_ids_in_document_order() {
         let out = ensure_element_ids("<div class=\"slide\"><h1>Hi</h1><p>Body</p></div>");
-        assert!(out.contains("<div data-id=\"slyde-1\" class=\"slide\">"), "{out}");
+        assert!(
+            out.contains("<div data-id=\"slyde-1\" class=\"slide\">"),
+            "{out}"
+        );
         assert!(out.contains("<h1 data-id=\"slyde-2\">Hi</h1>"), "{out}");
         assert!(out.contains("<p data-id=\"slyde-3\">Body</p>"), "{out}");
     }
@@ -200,7 +210,10 @@ mod tests {
     #[test]
     fn marks_void_elements_too() {
         let out = ensure_element_ids("<img src=\"data:image/png;base64,AA\">");
-        assert_eq!(out, "<img data-id=\"slyde-1\" src=\"data:image/png;base64,AA\">");
+        assert_eq!(
+            out,
+            "<img data-id=\"slyde-1\" src=\"data:image/png;base64,AA\">"
+        );
         assert!(is_void("img"));
         assert!(!is_void("div"));
     }

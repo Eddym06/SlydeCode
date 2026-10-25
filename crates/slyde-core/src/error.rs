@@ -38,6 +38,11 @@ pub enum CoreError {
     #[error("element {element_id} does not exist in slide or presentation")]
     ElementNotFound { element_id: String },
 
+    #[error(
+        "element {element_id} exists in {slides} slides; pass slide_id to say which one to edit"
+    )]
+    AmbiguousElement { element_id: String, slides: usize },
+
     #[error("element {element_id} has no inner content to replace (void or self-closing tag)")]
     ElementHasNoContent { element_id: String },
 

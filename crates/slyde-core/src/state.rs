@@ -13,6 +13,9 @@ use crate::model::{
 pub const DEFAULT_MAX_HISTORY: usize = 100;
 pub const DEFAULT_MAX_SLIDES: usize = 200;
 pub const DEFAULT_MAX_CODE_BYTES: usize = 512 * 1024;
+/// How long a continued edit (title, speaker notes) keeps rewriting the same
+/// history entry instead of pushing a new one.
+pub const DEFAULT_COALESCE_WINDOW_MS: u64 = 1200;
 /// A slide reveals in a handful of beats, never in a parade of effects.
 pub const MAX_ANIMATION_STEPS: usize = 24;
 pub const MAX_ANIMATION_DURATION_MS: u32 = 5000;
@@ -23,6 +26,11 @@ pub struct Limits {
     pub max_history: usize,
     pub max_slides: usize,
     pub max_code_bytes: usize,
+    /// Window in which consecutive commits with the same label and target merge
+    /// into one history entry. Typing in the title or the speaker notes commits
+    /// every few hundred milliseconds; without coalescing a single paragraph
+    /// buries every real edit in the undo stack. `0` disables coalescing.
+    pub coalesce_window_ms: u64,
 }
 
 impl Default for Limits {
@@ -31,6 +39,7 @@ impl Default for Limits {
             max_history: DEFAULT_MAX_HISTORY,
             max_slides: DEFAULT_MAX_SLIDES,
             max_code_bytes: DEFAULT_MAX_CODE_BYTES,
+            coalesce_window_ms: DEFAULT_COALESCE_WINDOW_MS,
         }
     }
 }
@@ -39,6 +48,10 @@ impl Default for Limits {
 pub struct HistoryEntry {
     pub label: String,
     pub presentation: Presentation,
+    /// Target of the edit (`deck` for the title, `notes:<slide id>` for notes).
+    /// Only entries with the same key can merge.
+    pub coalesce_key: Option<String>,
+    pub committed_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -73,6 +86,8 @@ impl PresentationState {
             history: vec![HistoryEntry {
                 label: "init".into(),
                 presentation,
+                coalesce_key: None,
+                committed_at_ms: now_ms(),
             }],
             cursor: 0,
             revision: 0,
@@ -123,6 +138,8 @@ impl PresentationState {
         self.history = vec![HistoryEntry {
             label: "open".into(),
             presentation,
+            coalesce_key: None,
+            committed_at_ms: now_ms(),
         }];
         self.cursor = 0;
         self.revision += 1;
@@ -188,7 +205,7 @@ impl PresentationState {
         let title = title.into();
         let mut next = self.presentation().clone();
         next.title = title;
-        self.commit("title", next);
+        self.commit_with("title", Some("deck".into()), next);
         Ok(())
     }
 
@@ -215,80 +232,109 @@ impl PresentationState {
             .find(|s| s.id == slide_id)
             .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
         slide.notes = notes;
-        self.commit("notes", next);
+        self.commit_with("notes", Some(format!("notes:{slide_id}")), next);
         Ok(())
     }
 
     /// Mutates an element identified by `element_id` directly or updates its occurrence inside HTML code.
+    ///
+    /// `slide_id` scopes the edit to one slide. Generated handles are only unique
+    /// *within* a slide document (`slyde-1` exists in every slide), so an
+    /// unscoped id that matches more than one slide is rejected with
+    /// [`CoreError::AmbiguousElement`] instead of editing the first match.
     pub fn mutate_element(
         &mut self,
         element_id: &str,
+        slide_id: Option<&str>,
         text: Option<String>,
         style: Option<String>,
         html: Option<String>,
     ) -> Result<String, CoreError> {
         let mut next = self.presentation().clone();
-        let mut found_slide_id = None;
 
-        for slide in &mut next.slides {
-            let mut matched = false;
-            if let Some(el) = slide.find_element_mut(element_id) {
-                matched = true;
-                if let Some(ref t) = text {
-                    match el {
-                        crate::model::SlideElement::Diagram { source, .. } => *source = t.clone(),
-                        crate::model::SlideElement::CodeBlock { code, .. } => *code = t.clone(),
-                        crate::model::SlideElement::SpeakerNotes { notes, .. } => *notes = t.clone(),
-                        crate::model::SlideElement::Custom { content, .. } => *content = t.clone(),
-                        crate::model::SlideElement::Image { caption, .. } => *caption = Some(t.clone()),
-                    }
-                }
-            }
-
-            // Also mutate the matching node inside the slide HTML. The id can be
-            // declared as `id="…"` or `data-id="…"`.
-            if let Some(span) = find_element_span(&slide.code, element_id) {
-                matched = true;
-                if span.inner.is_none() && (html.is_some() || text.is_some()) {
-                    return Err(CoreError::ElementHasNoContent {
-                        element_id: element_id.to_string(),
-                    });
-                }
-                let source = &slide.code;
-                let open_tag = merge_style_attribute(&source[span.open.clone()], style.as_deref());
-                let new_inner = match (&html, &text) {
-                    (Some(markup), _) => Some(markup.clone()),
-                    (None, Some(plain)) => Some(escape_text(plain)),
-                    (None, None) => None,
-                };
-                let mut out = String::with_capacity(source.len() + 32);
-                out.push_str(&source[..span.open.start]);
-                out.push_str(&open_tag);
-                match (&span.inner, new_inner) {
-                    (Some(inner), Some(inner_html)) => {
-                        out.push_str(&source[span.open.end..inner.start]);
-                        out.push_str(&inner_html);
-                        out.push_str(&source[inner.end..]);
-                    }
-                    _ => out.push_str(&source[span.open.end..]),
-                }
-                slide.code = out;
-            }
-
-            if matched {
-                found_slide_id = Some(slide.id.clone());
-                break;
+        if let Some(slide_id) = slide_id {
+            if next.slide(slide_id).is_none() {
+                return Err(CoreError::SlideNotFound(slide_id.to_string()));
             }
         }
 
-        if let Some(s_id) = found_slide_id {
-            self.commit("mutate_element", next);
-            Ok(s_id)
-        } else {
-            Err(CoreError::ElementNotFound {
-                element_id: element_id.to_string(),
+        // Resolve every candidate before mutating anything: an ambiguous id must
+        // fail without leaving a half-edited deck behind.
+        let candidates: Vec<usize> = next
+            .slides
+            .iter()
+            .enumerate()
+            .filter(|(_, slide)| slide_id.is_none_or(|id| slide.id == id))
+            .filter(|(_, slide)| {
+                slide.find_element(element_id).is_some()
+                    || find_element_span(&slide.code, element_id).is_some()
             })
+            .map(|(index, _)| index)
+            .collect();
+
+        let index = match candidates.len() {
+            0 => {
+                return Err(CoreError::ElementNotFound {
+                    element_id: element_id.to_string(),
+                });
+            }
+            1 => candidates[0],
+            // A scoped lookup can only land in one slide; several matches mean the
+            // caller did not scope the edit.
+            _ => {
+                return Err(CoreError::AmbiguousElement {
+                    element_id: element_id.to_string(),
+                    slides: candidates.len(),
+                });
+            }
+        };
+
+        let slide = &mut next.slides[index];
+        let slide_id = slide.id.clone();
+
+        if let Some(el) = slide.find_element_mut(element_id) {
+            if let Some(t) = &text {
+                match el {
+                    crate::model::SlideElement::Diagram { source, .. } => *source = t.clone(),
+                    crate::model::SlideElement::CodeBlock { code, .. } => *code = t.clone(),
+                    crate::model::SlideElement::SpeakerNotes { notes, .. } => *notes = t.clone(),
+                    crate::model::SlideElement::Custom { content, .. } => *content = t.clone(),
+                    crate::model::SlideElement::Image { caption, .. } => *caption = Some(t.clone()),
+                }
+            }
         }
+
+        // Also mutate the matching node inside the slide HTML. The id can be
+        // declared as `id="…"` or `data-id="…"`.
+        if let Some(span) = find_element_span(&slide.code, element_id) {
+            if span.inner.is_none() && (html.is_some() || text.is_some()) {
+                return Err(CoreError::ElementHasNoContent {
+                    element_id: element_id.to_string(),
+                });
+            }
+            let source = &slide.code;
+            let open_tag = merge_style_attribute(&source[span.open.clone()], style.as_deref());
+            let new_inner = match (&html, &text) {
+                (Some(markup), _) => Some(markup.clone()),
+                (None, Some(plain)) => Some(escape_text(plain)),
+                (None, None) => None,
+            };
+            let mut out = String::with_capacity(source.len() + 32);
+            out.push_str(&source[..span.open.start]);
+            out.push_str(&open_tag);
+            match (&span.inner, new_inner) {
+                (Some(inner), Some(inner_html)) => {
+                    out.push_str(&source[span.open.end..inner.start]);
+                    out.push_str(&inner_html);
+                    out.push_str(&source[inner.end..]);
+                }
+                _ => out.push_str(&source[span.open.end..]),
+            }
+            slide.code = out;
+        }
+
+        self.commit("mutate_element", next);
+        Ok(slide_id)
     }
 
     /// Insert a new slide or update an existing one.
@@ -432,15 +478,46 @@ impl PresentationState {
     }
 
     fn commit(&mut self, label: &str, next: Presentation) {
+        self.commit_with(label, None, next);
+    }
+
+    /// Commits a mutation, merging it into the previous entry when it continues
+    /// the same edit (`key`) within `limits.coalesce_window_ms`.
+    ///
+    /// Merging still bumps the revision: the UI has to redraw every time; it just
+    /// should not need one undo step per keystroke.
+    fn commit_with(&mut self, label: &str, key: Option<String>, next: Presentation) {
         self.revision += 1;
         let mut next = next;
         next.updated_at_ms = now_ms();
 
         // Any new mutation invalidates the redo branch.
+        let at_tip = self.cursor + 1 == self.history.len();
+        if at_tip {
+            if let (Some(key), Some(top)) = (key.as_deref(), self.history.get(self.cursor)) {
+                let same_edit = top.label == label
+                    && top.coalesce_key.as_deref() == Some(key)
+                    && self.limits.coalesce_window_ms > 0
+                    && now_ms().saturating_sub(top.committed_at_ms)
+                        <= self.limits.coalesce_window_ms;
+                if same_edit {
+                    self.history[self.cursor] = HistoryEntry {
+                        label: label.into(),
+                        presentation: next,
+                        coalesce_key: Some(key.to_string()),
+                        committed_at_ms: now_ms(),
+                    };
+                    return;
+                }
+            }
+        }
+
         self.history.truncate(self.cursor + 1);
         self.history.push(HistoryEntry {
             label: label.into(),
             presentation: next,
+            coalesce_key: key,
+            committed_at_ms: now_ms(),
         });
         self.cursor = self.history.len() - 1;
 
@@ -589,7 +666,9 @@ fn is_self_closing(tag: &str) -> bool {
 fn is_tag_name_end(lower: &str, index: usize) -> bool {
     match lower.as_bytes().get(index) {
         None => true,
-        Some(byte) => !(byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b':' || *byte == b'_'),
+        Some(byte) => {
+            !(byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b':' || *byte == b'_')
+        }
     }
 }
 
@@ -707,10 +786,15 @@ mod tests {
     #[test]
     fn start_new_deck_rejects_empty_code() {
         let mut s = state();
-        assert!(s
-            .start_new_deck("Nope", "   ".into(), TemplateType::Hero, vec![])
-            .is_err());
-        assert_eq!(s.presentation().title, "Deck", "a rejected reset changes nothing");
+        assert!(
+            s.start_new_deck("Nope", "   ".into(), TemplateType::Hero, vec![])
+                .is_err()
+        );
+        assert_eq!(
+            s.presentation().title,
+            "Deck",
+            "a rejected reset changes nothing"
+        );
     }
 
     #[test]
@@ -962,6 +1046,8 @@ mod tests {
             AspectRatio::R16x9,
             Limits {
                 max_history: 3,
+                // Every set_title below must push its own entry here.
+                coalesce_window_ms: 0,
                 ..Limits::default()
             },
         );
@@ -1016,16 +1102,37 @@ mod tests {
         )
         .unwrap();
 
-        let updated_slide_id = s.mutate_element("title-1", Some("New Concise Title".into()), None, None).unwrap();
+        let updated_slide_id = s
+            .mutate_element(
+                "title-1",
+                None,
+                Some("New Concise Title".into()),
+                None,
+                None,
+            )
+            .unwrap();
         assert_eq!(updated_slide_id, "sld1");
-        assert!(s.presentation().slides[0].code.contains("New Concise Title"));
-        assert!(s.presentation().slides[0].code.contains("<p id=\"desc-1\">Some body</p>"));
+        assert!(
+            s.presentation().slides[0]
+                .code
+                .contains("New Concise Title")
+        );
+        assert!(
+            s.presentation().slides[0]
+                .code
+                .contains("<p id=\"desc-1\">Some body</p>")
+        );
 
-        s.mutate_element("desc-1", None, Some("color: red".into()), None).unwrap();
-        assert!(s.presentation().slides[0].code.contains("style=\"color: red\""));
+        s.mutate_element("desc-1", None, None, Some("color: red".into()), None)
+            .unwrap();
+        assert!(
+            s.presentation().slides[0]
+                .code
+                .contains("style=\"color: red\"")
+        );
 
-        let err = s.mutate_element("non-existent", Some("test".into()), None, None);
-        assert!(err.is_err());
+        let err = s.mutate_element("non-existent", None, Some("test".into()), None, None);
+        assert!(matches!(err, Err(CoreError::ElementNotFound { .. })));
     }
 
     #[test]
@@ -1040,7 +1147,7 @@ mod tests {
         )
         .unwrap();
 
-        s.mutate_element("title-1", Some("New Title".into()), None, None)
+        s.mutate_element("title-1", None, Some("New Title".into()), None, None)
             .unwrap();
         let code = &s.presentation().slides[0].code;
         assert!(
@@ -1056,8 +1163,14 @@ mod tests {
             "siblings are untouched: {code}"
         );
 
-        s.mutate_element("desc-1", None, None, Some("<strong>Bold body</strong>".into()))
-            .unwrap();
+        s.mutate_element(
+            "desc-1",
+            None,
+            None,
+            None,
+            Some("<strong>Bold body</strong>".into()),
+        )
+        .unwrap();
         let code = &s.presentation().slides[0].code;
         assert!(
             code.contains("<p id=\"desc-1\"><strong>Bold body</strong></p>"),
@@ -1077,7 +1190,7 @@ mod tests {
         )
         .unwrap();
 
-        s.mutate_element("t", Some("<b>not markup</b>".into()), None, None)
+        s.mutate_element("t", None, Some("<b>not markup</b>".into()), None, None)
             .unwrap();
         let code = &s.presentation().slides[0].code;
         assert!(
@@ -1085,7 +1198,7 @@ mod tests {
             "`text` stays plain text: {code}"
         );
 
-        s.mutate_element("t", None, Some("color: red".into()), None)
+        s.mutate_element("t", None, None, Some("color: red".into()), None)
             .unwrap();
         let code = &s.presentation().slides[0].code;
         assert!(
@@ -1107,18 +1220,18 @@ mod tests {
         .unwrap();
 
         let err = s
-            .mutate_element("hero", Some("nope".into()), None, None)
+            .mutate_element("hero", None, Some("nope".into()), None, None)
             .unwrap_err();
         assert!(
             matches!(err, CoreError::ElementHasNoContent { .. }),
             "a void element has no content: {err:?}"
         );
 
-        s.mutate_element("hero", None, Some("border-radius: 8px".into()), None)
+        s.mutate_element("hero", None, None, Some("border-radius: 8px".into()), None)
             .unwrap();
-        assert!(s.presentation().slides[0]
-            .code
-            .contains("<img id=\"hero\" src=\"data:image/png;base64,AA\" style=\"border-radius: 8px\">"));
+        assert!(s.presentation().slides[0].code.contains(
+            "<img id=\"hero\" src=\"data:image/png;base64,AA\" style=\"border-radius: 8px\">"
+        ));
     }
 
     #[test]
@@ -1201,5 +1314,181 @@ mod tests {
         assert!(s.replace(incoming).is_err());
         assert_eq!(s.presentation().title, "Deck");
         assert_eq!(s.revision(), 0);
+    }
+
+    /// Every slide gets the same generated handles (`slyde-1`, `slyde-2`, …), so
+    /// an unscoped edit must refuse to guess which slide the caller meant.
+    #[test]
+    fn mutate_element_refuses_to_guess_between_slides() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>First slide</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        s.upsert_slide(
+            1,
+            Some("sld2".into()),
+            "<h1>Second slide</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        assert!(
+            s.presentation().slides[0]
+                .code
+                .contains("data-id=\"slyde-1\"")
+        );
+        assert!(
+            s.presentation().slides[1]
+                .code
+                .contains("data-id=\"slyde-1\"")
+        );
+
+        let err = s
+            .mutate_element("slyde-1", None, Some("Wrong".into()), None, None)
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::AmbiguousElement { slides: 2, .. }),
+            "an ambiguous handle must fail loudly: {err:?}"
+        );
+        assert!(
+            !s.presentation().slides[0].code.contains("Wrong")
+                && !s.presentation().slides[1].code.contains("Wrong"),
+            "a rejected edit changes nothing"
+        );
+
+        let edited = s
+            .mutate_element(
+                "slyde-1",
+                Some("sld2"),
+                Some("Second, edited".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(edited, "sld2");
+        assert!(s.presentation().slides[0].code.contains("First slide"));
+        assert!(s.presentation().slides[1].code.contains("Second, edited"));
+
+        assert!(matches!(
+            s.mutate_element("slyde-1", Some("missing"), Some("x".into()), None, None),
+            Err(CoreError::SlideNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn scoped_element_edit_still_reports_missing_elements() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>Only slide</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            s.mutate_element("nope", Some("sld1"), Some("x".into()), None, None),
+            Err(CoreError::ElementNotFound { .. })
+        ));
+    }
+
+    #[test]
+    fn consecutive_typing_merges_into_one_history_entry() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        let before = s.view().history_len;
+
+        for i in 0..12 {
+            s.set_title(format!("Deck {i}")).unwrap();
+        }
+        assert_eq!(
+            s.view().history_len,
+            before + 1,
+            "a rename burst is one undo step, not twelve"
+        );
+        assert_eq!(s.presentation().title, "Deck 11");
+
+        s.undo().unwrap();
+        assert_eq!(s.presentation().title, "Deck", "one undo reverts the burst");
+        assert_eq!(s.presentation().slides.len(), 1);
+    }
+
+    #[test]
+    fn coalescing_is_scoped_by_slide_and_by_edit_kind() {
+        let mut s = state();
+        for (i, id) in ["a", "b"].iter().enumerate() {
+            s.upsert_slide(
+                i,
+                Some((*id).into()),
+                format!("<h1>{id}</h1>"),
+                TemplateType::Code,
+                vec![],
+            )
+            .unwrap();
+        }
+        let before = s.view().history_len;
+
+        s.set_notes("a", Some("first note".into())).unwrap();
+        s.set_notes("a", Some("first note, extended".into()))
+            .unwrap();
+        assert_eq!(
+            s.view().history_len,
+            before + 1,
+            "notes typed on one slide merge"
+        );
+
+        s.set_notes("b", Some("other slide".into())).unwrap();
+        assert_eq!(
+            s.view().history_len,
+            before + 2,
+            "another slide is another edit"
+        );
+
+        s.set_title("Renamed deck").unwrap();
+        assert_eq!(
+            s.view().history_len,
+            before + 3,
+            "a different label never merges"
+        );
+    }
+
+    #[test]
+    fn coalescing_never_merges_across_an_undo() {
+        let mut s = state();
+        s.set_title("First").unwrap();
+        s.undo().unwrap();
+        assert_eq!(s.presentation().title, "Deck");
+
+        s.set_title("Second").unwrap();
+        assert_eq!(s.presentation().title, "Second");
+        assert!(
+            !s.can_redo(),
+            "a new edit after undo drops the redo branch, it does not merge into it"
+        );
+        assert_eq!(
+            s.history_labels(),
+            vec!["init", "title"],
+            "the new edit starts its own entry"
+        );
+
+        s.undo().unwrap();
+        assert_eq!(
+            s.presentation().title,
+            "Deck",
+            "one undo still reaches the pre-edit state"
+        );
     }
 }

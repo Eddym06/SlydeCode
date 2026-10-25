@@ -14,8 +14,9 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AspectRatio {
+    #[default]
     #[serde(rename = "16:9")]
     R16x9,
     #[serde(rename = "4:3")]
@@ -52,27 +53,16 @@ impl AspectRatio {
     }
 }
 
-impl Default for AspectRatio {
-    fn default() -> Self {
-        Self::R16x9
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateType {
+    #[default]
     Code,
     Diagram,
     Bullet,
     Hero,
     ImageLayout,
     Chart,
-}
-
-impl Default for TemplateType {
-    fn default() -> Self {
-        Self::Code
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +81,53 @@ pub enum AnimationKind {
     BlurIn,
     BounceIn,
 }
+
+/// Every animation kind as a wire id, in the order the product presents them.
+///
+/// This is the single source of truth for the MCP tool schema, the copilot tool
+/// schema and the copilot prompt. `AnimationKind::id` is an exhaustive match, so
+/// adding a variant without listing it here is a compile error.
+pub const ANIMATION_KIND_IDS: [&str; 12] = [
+    "fade_up",
+    "fade",
+    "scale_in",
+    "slide_in_left",
+    "slide_in_right",
+    "typewriter",
+    "spin",
+    "rotate_in",
+    "pulse",
+    "flip_up",
+    "blur_in",
+    "bounce_in",
+];
+
+impl AnimationKind {
+    /// Wire id, matching the serde representation and the tool schemas.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::FadeUp => "fade_up",
+            Self::Fade => "fade",
+            Self::ScaleIn => "scale_in",
+            Self::SlideInLeft => "slide_in_left",
+            Self::SlideInRight => "slide_in_right",
+            Self::Typewriter => "typewriter",
+            Self::Spin => "spin",
+            Self::RotateIn => "rotate_in",
+            Self::Pulse => "pulse",
+            Self::FlipUp => "flip_up",
+            Self::BlurIn => "blur_in",
+            Self::BounceIn => "bounce_in",
+        }
+    }
+}
+
+/// Every built-in theme id, in the order the pickers present them.
+///
+/// Same contract as [`ANIMATION_KIND_IDS`]: the tool schemas and the copilot
+/// prompt read this list instead of keeping their own copy. `Theme::resolve`
+/// must accept every entry (enforced by a test).
+pub const THEME_IDS: [&str; 6] = ["studio", "paper", "night", "terminal", "academic", "pitch"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnimationStep {
@@ -113,17 +150,12 @@ fn default_easing() -> String {
     "cubic-bezier(.16,1,.3,1)".to_string()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Author {
+    #[default]
     Ai,
     Human,
-}
-
-impl Default for Author {
-    fn default() -> Self {
-        Self::Ai
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -264,18 +296,13 @@ fn is_css_color(value: &str) -> bool {
         && v.ends_with(')')
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FitMode {
     Contain,
+    #[default]
     Cover,
     Fill,
-}
-
-impl Default for FitMode {
-    fn default() -> Self {
-        Self::Cover
-    }
 }
 
 /// Structured elements that can be embedded, manipulated or extracted inside slides.
@@ -365,11 +392,15 @@ impl Slide {
     }
 
     pub fn find_element(&self, element_id: &str) -> Option<&SlideElement> {
-        self.elements.iter().find(|el| el.element_id() == element_id)
+        self.elements
+            .iter()
+            .find(|el| el.element_id() == element_id)
     }
 
     pub fn find_element_mut(&mut self, element_id: &str) -> Option<&mut SlideElement> {
-        self.elements.iter_mut().find(|el| el.element_id() == element_id)
+        self.elements
+            .iter_mut()
+            .find(|el| el.element_id() == element_id)
     }
 }
 
@@ -474,5 +505,43 @@ mod tests {
         assert_eq!(deck.slide_index("b"), Some(1));
         assert_eq!(deck.slide("a").unwrap().code, "<h1>A</h1>");
         assert!(deck.slide("missing").is_none());
+    }
+
+    /// The tool schemas and the copilot prompt read `ANIMATION_KIND_IDS` instead
+    /// of keeping their own copy. This test is what keeps the wire list honest:
+    /// every id must deserialize, and the list must not repeat or drop one.
+    #[test]
+    fn animation_kind_ids_cover_every_variant() {
+        assert_eq!(ANIMATION_KIND_IDS.len(), 12);
+        for id in ANIMATION_KIND_IDS {
+            let parsed: AnimationKind = serde_json::from_str(&format!("\"{id}\""))
+                .unwrap_or_else(|error| panic!("{id} is not a wire id: {error}"));
+            assert_eq!(parsed.id(), id, "id() and serde must agree on {id}");
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                format!("\"{id}\""),
+                "serialization drifted from the published id"
+            );
+        }
+        let mut unique = ANIMATION_KIND_IDS.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ANIMATION_KIND_IDS.len(), "duplicate ids");
+    }
+
+    /// Same contract for themes: the pickers, the prompt and the schemas offer
+    /// exactly what `Theme::resolve` accepts.
+    #[test]
+    fn theme_ids_all_resolve() {
+        for id in THEME_IDS {
+            let theme = Theme::resolve(id).unwrap_or_else(|| panic!("{id} does not resolve"));
+            assert_eq!(theme.id, id, "resolved id drifted from the published id");
+            assert!(theme.validate().is_ok(), "{id} is not a valid theme");
+        }
+        assert_eq!(
+            Theme::resolve("neon").map(|t| t.id),
+            None,
+            "resolve must not invent themes outside THEME_IDS"
+        );
     }
 }
