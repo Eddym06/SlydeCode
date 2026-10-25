@@ -14,10 +14,18 @@ export function readToken() {
 }
 
 export function createClient(token) {
+  // The raw query form is still needed where the browser owns the request and
+  // headers are impossible: the WebSocket handshake, plain <a download> links and
+  // window.open. Everything else authenticates with a bearer header, so the
+  // session token stays out of URLs, history and request logs.
   const query = `t=${encodeURIComponent(token)}`;
+  const authHeaders = { authorization: `Bearer ${token}` };
 
   async function json(path, init) {
-    const response = await fetch(path, init);
+    const response = await fetch(path, {
+      ...init,
+      headers: { ...authHeaders, ...((init && init.headers) || {}) },
+    });
     let payload = null;
     try {
       payload = await response.json();
@@ -37,11 +45,11 @@ export function createClient(token) {
     token,
 
     getState() {
-      return json(`/api/state?${query}`);
+      return json(`/api/state`);
     },
 
     command(action, extra = {}) {
-      return json(`/api/command?${query}`, {
+      return json(`/api/command`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, ...extra }),
@@ -50,7 +58,7 @@ export function createClient(token) {
 
     /** Opens a `.slyde` file uploaded from the user's disk. */
     openDeck(text) {
-      return json(`/api/deck/open?${query}`, {
+      return json(`/api/deck/open`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: text,
@@ -58,19 +66,19 @@ export function createClient(token) {
     },
 
     async copilotConfig() {
-      const payload = await json(`/api/copilot/config?${query}`);
+      const payload = await json(`/api/copilot/config`);
       return payload.config;
     },
 
     async copilotModels(provider) {
       const payload = await json(
-        `/api/copilot/models?provider=${encodeURIComponent(provider)}&${query}`
+        `/api/copilot/models?provider=${encodeURIComponent(provider)}`
       );
       return payload.models || [];
     },
 
     async copilotSaveKey(provider, key) {
-      const payload = await json(`/api/copilot/key?${query}`, {
+      const payload = await json(`/api/copilot/key`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider, key }),
@@ -84,9 +92,9 @@ export function createClient(token) {
      * not need an EventSource (which cannot POST or carry an abort signal).
      */
     async streamChat(payload, { signal, onEvent } = {}) {
-      const response = await fetch(`/api/copilot/chat?${query}`, {
+      const response = await fetch(`/api/copilot/chat`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify(payload),
         signal,
       });
@@ -148,10 +156,10 @@ export function createClient(token) {
      * Progress arrives over the WebSocket as `export_progress` events.
      */
     async exportDeck(format) {
-      const response = await fetch(
-        `/api/export?format=${encodeURIComponent(format)}&${query}`,
-        { method: "POST" }
-      );
+      const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`, {
+        method: "POST",
+        headers: authHeaders,
+      });
       if (!response.ok) {
         let payload = null;
         try {

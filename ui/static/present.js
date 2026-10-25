@@ -39,6 +39,8 @@ if (!isNaN(hashVal) && hashVal >= 1) {
   index = hashVal - 1;
 }
 let sandboxOrigin = "";
+// Slide documents require their own token; it is not the session token.
+let sourceQuery = "";
 let slideKey = "";
 let hudTimer = null;
 let pendingSteps = [];
@@ -121,13 +123,13 @@ function renderSpeakerConsole() {
   if (scCurrent) scCurrent.textContent = String(index + 1);
   if (scTotal) scTotal.textContent = String(slides.length);
   if (scCurrentFrame) {
-    scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?static=1`;
+    scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?static=1${sourceQuery}`;
   }
   if (index + 1 < slides.length) {
     const nextSlide = slides[index + 1];
     if (scNextFrame) {
       scNextFrame.hidden = false;
-      scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
+      scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1${sourceQuery}`;
     }
     if (noNextHint) noNextHint.hidden = true;
   } else {
@@ -193,7 +195,7 @@ function applyView(next) {
     slideStartSeconds = timerSeconds;
     pendingSteps = slide.animation.slice();
     introPlayed = false;
-    if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
+    if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}${sourceQuery}`;
   }
 
   try {
@@ -412,6 +414,9 @@ async function start(sessionToken) {
   try {
     const payload = await client.getState();
     sandboxOrigin = payload.sandbox_origin;
+    sourceQuery = payload.sandbox_token
+      ? `&t=${encodeURIComponent(payload.sandbox_token)}`
+      : "";
     applyView(payload.view);
     if (isSpeakerMode) toggleSpeakerMode(true);
     client.connect({

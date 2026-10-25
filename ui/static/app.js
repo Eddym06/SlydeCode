@@ -34,6 +34,11 @@ function boot(sessionToken) {
 
   let view = null;
   let sandboxOrigin = "";
+  // Authorizes slide documents only. It is embedded in every iframe URL, so a
+  // slide's own script can read it; the session token stays out of that document.
+  let sandboxToken = "";
+  /// `&t=…` suffix appended to every slide URL (`""` when the server sent none).
+  let sourceQuery = "";
   let selectedId = null;
   let stageKey = "";
   let thumbsKey = "";
@@ -114,7 +119,20 @@ function boot(sessionToken) {
   let activePanel = "inspector";
 
   // ---------- Command palette ----------
-  const PALETTE_THEMES = ["studio", "paper", "night", "terminal", "academic"];
+
+  /// Every theme the backend accepts (`slyde_core::THEME_IDS`), with the two dots
+  /// the inspector shows. Both pickers read this list, so a theme can never be
+  /// offered in one place and missing in another. `theme.<id>` must exist in both
+  /// locale files.
+  const THEME_CHOICES = [
+    { id: "studio", dots: ["#7C3AED", "#FF6B4A"] },
+    { id: "paper", dots: ["#2C2B2A", "#D97706"] },
+    { id: "night", dots: ["#9B6BFF", "#FF8265"] },
+    { id: "terminal", dots: ["#00FF66", "#00E5FF"] },
+    { id: "academic", dots: ["#111111", "#0055D4"] },
+    { id: "pitch", dots: ["#0F172A", "#38BDF8"] },
+  ];
+  const PALETTE_THEMES = THEME_CHOICES.map((choice) => choice.id);
   const PALETTE_RATIOS = ["16:9", "4:3", "9:16"];
 
   function openPalette(scope = {}) {
@@ -726,7 +744,7 @@ function boot(sessionToken) {
       button.innerHTML = `
         <span class="thumb-media" style="aspect-ratio:${w}/${h}">
           <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1" aria-hidden="true" title=""
-            src="${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1"></iframe>
+            src="${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1${sourceQuery}"></iframe>
         </span>
         <span class="thumb-foot">
           <span class="thumb-index">${String(index + 1).padStart(2, "0")}</span>
@@ -778,7 +796,7 @@ function boot(sessionToken) {
     if (key !== stageKey) {
       stageKey = key;
       structureNodes = [];
-      els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1&edit=1`;
+      els.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(current.id)}?static=1&edit=1${sourceQuery}`;
     }
     fitStage(d);
   }
@@ -916,7 +934,12 @@ function boot(sessionToken) {
 
   function applyElementStyle(style) {
     if (!selectedElement) return;
-    run("mutate_element", { element_id: selectedElement.id, style });
+    // Generated handles repeat in every slide, so the edit is always scoped.
+    run("mutate_element", {
+      slide_id: selectedElement.slideId || selectedId,
+      element_id: selectedElement.id,
+      style,
+    });
   }
 
   function deselectElement() {
@@ -957,7 +980,13 @@ function boot(sessionToken) {
       elementEditing = false;
       const id = data.id;
       const value = typeof data.value === "string" ? data.value : "";
-      if (id) run("mutate_element", { element_id: id, text: value });
+      if (id) {
+        run("mutate_element", {
+          slide_id: selectedId,
+          element_id: id,
+          text: value,
+        });
+      }
     } else if (data.type === "tree") {
       structureNodes = Array.isArray(data.nodes) ? data.nodes : [];
       if (view && inspectorSubtab === "slide") renderInspector(view.presentation);
@@ -1139,13 +1168,36 @@ function boot(sessionToken) {
     });
   }
 
-  function renderInspector(d) {    const active = document.activeElement;
+  function renderInspector(d) {
+    const active = document.activeElement;
     const notesFocused = active && active.classList && active.classList.contains("notes");
+    // The caret is destroyed when the textarea is rebuilt; remember it so typing
+    // in the middle of a note does not jump to the end every autosave.
+    const notesCaret =
+      notesFocused && typeof active.selectionStart === "number"
+        ? { start: active.selectionStart, end: active.selectionEnd, scroll: active.scrollTop }
+        : null;
 
     const current = slide();
-    const themeOptions = ["studio", "paper", "night"]
-      .map((id) => `<option value="${id}" ${d.theme.id === id ? "selected" : ""}>${escapeHtml(t(`theme.${id}`))}</option>`)
-      .join("");
+    const themeOptions = THEME_CHOICES.map(
+      (choice) =>
+        `<option value="${choice.id}" ${d.theme.id === choice.id ? "selected" : ""}>${escapeHtml(
+          t(`theme.${choice.id}`)
+        )}</option>`
+    ).join("");
+    const themeSwatches = THEME_CHOICES.map(
+      (choice) => `
+          <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
+            d.theme.id === choice.id
+          }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
+            <span class="swatch-dots">
+              ${choice.dots
+                .map((color) => `<span class="swatch-dot" style="background:${color}"></span>`)
+                .join("")}
+            </span>
+            <span class="swatch-name">${escapeHtml(t(`theme.${choice.id}`))}</span>
+          </button>`
+    ).join("");
     const ratioOptions = ["16:9", "4:3", "9:16"]
       .map((ratio) => `<option value="${ratio}" ${d.aspect_ratio === ratio ? "selected" : ""}>${ratio}</option>`)
       .join("");
@@ -1154,27 +1206,7 @@ function boot(sessionToken) {
       <section class="field">
         <span class="field-label">${escapeHtml(t("inspector.themeSwatches"))}</span>
         <div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">
-          <button type="button" class="theme-swatch" data-theme="studio" role="radio" aria-checked="${d.theme.id === "studio"}" aria-label="Studio">
-            <span class="swatch-dots">
-              <span class="swatch-dot" style="background:#7C3AED"></span>
-              <span class="swatch-dot" style="background:#FF6B4A"></span>
-            </span>
-            <span class="swatch-name">Studio</span>
-          </button>
-          <button type="button" class="theme-swatch" data-theme="paper" role="radio" aria-checked="${d.theme.id === "paper"}" aria-label="Paper">
-            <span class="swatch-dots">
-              <span class="swatch-dot" style="background:#2C2B2A"></span>
-              <span class="swatch-dot" style="background:#D97706"></span>
-            </span>
-            <span class="swatch-name">Paper</span>
-          </button>
-          <button type="button" class="theme-swatch" data-theme="night" role="radio" aria-checked="${d.theme.id === "night"}" aria-label="Night">
-            <span class="swatch-dots">
-              <span class="swatch-dot" style="background:#9B6BFF"></span>
-              <span class="swatch-dot" style="background:#FF8265"></span>
-            </span>
-            <span class="swatch-name">Night</span>
-          </button>
+          ${themeSwatches}
         </div>
       </section>
       <section class="field">
@@ -1323,6 +1355,14 @@ function boot(sessionToken) {
 
     if (notesFocused && notes) {
       notes.focus();
+      if (notesCaret) {
+        try {
+          notes.setSelectionRange(notesCaret.start, notesCaret.end);
+        } catch {
+          // Browsers throw on detached nodes; focus alone is still an improvement.
+        }
+        notes.scrollTop = notesCaret.scroll;
+      }
     }
     applyI18n(els.inspector);
   }
@@ -1825,13 +1865,13 @@ function boot(sessionToken) {
     if (presentEls.scCurrent) presentEls.scCurrent.textContent = String(presentIndex + 1);
     if (presentEls.scTotal) presentEls.scTotal.textContent = String(slides.length);
     if (presentEls.scCurrentFrame) {
-      presentEls.scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1`;
+      presentEls.scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1${sourceQuery}`;
     }
     if (presentIndex + 1 < slides.length) {
       const nextSlide = slides[presentIndex + 1];
       if (presentEls.scNextFrame) {
         presentEls.scNextFrame.hidden = false;
-        presentEls.scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
+        presentEls.scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1${sourceQuery}`;
       }
       if (presentEls.noNextHint) presentEls.noNextHint.hidden = true;
     } else {
@@ -1896,7 +1936,7 @@ function boot(sessionToken) {
       presentIntroPlayed = false;
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
-        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}`;
+        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
       }
     }
 
@@ -2305,6 +2345,8 @@ function boot(sessionToken) {
     try {
       const payload = await client.getState();
       sandboxOrigin = payload.sandbox_origin;
+      sandboxToken = payload.sandbox_token || "";
+      sourceQuery = sandboxToken ? `&t=${encodeURIComponent(sandboxToken)}` : "";
       setStatus("connecting");
       setupTemplatePicker();
       setupExportDropdown();
