@@ -1884,30 +1884,56 @@ test("editing a block only touches the slide that owns it", async () => {
   })()`);
 
   try {
-    // Select the second slide, then the block in the stage.
+    // Select the second slide, then the block in the stage. The stage iframe
+    // reloads whenever state lands, so a click that fires before the reload
+    // selects nothing; drive the click until the HUD confirms a selection
+    // instead of trusting a fixed delay.
     await page.evaluate(`document.querySelectorAll(".thumb")[1].click(); true`);
-    await sleep(900);
-    const stage = await page.evaluate(`(() => {
-      const rect = document.getElementById("slide-frame").getBoundingClientRect();
-      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-    })()`);
-    for (const type of ["mousePressed", "mouseReleased"]) {
-      await page.send("Input.dispatchMouseEvent", {
-        type,
-        x: stage.x,
-        y: stage.y,
-        button: "left",
-        clickCount: 1,
-      });
+    await sleep(600);
+
+    const clickStageCenter = async () => {
+      const point = await page.evaluate(`(() => {
+        const rect = document.getElementById("slide-frame").getBoundingClientRect();
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      })()`);
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await page.send("Input.dispatchMouseEvent", {
+          type,
+          x: point.x,
+          y: point.y,
+          button: "left",
+          clickCount: 1,
+        });
+      }
+    };
+
+    let hudTag = "";
+    for (let attempt = 0; attempt < 8 && !hudTag; attempt += 1) {
+      await clickStageCenter();
+      await sleep(300);
+      hudTag = await page.evaluate(`(() => {
+        const hud = document.getElementById("element-hud");
+        return hud.hidden ? "" : document.getElementById("element-hud-tag").textContent;
+      })()`);
     }
-    await sleep(500);
+    assert.match(
+      String(hudTag),
+      /^#\S+$/,
+      "the stage selected the block on the second slide"
+    );
+
     await page.evaluate(
       `document.querySelector('[data-element-action="align-left"]').click(); true`
     );
-    await sleep(600);
 
-    const sent = await page.evaluate(`window.__sentCommands`);
-    const mutation = sent.filter((command) => command.action === "mutate_element").pop();
+    // The command travels over fetch; poll for it rather than racing a delay.
+    let mutation = null;
+    const mutationStarted = Date.now();
+    while (!mutation && Date.now() - mutationStarted < 5000) {
+      const sent = await page.evaluate(`window.__sentCommands`);
+      mutation = sent.filter((command) => command.action === "mutate_element").pop() ?? null;
+      if (!mutation) await sleep(150);
+    }
     assert.ok(mutation, "the HUD sent a mutate_element command");
     assert.equal(mutation.element_id, "slyde-1");
     assert.equal(
