@@ -238,7 +238,7 @@ MIT and the license is compatible with a commercial product.
   clippy-driver.exe --edition 2024 --crate-type lib --target x86_64-unknown-linux-gnu -D warnings <file>.rs --emit metadata -o out.rmeta
   ```
   with `#![allow(dead_code)]` and the file's own type stubs; it reproduces "variable does not need to be mutable" exactly.
-- **A fixed sleep after a state change races the stage iframe reload.** The scoped-edit E2E clicked the canvas 900 ms after a slide switch and asserted on the outgoing command 600 ms after a HUD click: on the CI runner the click landed while the frame was still reloading, nothing got selected, and the suite failed once and passed once without a code change. Drive the interaction until the observable effect appears (HUD tag non-empty) and poll for the outcome; a retry loop with a bound turns a coin flip into a diagnostic ("the stage selected nothing" vs "the HUD sent nothing").
+- **A fixed sleep after a state change races the stage iframe reload.** The scoped-edit E2E clicked the canvas 900 ms after a slide switch and asserted on the outgoing command 600 ms after a HUD click: on the CI runner the click landed while the frame was still reloading, nothing got selected, and the suite failed twice with the same test before passing again without a code change. The stage document is the culprit — its selection handlers only exist once the sandbox script has run, which is what sets `data-slyde-ready="1"`. Wait for that flag through the iframe's own CDP target before clicking, and still poll for the observable outcome afterwards; the retry loop alone only turned the flake into a nicer error message.
 
 ## Design System Reference
 

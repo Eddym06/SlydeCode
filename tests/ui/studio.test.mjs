@@ -1818,21 +1818,29 @@ test("selects a block on the canvas and lists the slide structure", async () => 
   }).then((r) => r.json())`);
   await sleep(400);
   await page.evaluate(`document.querySelectorAll(".thumb")[0].click(); true`);
-  await sleep(900);
+  const addedState = await page.evaluate(
+    `fetch("/api/state?t=${token}").then((r) => r.json())`
+  );
+  await waitForStageReady(addedState.view.presentation.slides[0].id);
 
-  const stage = await page.evaluate(`(() => {
-    const rect = document.getElementById("slide-frame").getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-  })()`);
-  for (const type of ["mousePressed", "mouseReleased"]) {
-    await page.send("Input.dispatchMouseEvent", {
-      type,
-      x: stage.x,
-      y: stage.y,
-      button: "left",
-      clickCount: 1,
-    });
-  }
+  const stagePoint = () =>
+    page.evaluate(`(() => {
+      const rect = document.getElementById("slide-frame").getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`);
+  const clickStage = async () => {
+    const stage = await stagePoint();
+    for (const type of ["mousePressed", "mouseReleased"]) {
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: stage.x,
+        y: stage.y,
+        button: "left",
+        clickCount: 1,
+      });
+    }
+  };
+  await clickStage();
   await sleep(500);
 
   const selection = await page.evaluate(`({
