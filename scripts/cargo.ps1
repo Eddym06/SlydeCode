@@ -25,10 +25,21 @@ function Get-VsInstallPath {
     return $null
 }
 
+# A machine without the C++ build tools cannot link the MSVC target at all
+# (`LNK1181: kernel32.lib`). Rather than failing, fall through to the GNU
+# toolchain, which is the verified target for this project on Windows.
+$gnuToolchain = "stable-x86_64-pc-windows-gnu"
+$useGnu = $false
+
 if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
     $vs = Get-VsInstallPath
     if (-not $vs) {
-        throw "Visual Studio C++ build tools not found. Install 'Desktop development with C++' or use the GNU toolchain."
+        $gnu = (& rustup toolchain list 2>$null) | Select-String -SimpleMatch $gnuToolchain
+        if (-not $gnu) {
+            throw "No C++ build tools and no GNU toolchain. Run: rustup toolchain install $gnuToolchain"
+        }
+        Write-Host "MSVC build tools not found; using $gnuToolchain" -ForegroundColor DarkYellow
+        $useGnu = $true
     }
     $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
     if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found under $vs" }
@@ -41,5 +52,9 @@ if (-not (Get-Command link.exe -ErrorAction SilentlyContinue)) {
     }
 }
 
-& cargo @args 2>&1 | ForEach-Object { "$_" }
+if ($useGnu) {
+    & cargo "+$gnuToolchain" @args 2>&1 | ForEach-Object { "$_" }
+} else {
+    & cargo @args 2>&1 | ForEach-Object { "$_" }
+}
 exit $LASTEXITCODE

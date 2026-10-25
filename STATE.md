@@ -166,11 +166,14 @@ Nothing partially implemented on the branch.
 
 ## Build & Platform Status
 
-- Windows: **verified** with `cargo +stable-x86_64-pc-windows-gnu`. MSVC blocked
-  by the missing Windows SDK; fmt/clippy must run through the gnu toolchain.
-- macOS: not verified (no machine).
-- Linux: not verified locally; CI runs fmt, clippy and `cargo test` on
-  `ubuntu-latest`, and the studio suite on `windows-latest`.
+- Windows: **verified** with `cargo +stable-x86_64-pc-windows-gnu` (full suite,
+  studio E2E, all exports). MSVC has no C++ build tools on this machine, so
+  `scripts/cargo.ps1` now falls back to the GNU toolchain instead of failing.
+- macOS / Linux: `slyde-core`, `slyde-pptx` and `slyde-export` are **cross-checked**
+  for `x86_64-apple-darwin` and `x86_64-unknown-linux-gnu` and compile clean.
+  `slyde-server` cannot be cross-built from Windows (`ring` needs a C toolchain
+  for the target), so CI's ubuntu job is the real Linux verification. No manual
+  pass on either OS yet.
 
 ## Backlog (Prioritized)
 

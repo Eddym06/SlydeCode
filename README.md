@@ -63,6 +63,19 @@
 
 ---
 
+## Platform support
+
+| Platform | Status |
+|---|---|
+| Windows (x86_64-pc-windows-gnu) | Verified: full test suite, studio E2E, exports |
+| Windows (x86_64-pc-windows-msvc) | Not verified on the development machine (no C++ build tools; `scripts/cargo.ps1` falls back to GNU there) |
+| Linux | Pure crates compile for `x86_64-unknown-linux-gnu`; CI runs the Rust suite on ubuntu-latest. No manual pass yet |
+| macOS | Pure crates compile for `x86_64-apple-darwin`; no manual pass yet |
+
+`slyde-server` cannot be cross-*built* from Windows because `reqwest`/rustls pulls
+`ring`, whose build script needs a C toolchain for the target. That is why the
+Linux/macOS check in CI matters.
+
 ## Requirements
 
 - **Rust:** Stable toolchain (`+stable-x86_64-pc-windows-gnu` recommended on Windows).
