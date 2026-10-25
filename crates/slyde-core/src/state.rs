@@ -6,8 +6,8 @@
 
 use crate::error::CoreError;
 use crate::model::{
-    AnimationStep, AspectRatio, Presentation, Slide, SlideId, StateView, TemplateType, Theme,
-    now_ms,
+    AnimationStep, AspectRatio, ImageRect, Presentation, Slide, SlideId, StateView, TemplateType,
+    Theme, now_ms,
 };
 
 pub const DEFAULT_MAX_HISTORY: usize = 100;
@@ -335,6 +335,88 @@ impl PresentationState {
 
         self.commit("mutate_element", next);
         Ok(slide_id)
+    }
+
+    /// Appends an image block to a slide and returns its element handle.
+    ///
+    /// The image is absolutely positioned inside the stage, which is what makes
+    /// "paste, then drag and resize" work without touching the author's layout:
+    /// the block lives above the slide content and never reflows it.
+    pub fn insert_image(
+        &mut self,
+        slide_id: &str,
+        src: &str,
+        rect: ImageRect,
+    ) -> Result<String, CoreError> {
+        validate_asset_src(src)?;
+        rect.validate()?;
+
+        let mut next = self.presentation().clone();
+        let slide = next
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+            .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
+
+        let id = unique_element_id(&slide.code, "image");
+        let tag = format!(
+            r#"<img data-id="{id}" class="slyde-image" src="{src}" alt="" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; object-fit: cover" />"#,
+            src = escape_attribute(src),
+            x = css_px(rect.x),
+            y = css_px(rect.y),
+            w = css_px(rect.w),
+            h = css_px(rect.h),
+        );
+        // A newline keeps the stored code readable in Developer Mode.
+        slide.code.push('\n');
+        slide.code.push_str(&tag);
+
+        self.commit("insert_image", next);
+        Ok(id)
+    }
+
+    /// Moves and/or resizes an element by rewriting its geometry declarations.
+    ///
+    /// Replacing the declarations instead of appending them is what keeps a drag
+    /// from leaving a trail of stale `left:`/`top:` values in the stored code.
+    pub fn set_element_geometry(
+        &mut self,
+        slide_id: &str,
+        element_id: &str,
+        rect: ImageRect,
+    ) -> Result<(), CoreError> {
+        rect.validate()?;
+
+        let mut next = self.presentation().clone();
+        let slide = next
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+            .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
+
+        let span = find_element_span(&slide.code, element_id).ok_or_else(|| {
+            CoreError::ElementNotFound {
+                element_id: element_id.to_string(),
+            }
+        })?;
+
+        let props: [(&str, String); 5] = [
+            ("position", "absolute".to_string()),
+            ("left", css_px(rect.x)),
+            ("top", css_px(rect.y)),
+            ("width", css_px(rect.w)),
+            ("height", css_px(rect.h)),
+        ];
+        let new_open = apply_style_properties(&slide.code[span.open.clone()], &props);
+
+        let mut out = String::with_capacity(slide.code.len() + new_open.len());
+        out.push_str(&slide.code[..span.open.start]);
+        out.push_str(&new_open);
+        out.push_str(&slide.code[span.open.end..]);
+        slide.code = out;
+
+        self.commit("set_geometry", next);
+        Ok(())
     }
 
     /// Insert a new slide or update an existing one.
@@ -719,6 +801,156 @@ fn merge_style_attribute(open_tag: &str, style: Option<&str>) -> String {
         }
         None => open_tag.to_string(),
     }
+}
+
+/// Sets specific declarations in the element's `style` attribute.
+///
+/// [`merge_style_attribute`] appends, which is right for a one-off tweak but
+/// wrong for geometry: dragging an image would leave a trail of `left:` values.
+/// This one replaces the properties it is given, keeps every other declaration
+/// (including ones the author wrote) and creates the attribute when missing.
+fn apply_style_properties(open_tag: &str, props: &[(&str, String)]) -> String {
+    let lower = open_tag.to_ascii_lowercase();
+
+    // Locate `style="…"` / `style='…'`, if any.
+    let located = ['"', '\''].iter().find_map(|quote| {
+        let needle = format!("style={quote}");
+        let start = lower.find(&needle)? + needle.len();
+        let end = open_tag[start..].find(*quote)? + start;
+        Some((start, end, *quote))
+    });
+
+    let Some((value_start, value_end, quote)) = located else {
+        if props.is_empty() {
+            return open_tag.to_string();
+        }
+        let declarations =
+            render_declarations(props.iter().map(|(key, value)| (*key, value.clone())));
+        return match open_tag.rfind('>') {
+            Some(position) => {
+                let mut out = String::with_capacity(open_tag.len() + declarations.len() + 10);
+                out.push_str(open_tag[..position].trim_end());
+                out.push_str(&format!(" style=\"{declarations}\">"));
+                out
+            }
+            None => open_tag.to_string(),
+        };
+    };
+
+    // Parse the existing declarations so authored ones survive the rewrite.
+    let mut declarations: Vec<(String, String)> = open_tag[value_start..value_end]
+        .split(';')
+        .filter_map(|part| {
+            let (key, value) = part.split_once(':')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key.to_string(), value.trim().to_string()))
+        })
+        .collect();
+
+    for (key, value) in props {
+        match declarations
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+        {
+            Some(slot) => slot.1 = value.clone(),
+            None => declarations.push(((*key).to_string(), value.clone())),
+        }
+    }
+
+    let rendered = render_declarations(declarations);
+    let mut out = String::with_capacity(open_tag.len() + rendered.len());
+    out.push_str(&open_tag[..value_start]);
+    out.push_str(&rendered);
+    out.push_str(&open_tag[value_end..]);
+    let _ = quote;
+    out
+}
+
+fn render_declarations(
+    declarations: impl IntoIterator<Item = (impl AsRef<str>, String)>,
+) -> String {
+    declarations
+        .into_iter()
+        .map(|(key, value)| format!("{}: {value}", key.as_ref().trim()))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// CSS pixels, without a trailing `.0` so the generated code stays readable.
+fn css_px(value: f32) -> String {
+    if (value - value.round()).abs() < f32::EPSILON {
+        format!("{}px", value.round() as i64)
+    } else {
+        format!("{value:.1}px")
+    }
+}
+
+/// Only the asset store and inline raster data URLs may become slide images.
+///
+/// Remote URLs are impossible anyway (the sandbox has `connect-src 'none'`), and
+/// for SVG the answer is no: an SVG served from the sandbox origin is a document
+/// that can carry script, and a slide must never be able to inject one.
+fn validate_asset_src(src: &str) -> Result<(), CoreError> {
+    let src = src.trim();
+    // Mirror of the server's asset naming rule: a hex stem plus a raster
+    // extension. Anything else can only 404, and an `.svg` there would be a
+    // document on the sandbox origin, so it is refused outright.
+    let stored = src.strip_prefix("/assets/").is_some_and(|name| {
+        name.rsplit_once('.').is_some_and(|(stem, extension)| {
+            (8..=40).contains(&stem.len())
+                && stem.chars().all(|ch| ch.is_ascii_hexdigit())
+                && matches!(extension, "png" | "jpg" | "webp" | "gif")
+        })
+    });
+
+    const DATA_PREFIXES: [&str; 4] = [
+        "data:image/png;base64,",
+        "data:image/jpeg;base64,",
+        "data:image/webp;base64,",
+        "data:image/gif;base64,",
+    ];
+    let inline =
+        DATA_PREFIXES.iter().any(|prefix| src.starts_with(prefix)) && src.len() <= 12 * 1024 * 1024;
+
+    if stored || inline {
+        Ok(())
+    } else {
+        Err(CoreError::InvalidAsset(
+            "images must come from the asset store (/assets/…) or be a base64 raster data URL"
+                .into(),
+        ))
+    }
+}
+
+/// Smallest free `prefix-N` handle in the slide document.
+fn unique_element_id(code: &str, prefix: &str) -> String {
+    for index in 1..10_000 {
+        let candidate = format!("{prefix}-{index}");
+        let needle = format!("\"{candidate}\"");
+        if !code.contains(&needle) {
+            return candidate;
+        }
+    }
+    format!("{prefix}-{}-{}", std::process::id(), code.len())
+}
+
+/// Escapes a value for a double-quoted HTML attribute.
+fn escape_attribute(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Escapes plain text so `text` never injects markup; use `html` for markup.
@@ -1234,6 +1466,203 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn insert_image_appends_an_absolutely_positioned_block() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+
+        let id = s
+            .insert_image(
+                "sld1",
+                "/assets/0123456789abcdef.png",
+                ImageRect {
+                    x: 40.0,
+                    y: 60.0,
+                    w: 320.0,
+                    h: 180.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(id, "image-1");
+        let code = &s.presentation().slides[0].code;
+        assert!(code.contains("data-id=\"image-1\""), "{code}");
+        assert!(
+            code.contains("src=\"/assets/0123456789abcdef.png\""),
+            "{code}"
+        );
+        assert!(code.contains("position: absolute"), "{code}");
+        assert!(code.contains("left: 40px"), "{code}");
+        assert!(code.contains("width: 320px"), "{code}");
+        assert!(code.contains("object-fit: cover"), "{code}");
+
+        let second = s
+            .insert_image(
+                "sld1",
+                "/assets/fedcba9876543210.png",
+                ImageRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 100.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(second, "image-2", "each image gets its own handle");
+        assert!(s.can_undo());
+    }
+
+    #[test]
+    fn insert_image_rejects_unsafe_sources_and_bad_geometry() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        let ok = ImageRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+
+        for bad in [
+            "/assets/../settings.json",
+            "https://example.com/a.png",
+            "javascript:alert(1)",
+            "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+            "/assets/0123456789abcdef.svg",
+        ] {
+            let err = s.insert_image("sld1", bad, ok).unwrap_err();
+            assert!(
+                matches!(err, CoreError::InvalidAsset(_)),
+                "{bad} must be refused, got {err:?}"
+            );
+        }
+
+        assert!(matches!(
+            s.insert_image(
+                "sld1",
+                "/assets/0123456789abcdef.png",
+                ImageRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 0.0,
+                    h: 10.0
+                }
+            ),
+            Err(CoreError::InvalidGeometry(_))
+        ));
+        assert!(matches!(
+            s.insert_image("missing", "/assets/0123456789abcdef.png", ok),
+            Err(CoreError::SlideNotFound(_))
+        ));
+        assert!(!s.presentation().slides[0].code.contains("image-1"));
+    }
+
+    #[test]
+    fn geometry_rewrites_stale_declarations_instead_of_appending() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<img id=\"hero\" src=\"/assets/0123456789abcdef.png\" style=\"left: 10px; top: 10px; width: 100px; height: 100px; border-radius: 8px\">".into(),
+            TemplateType::ImageLayout,
+            vec![],
+        )
+        .unwrap();
+
+        s.set_element_geometry(
+            "sld1",
+            "hero",
+            ImageRect {
+                x: 50.0,
+                y: 70.0,
+                w: 200.0,
+                h: 120.0,
+            },
+        )
+        .unwrap();
+
+        let code = &s.presentation().slides[0].code;
+        assert!(code.contains("left: 50px"), "{code}");
+        assert!(
+            !code.contains("left: 10px"),
+            "the stale value is gone: {code}"
+        );
+        assert!(code.contains("width: 200px"), "{code}");
+        assert!(code.contains("position: absolute"), "{code}");
+        assert!(
+            code.contains("border-radius: 8px"),
+            "authored declarations survive: {code}"
+        );
+
+        // A second drag replaces again; it must not leave two `left:` values.
+        s.set_element_geometry(
+            "sld1",
+            "hero",
+            ImageRect {
+                x: 90.0,
+                y: 90.0,
+                w: 200.0,
+                h: 120.0,
+            },
+        )
+        .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert_eq!(code.matches("left:").count(), 1, "{code}");
+        assert!(code.contains("left: 90px"), "{code}");
+    }
+
+    #[test]
+    fn geometry_needs_a_real_element_and_a_valid_rect() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        let ok = ImageRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        assert!(matches!(
+            s.set_element_geometry("sld1", "nope", ok),
+            Err(CoreError::ElementNotFound { .. })
+        ));
+        assert!(matches!(
+            s.set_element_geometry(
+                "sld1",
+                "slyde-1",
+                ImageRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: f32::NAN,
+                    h: 10.0
+                }
+            ),
+            Err(CoreError::InvalidGeometry(_))
+        ));
+        assert!(matches!(
+            s.set_element_geometry("missing", "slyde-1", ok),
+            Err(CoreError::SlideNotFound(_))
+        ));
+    }
     #[test]
     fn remove_then_undo_restores_the_slide_at_its_original_index() {
         let mut s = state();

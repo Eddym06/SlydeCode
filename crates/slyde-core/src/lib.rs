@@ -12,8 +12,8 @@ pub mod state;
 pub use error::CoreError;
 pub use html::ensure_element_ids;
 pub use model::{
-    ANIMATION_KIND_IDS, AnimationKind, AnimationStep, AspectRatio, Author, Presentation, Slide,
-    SlideId, StateView, THEME_IDS, TemplateType, Theme,
+    ANIMATION_KIND_IDS, AnimationKind, AnimationStep, AspectRatio, Author, ImageRect, Presentation,
+    Slide, SlideId, StateView, THEME_IDS, TemplateType, Theme,
 };
 pub use project::{FILE_EXTENSION, FORMAT_ID, FORMAT_VERSION, ProjectFile};
 pub use state::{

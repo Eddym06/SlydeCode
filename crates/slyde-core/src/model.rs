@@ -53,6 +53,43 @@ impl AspectRatio {
     }
 }
 
+/// Placement of an image inside the slide canvas, in CSS pixels.
+///
+/// The canvas is a fixed-size stage (1280x720 for 16:9), so absolute pixels are
+/// the honest unit: they survive zoom, thumbnails and export unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImageRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl ImageRect {
+    /// A usable rectangle: finite, positive and within what a slide can hold.
+    pub fn validate(&self) -> Result<(), crate::CoreError> {
+        let values = [self.x, self.y, self.w, self.h];
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(crate::CoreError::InvalidGeometry(
+                "geometry must be finite".into(),
+            ));
+        }
+        if !(8.0..=200_000.0).contains(&self.w) || !(8.0..=200_000.0).contains(&self.h) {
+            return Err(crate::CoreError::InvalidGeometry(format!(
+                "size {}x{} is out of range (8..200000 px)",
+                self.w, self.h
+            )));
+        }
+        if self.x.abs() > 200_000.0 || self.y.abs() > 200_000.0 {
+            return Err(crate::CoreError::InvalidGeometry(format!(
+                "position ({}, {}) is out of range",
+                self.x, self.y
+            )));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateType {
