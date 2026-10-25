@@ -27,6 +27,7 @@ pub const TRIGGER_ANIMATION: &str = "trigger_animation";
 pub const SET_NOTES: &str = "set_notes";
 pub const MUTATE_ELEMENT: &str = "mutate_element";
 pub const GET_SELECTED_ELEMENT: &str = "get_selected_element";
+pub const SET_THEME: &str = "set_theme";
 
 pub fn definitions() -> Vec<ToolDef> {
     vec![
@@ -172,6 +173,24 @@ pub fn definitions() -> Vec<ToolDef> {
             },
         },
         ToolDef {
+            name: SET_THEME,
+            description: "Change the presentation theme palette in real time. Can switch to a base theme preset (studio, paper, night, terminal, academic, pitch) and optionally customize background, foreground, accent, muted colors, or font family.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "theme_id": { "type": "string", "enum": slyde_core::THEME_IDS, "description": "Base theme identifier" },
+                        "background": { "type": "string", "description": "Hex or CSS color for background" },
+                        "foreground": { "type": "string", "description": "Hex or CSS color for primary text" },
+                        "accent": { "type": "string", "description": "Hex or CSS color for accent highlight" },
+                        "muted": { "type": "string", "description": "Hex or CSS color for secondary text" },
+                        "font_family": { "type": "string", "description": "CSS font-family string" }
+                    },
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
             name: GET_SELECTED_ELEMENT,
             description: "Read properties, tag name and text of the element the user has currently focused or selected in the canvas.",
             schema: || {
@@ -238,7 +257,7 @@ pub async fn execute(
         READ_SLIDE => read_slide(state, &arguments).await,
         GET_SELECTED_ELEMENT => get_selected_element(state, &arguments).await,
         CREATE_PRESENTATION | UPSERT_SLIDE | REMOVE_SLIDE | MOVE_SLIDE | TRIGGER_ANIMATION
-        | SET_NOTES | MUTATE_ELEMENT => mutate(state, name, arguments).await,
+        | SET_NOTES | MUTATE_ELEMENT | SET_THEME => mutate(state, name, arguments).await,
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -518,6 +537,13 @@ mod tests {
         let schema = (create.schema)();
         let themes = schema["properties"]["theme"]["enum"].as_array().unwrap();
         assert_eq!(themes.len(), slyde_core::THEME_IDS.len());
+
+        let set_theme = definitions()
+            .into_iter()
+            .find(|tool| tool.name == SET_THEME)
+            .unwrap();
+        let set_theme_schema = (set_theme.schema)();
+        assert!(set_theme_schema["properties"]["theme_id"]["enum"].is_array());
 
         let mutate = definitions()
             .into_iter()

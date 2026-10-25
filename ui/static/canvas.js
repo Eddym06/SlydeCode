@@ -300,8 +300,13 @@ export function createCanvas({ frame, t, actions }) {
       }
     } else if (data.type === "image-paste") {
       insertDataUrl(data.dataUrl, data.natural);
-    } else if (data.type === "image-geometry") {
+    } else if (data.type === "geometry" || data.type === "image-geometry") {
+      // `image-geometry` is the pre-gizmo name; both carry stage pixels.
       commitGeometry(data.id, data.rect);
+    } else if (data.type === "dragging") {
+      // The sandbox repaints its own outline while dragging; the HUD would trail
+      // behind it, so it steps aside until the new selection rect arrives.
+      if (hud) hud.hidden = true;
     } else if (data.type === "tree") {
       structure = Array.isArray(data.nodes) ? data.nodes : [];
       actions.onStructure(structure);

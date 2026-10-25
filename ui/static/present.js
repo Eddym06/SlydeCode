@@ -2,10 +2,12 @@ import { createClient, readToken } from "./api.js";
 import { apply as applyI18n, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
+import { mountPresenterDraw } from "./presenter-draw.js";
 
 const token = readToken();
 const frame = document.getElementById("present-slide");
 const frameWrap = document.getElementById("present-frame");
+const presenterDraw = mountPresenterDraw(frameWrap);
 const empty = document.getElementById("present-empty");
 const hud = document.getElementById("hud");
 const currentEl = document.getElementById("current");
@@ -195,6 +197,7 @@ function applyView(next) {
     slideKey = key;
     slideStartSeconds = timerSeconds;
     reveal.reload();
+    if (presenterDraw) presenterDraw.clear();
     if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}${sourceQuery}`;
   }
 
@@ -377,6 +380,15 @@ function onKeydown(event) {
       break;
     case "fullscreen":
       toggleFullscreen();
+      break;
+    case "laser":
+      presenterDraw.toggle("laser");
+      break;
+    case "pen":
+      presenterDraw.toggle("pen");
+      break;
+    case "clearDraw":
+      presenterDraw.clear();
       break;
     case "escape":
       if (isBlackout) {

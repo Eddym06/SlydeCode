@@ -1,8 +1,20 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 15:30
+> Last updated: 2026-10-25 18:20
 
 ## Current Phase
+
+Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
+All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
+
+### Implemented & Verified in this round:
+- **Universal Canvas Transform Gizmo & Snapping**: Any DOM block (text, cards, images, diagrams) can be freely moved and resized with 8-point handles, magnetic guide snapping, and arrow-key nudge (1px / 10px with Shift).
+- **Canvas Pan & Smooth Zoom**: Space + drag for smooth stage panning and Ctrl + mouse wheel continuous zoom.
+- **Full Keyboard Editing Suite**: `Delete`/`Backspace` slide deletion, `Cmd+D`/`Ctrl+D` slide duplication, `Cmd+C`/`Cmd+V` slide copy/paste (`UiCommand::PasteSlide`), and `F5` / `Cmd+Enter` / `Cmd+Shift+Enter` instant presenter launch.
+- **Presenter Live Laser & Pen Tools**: Puntero láser virtual (`L`) con halo de degradado de marca y lápiz de anotación en directo (`P`) con borrado instantáneo (`C`) y sincronización automática de resolución HiDPI.
+- **Standalone Web Deck Export (`.html`)**: `slyde export --format html` y botón en UI para exportar un único archivo HTML offline 100% interactivo y autocontenido sin servidor ni conexión.
+- **Copilot `set_theme` & Magic Redesign**: Nueva herramienta para cambiar paletas en caliente y botón en el inspector para rediseñar diapositivas con IA.
+- **End-to-End Real Interaction & Stability Suite (`tests/ui/interaction.test.mjs`)**: 17 tests reales con Chrome CDP cubriendo manipulación con ratón/teclado, concurrencia, prevención de fugas DOM y estabilidad del backend.
 
 Phase 3.3 — **product completion on `feat/product-completion`.** Rust 220 tests and
 55 UI tests green (41 browser/CDP + 14 component); `cargo fmt --check` and

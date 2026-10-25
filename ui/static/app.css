@@ -504,6 +504,15 @@
   padding: 32px;
 }
 
+.stage.is-space-pan {
+  cursor: grab !important;
+}
+
+.stage.is-panning {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
 .stage-frame {
   position: relative;
   border-radius: var(--r-card);

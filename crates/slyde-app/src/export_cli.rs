@@ -24,6 +24,8 @@ enum Format {
     /// Rendered by the server and wrapped into a `.pptx` there, so the CLI and
     /// the UI export exactly the same file.
     Pptx,
+    /// Self-contained standalone HTML presentation.
+    Html,
 }
 
 impl Format {
@@ -32,8 +34,9 @@ impl Format {
             "pdf" => Ok(Self::Pdf),
             "png" | "images" => Ok(Self::Png),
             "pptx" | "powerpoint" => Ok(Self::Pptx),
+            "html" | "web" => Ok(Self::Html),
             other => Err(format!(
-                "unsupported format: {other} (use pdf, png or pptx)"
+                "unsupported format: {other} (use pdf, png, pptx or html)"
             )),
         }
     }
@@ -148,6 +151,22 @@ pub async fn run(args: &[String]) -> Result<(), String> {
             std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
             Ok(vec![path])
         }
+        Format::Html => {
+            let path =
+                output.unwrap_or_else(|| PathBuf::from("exports").join(format!("{stem}.html")));
+            let url = format!(
+                "http://127.0.0.1:{}/api/export?format=html&t={}",
+                runtime.port, runtime.token
+            );
+            let bytes = post_bytes(&url, Duration::from_secs(60))
+                .await
+                .map_err(|err| err.to_string())?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+            Ok(vec![path])
+        }
         Format::Png => {
             let dir = output.unwrap_or_else(|| PathBuf::from("exports").join(&stem));
             let targets: Vec<SlideTarget> = slide_ids
@@ -191,6 +210,8 @@ mod tests {
         assert_eq!(Format::parse("images").unwrap(), Format::Png);
         assert_eq!(Format::parse("pptx").unwrap(), Format::Pptx);
         assert_eq!(Format::parse("PowerPoint").unwrap(), Format::Pptx);
+        assert_eq!(Format::parse("html").unwrap(), Format::Html);
+        assert_eq!(Format::parse("web").unwrap(), Format::Html);
         assert!(Format::parse("gif").is_err());
     }
 

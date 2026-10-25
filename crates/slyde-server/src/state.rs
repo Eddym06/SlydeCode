@@ -196,6 +196,7 @@ pub enum AgentAction {
     SetNotes,
     TriggerAnimation,
     MutateElement,
+    SetTheme,
     /// The in-app copilot is generating or choosing a tool. This is the only
     /// action that can legitimately sit in `Thinking` phase.
     Chat,
@@ -264,6 +265,14 @@ pub enum UiCommand {
     },
     DuplicateSlide {
         slide_id: String,
+    },
+    PasteSlide {
+        index: usize,
+        code: String,
+        #[serde(default)]
+        template: Option<String>,
+        #[serde(default)]
+        animation: Vec<slyde_core::AnimationStep>,
     },
     MoveSlide {
         from: usize,

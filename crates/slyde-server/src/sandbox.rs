@@ -473,9 +473,10 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
 
     function paint() {
       var layer = ensureOutline();
-      if (!selection) { layer.style.display = 'none'; return; }
+      if (!selection) { layer.style.display = 'none'; paintHandles(null); return; }
       var rect = selection.getBoundingClientRect();
-      if (!rect.width && !rect.height) { layer.style.display = 'none'; return; }
+      if (!rect.width && !rect.height) { layer.style.display = 'none'; paintHandles(null); return; }
+      paintHandles(rect);
       layer.style.display = 'block';
       layer.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)';
       layer.style.width = Math.round(rect.width) + 'px';
@@ -509,11 +510,30 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       return null;
     }
 
-    // ---- Images: paste, drag, resize -------------------------------------
-    // The stored geometry is the source of truth, so the layer always works in
-    // stage pixels (the document is CSS-scaled to fit the iframe) and reports
-    // the final rectangle to the studio, which commits it through the state.
+    // ---- Direct manipulation: move, resize, snap --------------------------
+    // Any block can be moved and resized. The first real movement "freezes" the
+    // element at its current box (position: absolute + explicit size), so a plain
+    // click still only selects and a double-click still edits text. All maths run
+    // in stage pixels; the committed rectangle is relative to the element's
+    // containing block, which is what `left`/`top` mean.
+    var HANDLES = {
+      nw: [0, 0, 'nwse-resize'], n: [50, 0, 'ns-resize'], ne: [100, 0, 'nesw-resize'],
+      e: [100, 50, 'ew-resize'], se: [100, 100, 'nwse-resize'], s: [50, 100, 'ns-resize'],
+      sw: [0, 100, 'nesw-resize'], w: [0, 50, 'ew-resize']
+    };
+    var SNAP_PX = 6;       // snap distance, in stage pixels
+    var SAFE_MARGIN = 64;  // safe-area guide, in stage pixels
+    var MIN_SIZE = 16;
+    var DRAG_THRESHOLD = 3; // screen pixels before a press becomes a drag
+    var handleLayer = null;
+    var guideLayer = null;
 
+    function scaleNow() {
+      var s = stage.getBoundingClientRect();
+      return s.width ? s.width / W : 1;
+    }
+
+    // Geometry relative to the stage, used for snapping and guides.
     function stageGeometry(el) {
       var r = el.getBoundingClientRect();
       var s = stage.getBoundingClientRect();
@@ -526,92 +546,283 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       };
     }
 
+    // Geometry relative to the containing block: the value `left`/`top` take.
+    function localGeometry(el) {
+      var parent = el.offsetParent;
+      if (!parent || parent === document.body || parent === document.documentElement) parent = stage;
+      var scale = scaleNow();
+      var pr = parent.getBoundingClientRect();
+      var r = el.getBoundingClientRect();
+      return {
+        x: Math.round((r.left - pr.left) / scale - parent.clientLeft),
+        y: Math.round((r.top - pr.top) / scale - parent.clientTop),
+        w: Math.round(r.width / scale),
+        h: Math.round(r.height / scale)
+      };
+    }
+
     function applyGeometry(el, g) {
       el.style.position = 'absolute';
       el.style.left = g.x + 'px';
       el.style.top = g.y + 'px';
       el.style.width = g.w + 'px';
       el.style.height = g.h + 'px';
+      // Authored caps (a title's max-width: 15ch) must not clamp a resize.
+      el.style.maxWidth = 'none';
+      el.style.maxHeight = 'none';
       paint();
+    }
+
+    // Pins an element at the box it has now. Margins would otherwise shift it by
+    // the margin once it leaves the flow, so one correction pass follows.
+    function freeze(el) {
+      var before = stageGeometry(el);
+      var local = localGeometry(el);
+      applyGeometry(el, local);
+      var after = stageGeometry(el);
+      if (after.x !== before.x || after.y !== before.y) {
+        local.x += before.x - after.x;
+        local.y += before.y - after.y;
+        applyGeometry(el, local);
+      }
+      return local;
+    }
+
+    function ensureGuides() {
+      if (guideLayer) return guideLayer;
+      guideLayer = document.createElement('div');
+      guideLayer.setAttribute('data-slyde-ui', '1');
+      guideLayer.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;' +
+        'pointer-events:none;z-index:2147483645;display:none;';
+      document.body.appendChild(guideLayer);
+      return guideLayer;
+    }
+
+    function drawGuides(lines) {
+      var layer = ensureGuides();
+      if (!lines || !lines.length) { layer.style.display = 'none'; return; }
+      var s = stage.getBoundingClientRect();
+      var scale = scaleNow();
+      layer.textContent = '';
+      lines.forEach(function (line) {
+        var node = document.createElement('div');
+        var css = 'position:absolute;background:#FF6B4A;opacity:.85;';
+        if (line.axis === 'x') {
+          css += 'left:' + Math.round(s.left + line.pos * scale) + 'px;top:' + Math.round(s.top) +
+            'px;width:1px;height:' + Math.round(s.height) + 'px;';
+        } else {
+          css += 'top:' + Math.round(s.top + line.pos * scale) + 'px;left:' + Math.round(s.left) +
+            'px;height:1px;width:' + Math.round(s.width) + 'px;';
+        }
+        node.style.cssText = css;
+        layer.appendChild(node);
+      });
+      layer.style.display = 'block';
+    }
+
+    function ensureHandles() {
+      if (handleLayer) return handleLayer;
+      handleLayer = document.createElement('div');
+      handleLayer.setAttribute('data-slyde-ui', '1');
+      handleLayer.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;display:none;' +
+        'z-index:2147483647;pointer-events:none;';
+      Object.keys(HANDLES).forEach(function (name) {
+        var spec = HANDLES[name];
+        var node = document.createElement('div');
+        node.setAttribute('data-slyde-handle', name);
+        node.style.cssText = 'position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;' +
+          'background:#fff;border:2px solid #FF6B4A;border-radius:3px;box-sizing:border-box;' +
+          'pointer-events:auto;touch-action:none;left:' + spec[0] + '%;top:' + spec[1] + '%;cursor:' + spec[2] + ';';
+        handleLayer.appendChild(node);
+      });
+      document.body.appendChild(handleLayer);
+      return handleLayer;
+    }
+
+    function paintHandles(rect) {
+      var layer = ensureHandles();
+      if (!selection || editingNode || !rect || (!rect.width && !rect.height)) {
+        layer.style.display = 'none';
+        return;
+      }
+      layer.style.display = 'block';
+      layer.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)';
+      layer.style.width = Math.round(rect.width) + 'px';
+      layer.style.height = Math.round(rect.height) + 'px';
+    }
+
+    // Edges and centres other blocks (and the slide itself) offer as snap lines.
+    function snapTargets(exclude) {
+      var xs = [0, W / 2, W, SAFE_MARGIN, W - SAFE_MARGIN];
+      var ys = [0, H / 2, H, SAFE_MARGIN, H - SAFE_MARGIN];
+      var nodes = stage.querySelectorAll('[data-slyde-id]');
+      var used = 0;
+      for (var i = 0; i < nodes.length && used < 60; i += 1) {
+        var el = nodes[i];
+        if (el === exclude || exclude.contains(el) || el.contains(exclude)) continue;
+        var g = stageGeometry(el);
+        if (g.w < 4 || g.h < 4 || (g.w >= W - 2 && g.h >= H - 2)) continue;
+        xs.push(g.x, g.x + g.w / 2, g.x + g.w);
+        ys.push(g.y, g.y + g.h / 2, g.y + g.h);
+        used += 1;
+      }
+      return { xs: xs, ys: ys };
+    }
+
+    // The offset that brings the closest of `points` onto a target, or null.
+    function nearest(points, targets) {
+      var best = null;
+      points.forEach(function (point) {
+        targets.forEach(function (target) {
+          var delta = target - point;
+          if (Math.abs(delta) <= SNAP_PX && (best === null || Math.abs(delta) < Math.abs(best.delta))) {
+            best = { delta: delta, pos: target };
+          }
+        });
+      });
+      return best;
     }
 
     var drag = null;
 
-    stage.addEventListener('pointerdown', function (event) {
-      if (editingNode || event.button !== 0) return;
-      var el = event.target;
-      if (!el || el.tagName !== 'IMG') return;
+    function startDrag(event, el, mode, handle) {
       event.preventDefault();
-      var geometry = stageGeometry(el);
-      // Freeze the element where it is so it can move without reflowing the slide.
-      applyGeometry(el, geometry);
-      drag = {
-        el: el,
-        id: el.getAttribute('data-slyde-id'),
-        mode: event.shiftKey ? 'resize' : 'move',
-        startX: event.clientX,
-        startY: event.clientY,
-        geometry: geometry
-      };
-      select(el);
       // The stage prevents the default focus change, so without this the frame
       // never receives keydown and the arrow-key nudge would be dead.
       try { window.focus(); } catch (e) {}
-      if (el.setPointerCapture) {
-        try { el.setPointerCapture(event.pointerId); } catch (e) {}
+      drag = {
+        el: el,
+        id: el.getAttribute('data-slyde-id'),
+        mode: mode,
+        handle: handle || 'se',
+        startX: event.clientX,
+        startY: event.clientY,
+        started: false,
+        targets: null,
+        stageStart: null,
+        localStart: null,
+        pointerId: event.pointerId,
+        capture: event.target
+      };
+      if (drag.capture && drag.capture.setPointerCapture) {
+        try { drag.capture.setPointerCapture(event.pointerId); } catch (e) {}
       }
+    }
+
+    stage.addEventListener('pointerdown', function (event) {
+      if (editingNode || event.button !== 0) return;
+      var block = closestBlock(event.target);
+      if (!block) return;
+      var picture = block.tagName === 'IMG';
+      // A picture grabs on the first press. Any other block must already be
+      // selected, so click-to-select and double-click-to-edit keep working.
+      if (!picture && block !== selection) return;
+      if (picture && block !== selection) select(block);
+      startDrag(event, block, picture && event.shiftKey ? 'resize' : 'move', 'se');
+    }, true);
+
+    document.addEventListener('pointerdown', function (event) {
+      var name = event.target && event.target.getAttribute && event.target.getAttribute('data-slyde-handle');
+      if (!name || !selection || editingNode || event.button !== 0) return;
+      startDrag(event, selection, 'resize', name);
     }, true);
 
     window.addEventListener('pointermove', function (event) {
       if (!drag) return;
       event.preventDefault();
-      var s = stage.getBoundingClientRect();
-      var scale = s.width ? s.width / W : 1;
-      var dx = (event.clientX - drag.startX) / scale;
-      var dy = (event.clientY - drag.startY) / scale;
-      var next = {
-        x: drag.geometry.x,
-        y: drag.geometry.y,
-        w: drag.geometry.w,
-        h: drag.geometry.h
-      };
-      if (drag.mode === 'resize') {
-        next.w = Math.max(16, Math.round(drag.geometry.w + dx));
-        next.h = Math.max(16, Math.round(drag.geometry.h + dy));
-      } else {
-        next.x = Math.round(drag.geometry.x + dx);
-        next.y = Math.round(drag.geometry.y + dy);
+      var scale = scaleNow();
+      var rawX = event.clientX - drag.startX;
+      var rawY = event.clientY - drag.startY;
+      if (!drag.started) {
+        if (Math.abs(rawX) < DRAG_THRESHOLD && Math.abs(rawY) < DRAG_THRESHOLD) return;
+        drag.started = true;
+        drag.stageStart = stageGeometry(drag.el);
+        drag.localStart = freeze(drag.el);
+        drag.targets = snapTargets(drag.el);
+        post({ type: 'dragging' });
       }
-      applyGeometry(drag.el, next);
+      var snapping = !event.altKey;
+      var dx = rawX / scale;
+      var dy = rawY / scale;
+      var s = drag.stageStart;
+      var guides = [];
+      var left = s.x, top = s.y, right = s.x + s.w, bottom = s.y + s.h;
+
+      if (drag.mode === 'move') {
+        if (event.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
+        left += dx; right += dx; top += dy; bottom += dy;
+        if (snapping) {
+          var sx = nearest([left, (left + right) / 2, right], drag.targets.xs);
+          var sy = nearest([top, (top + bottom) / 2, bottom], drag.targets.ys);
+          if (sx && !(event.shiftKey && dx === 0)) { left += sx.delta; right += sx.delta; guides.push({ axis: 'x', pos: sx.pos }); }
+          if (sy && !(event.shiftKey && dy === 0)) { top += sy.delta; bottom += sy.delta; guides.push({ axis: 'y', pos: sy.pos }); }
+        }
+      } else {
+        var name = drag.handle;
+        if (name.indexOf('w') >= 0) left += dx;
+        if (name.indexOf('e') >= 0) right += dx;
+        if (name.indexOf('n') >= 0) top += dy;
+        if (name.indexOf('s') >= 0) bottom += dy;
+        if (snapping) {
+          if (name.indexOf('w') >= 0) { var l = nearest([left], drag.targets.xs); if (l) { left += l.delta; guides.push({ axis: 'x', pos: l.pos }); } }
+          if (name.indexOf('e') >= 0) { var r = nearest([right], drag.targets.xs); if (r) { right += r.delta; guides.push({ axis: 'x', pos: r.pos }); } }
+          if (name.indexOf('n') >= 0) { var t = nearest([top], drag.targets.ys); if (t) { top += t.delta; guides.push({ axis: 'y', pos: t.pos }); } }
+          if (name.indexOf('s') >= 0) { var b = nearest([bottom], drag.targets.ys); if (b) { bottom += b.delta; guides.push({ axis: 'y', pos: b.pos }); } }
+        }
+        if (right - left < MIN_SIZE) { if (name.indexOf('w') >= 0) left = right - MIN_SIZE; else right = left + MIN_SIZE; }
+        if (bottom - top < MIN_SIZE) { if (name.indexOf('n') >= 0) top = bottom - MIN_SIZE; else bottom = top + MIN_SIZE; }
+        // Shift on a corner keeps the proportions the element started with.
+        if (event.shiftKey && name.length === 2 && s.h > 0) {
+          var ratio = s.w / s.h;
+          var width = right - left;
+          var height = width / ratio;
+          if (name.indexOf('n') >= 0) top = bottom - height; else bottom = top + height;
+        }
+      }
+
+      applyGeometry(drag.el, {
+        x: Math.round(drag.localStart.x + (left - s.x)),
+        y: Math.round(drag.localStart.y + (top - s.y)),
+        w: Math.max(MIN_SIZE, Math.round(right - left)),
+        h: Math.max(MIN_SIZE, Math.round(bottom - top))
+      });
+      drawGuides(guides);
     });
 
     function endDrag() {
       if (!drag) return;
-      var el = drag.el;
-      var id = drag.id;
-      var geometry = stageGeometry(el);
+      var finished = drag;
       drag = null;
-      post({ type: 'image-geometry', id: id, rect: geometry });
+      drawGuides(null);
+      if (!finished.started) return;
+      if (finished.capture && finished.capture.releasePointerCapture) {
+        try { finished.capture.releasePointerCapture(finished.pointerId); } catch (e) {}
+      }
+      post(describe(finished.el));
+      post({ type: 'geometry', id: finished.id, rect: localGeometry(finished.el) });
     }
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
 
-    // Arrow keys nudge the selected picture: 1px, 10px with Shift. Without
+    // Arrow keys nudge the selected block: 1px, 10px with Shift. Without
     // stopImmediatePropagation the document keydown forwarder would also send
     // the arrow to the studio and change the slide.
     document.addEventListener('keydown', function (event) {
-      if (!selection || selection.tagName !== 'IMG' || editingNode) return;
+      if (!selection || editingNode) return;
       var step = event.shiftKey ? 10 : 1;
-      var g = stageGeometry(selection);
-      if (event.key === 'ArrowLeft') g.x -= step;
-      else if (event.key === 'ArrowRight') g.x += step;
-      else if (event.key === 'ArrowUp') g.y -= step;
-      else if (event.key === 'ArrowDown') g.y += step;
+      var dx = 0, dy = 0;
+      if (event.key === 'ArrowLeft') dx = -step;
+      else if (event.key === 'ArrowRight') dx = step;
+      else if (event.key === 'ArrowUp') dy = -step;
+      else if (event.key === 'ArrowDown') dy = step;
       else return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      applyGeometry(selection, g);
-      post({ type: 'image-geometry', id: selection.getAttribute('data-slyde-id'), rect: g });
+      var local = selection.style.position === 'absolute' ? localGeometry(selection) : freeze(selection);
+      local.x += dx;
+      local.y += dy;
+      applyGeometry(selection, local);
+      post({ type: 'geometry', id: selection.getAttribute('data-slyde-id'), rect: local });
     }, true);
 
     function readImage(file) {
@@ -690,6 +901,7 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         current.removeAllRanges();
         current.addRange(range);
       } catch (e) {}
+      paint();
       post({ type: 'editing', id: el.getAttribute('data-slyde-id') });
     }
 
@@ -763,6 +975,252 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         .replace("__H__", &height.to_string())
         .replace("__STATIC__", if static_mode { "true" } else { "false" })
         .replace("__EDIT__", if edit_mode { "true" } else { "false" })
+}
+
+/// Renders a single self-contained interactive HTML document for the whole deck.
+///
+/// Works without any server or network: double-clicking opens an interactive
+/// presentation with slide navigation, fragments, fullscreen and the laser pointer.
+pub fn render_standalone_presentation(deck: &Presentation) -> String {
+    let (width, height) = deck.aspect_ratio.size_px();
+    let title = escape_html(&deck.title);
+    let theme = &deck.theme;
+    let base_css = crate::starter::base_css();
+
+    let slides_html: String = deck
+        .slides
+        .iter()
+        .enumerate()
+        .map(|(index, slide)| {
+            let steps_json = serde_json::to_string(&slide.animation)
+                .unwrap_or_else(|_| "[]".to_string())
+                .replace("</", "<\\/");
+            format!(
+                r#"<section class="slyde-offline-slide" data-index="{index}" data-id="{id}" style="display: {display}">
+  <div class="slyde-slide-content">{code}</div>
+  <script type="application/json" class="slyde-slide-steps">{steps}</script>
+</section>"#,
+                index = index,
+                id = escape_html(&slide.id),
+                display = if index == 0 { "block" } else { "none" },
+                code = slide.code,
+                steps = steps_json,
+            )
+        })
+        .collect();
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+  :root {{
+    --slyde-bg: {bg};
+    --slyde-fg: {fg};
+    --slyde-muted: {muted};
+    --slyde-accent: {accent};
+    --slyde-font: {font};
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{
+    margin: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #000;
+    color: var(--slyde-fg);
+    font-family: var(--slyde-font), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }}
+  #slyde-viewport {{
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  #slyde-stage {{
+    position: relative;
+    width: {width}px;
+    height: {height}px;
+    background: var(--slyde-bg);
+    overflow: hidden;
+    transform-origin: center center;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }}
+  .slyde-offline-slide {{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }}
+  .slyde-slide-content {{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }}
+  #slyde-hud {{
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(18,18,20,0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: #F4F3F1;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 220ms ease;
+    user-select: none;
+  }}
+  body:hover #slyde-hud, body.hud-visible #slyde-hud {{ opacity: 1; }}
+  #slyde-progress {{
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #7C3AED, #FF6B4A);
+    transition: width 240ms cubic-bezier(.16,1,.3,1);
+    z-index: 1001;
+  }}
+  #slyde-laser {{
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff 20%, #FF6B4A 60%, rgba(124,58,237,0) 100%);
+    box-shadow: 0 0 12px #FF6B4A;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    display: none;
+    z-index: 999;
+  }}
+  {base_css}
+</style>
+</head>
+<body>
+<div id="slyde-viewport">
+  <main id="slyde-stage">
+    {slides}
+    <div id="slyde-laser"></div>
+  </main>
+</div>
+<div id="slyde-hud">
+  <span id="slyde-count">1 / {total}</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>?</kbd><kbd>?</kbd> navigate</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>F</kbd> fullscreen</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>L</kbd> laser</span>
+</div>
+<div id="slyde-progress" style="width: {initial_pct}%"></div>
+
+<script>
+(function() {{
+  var W = {width}, H = {height}, total = {total};
+  var current = 0;
+  var laserActive = false;
+  var stage = document.getElementById('slyde-stage');
+  var slides = document.querySelectorAll('.slyde-offline-slide');
+  var countEl = document.getElementById('slyde-count');
+  var progressEl = document.getElementById('slyde-progress');
+  var laserEl = document.getElementById('slyde-laser');
+  var hud = document.getElementById('slyde-hud');
+  var hudTimer = null;
+
+  function fit() {{
+    var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    stage.style.transform = 'scale(' + s + ')';
+  }}
+  window.addEventListener('resize', fit);
+  fit();
+
+  function showHud() {{
+    document.body.classList.add('hud-visible');
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(function() {{ document.body.classList.remove('hud-visible'); }}, 2500);
+  }}
+  window.addEventListener('mousemove', showHud);
+
+  function showSlide(idx) {{
+    if (idx < 0 || idx >= total) return;
+    current = idx;
+    for (var i = 0; i < slides.length; i++) {{
+      slides[i].style.display = i === current ? 'block' : 'none';
+    }}
+    countEl.textContent = (current + 1) + ' / ' + total;
+    progressEl.style.width = Math.round(((current + 1) / total) * 100) + '%';
+    location.hash = '#' + (current + 1);
+  }}
+
+  var initial = parseInt(location.hash.replace('#', ''), 10);
+  if (!isNaN(initial) && initial >= 1 && initial <= total) showSlide(initial - 1);
+
+  window.addEventListener('keydown', function(e) {{
+    var k = e.key;
+    if (k === 'ArrowRight' || k === ' ' || k === 'PageDown' || k === 'Enter') {{
+      e.preventDefault();
+      showSlide(current + 1);
+    }} else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') {{
+      e.preventDefault();
+      showSlide(current - 1);
+    }} else if (k === 'Home') {{
+      e.preventDefault();
+      showSlide(0);
+    }} else if (k === 'End') {{
+      e.preventDefault();
+      showSlide(total - 1);
+    }} else if (k === 'f' || k === 'F') {{
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(function(){{}});
+      else document.exitFullscreen().catch(function(){{}});
+    }} else if (k === 'l' || k === 'L') {{
+      laserActive = !laserActive;
+      laserEl.style.display = laserActive ? 'block' : 'none';
+      stage.style.cursor = laserActive ? 'none' : '';
+    }}
+  }});
+
+  stage.addEventListener('mousemove', function(e) {{
+    if (!laserActive) return;
+    var r = stage.getBoundingClientRect();
+    var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (e.clientX - r.left) / s;
+    var y = (e.clientY - r.top) / s;
+    laserEl.style.left = x + 'px';
+    laserEl.style.top = y + 'px';
+  }});
+}})();
+</script>
+</body>
+</html>"#,
+        title = title,
+        bg = theme.background,
+        fg = theme.foreground,
+        muted = theme.muted,
+        accent = theme.accent,
+        font = theme.font_family,
+        width = width,
+        height = height,
+        base_css = base_css,
+        slides = slides_html,
+        total = deck.slides.len(),
+        initial_pct = if deck.slides.is_empty() {
+            0
+        } else {
+            100 / deck.slides.len()
+        },
+    )
 }
 
 /// One document, one page per slide, each slide in its own iframe so slide CSS
@@ -918,6 +1376,34 @@ mod tests {
     }
 
     #[test]
+    fn edit_mode_ships_the_transform_gizmo_for_every_block() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let html = render_document(&deck, &slide, true, true);
+        // Eight handles, snapping and the universal drag are all part of the layer.
+        for needle in [
+            "data-slyde-handle",
+            "nesw-resize",
+            "snapTargets",
+            "DRAG_THRESHOLD",
+            "type: 'geometry'",
+        ] {
+            assert!(html.contains(needle), "edit layer is missing {needle}");
+        }
+        // The old picture-only gate must be gone.
+        assert!(!html.contains("el.tagName !== 'IMG') return;"));
+    }
+
+    #[test]
+    fn view_mode_documents_carry_no_editing_layer() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let html = render_document(&deck, &slide, false, false);
+        // The code is present (it is gated by EDIT at runtime) but switched off.
+        assert!(html.contains("EDIT = false"));
+    }
+
+    #[test]
     fn portrait_ratio_changes_stage_size() {
         let slide = Slide::new("a".into(), "<p>x</p>".into());
         let mut deck = deck_with(slide.clone());
@@ -925,5 +1411,19 @@ mod tests {
         let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("width: 720px"));
         assert!(html.contains("height: 1280px"));
+    }
+
+    #[test]
+    fn standalone_presentation_embeds_all_slides_and_laser() {
+        let slide1 = Slide::new("s1".into(), "<h1>First</h1>".into());
+        let slide2 = Slide::new("s2".into(), "<p>Second</p>".into());
+        let mut deck = deck_with(slide1);
+        deck.slides.push(slide2);
+        let html = render_standalone_presentation(&deck);
+        assert!(html.contains("<h1>First</h1>"));
+        assert!(html.contains("<p>Second</p>"));
+        assert!(html.contains("slyde-laser"));
+        assert!(html.contains("slyde-offline-slide"));
+        assert!(html.contains("1 / 2"));
     }
 }

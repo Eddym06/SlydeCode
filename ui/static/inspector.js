@@ -234,6 +234,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
           <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
           <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
           <button type="button" class="file-btn" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
+          <button type="button" class="file-btn" id="export-html">${escapeHtml(t("export.html"))}</button>
         </div>
         <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
       </section>`;
@@ -262,6 +263,10 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         <div class="field-value">${escapeHtml(t(`template.${slide.template}`))}</div>
         <div class="mono" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</div>
         <div class="slide-quick-actions">
+          <button type="button" class="btn btn-primary" id="inspector-redesign-slide" style="gap: 5px;">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13"><path d="M12 2.6c.7 5.3 1.9 6.5 7.2 7.2-5.3.7-6.5 1.9-7.2 7.2-.7-5.3-1.9-6.5-7.2-7.2 5.3-.7 6.5-1.9 7.2-7.2Zm6.7 11.1c.3 2.4.9 3 3.3 3.3-2.4.3-3 .9-3.3 3.3-.3-2.4-.9-3-3.3-3.3 2.4-.3 3-.9 3.3-3.3Z"/></svg>
+            ${escapeHtml(t("action.redesign"))}
+          </button>
           <button type="button" class="btn" id="inspector-insert-image">${escapeHtml(t("inspector.insertImage"))}</button>
           <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
           <button type="button" class="btn" id="inspector-duplicate-slide">
@@ -333,6 +338,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       ["export-pdf", "pdf"],
       ["export-png", "png"],
       ["export-pptx", "pptx"],
+      ["export-html", "html"],
     ]) {
       const button = root.querySelector(`#${id}`);
       if (button) button.addEventListener("click", () => actions.exportDeck(format));
@@ -393,6 +399,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         imageInput.value = "";
         if (!file) return;
         await actions.pickImage(file);
+      });
+    }
+
+    const redesign = root.querySelector("#inspector-redesign-slide");
+    if (redesign) {
+      redesign.addEventListener("click", () => {
+        if (actions.redesignSlide) actions.redesignSlide(currentSlide.id);
       });
     }
 

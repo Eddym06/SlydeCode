@@ -43,6 +43,8 @@ enum ExportFormat {
     Png,
     /// PowerPoint: one rendered picture per slide, wrapped in a real `.pptx`.
     Pptx,
+    /// Standalone self-contained HTML deck.
+    Html,
 }
 
 impl ExportFormat {
@@ -51,6 +53,7 @@ impl ExportFormat {
             Some("pdf") => Some(Self::Pdf),
             Some("png") | Some("images") => Some(Self::Png),
             Some("pptx") | Some("powerpoint") => Some(Self::Pptx),
+            Some("html") | Some("web") => Some(Self::Html),
             _ => None,
         }
     }
@@ -60,6 +63,7 @@ impl ExportFormat {
             Self::Pdf => "pdf",
             Self::Png => "png",
             Self::Pptx => "pptx",
+            Self::Html => "html",
         }
     }
 
@@ -68,6 +72,7 @@ impl ExportFormat {
             Self::Pdf => "pdf",
             Self::Png => "zip",
             Self::Pptx => "pptx",
+            Self::Html => "html",
         }
     }
 
@@ -78,6 +83,7 @@ impl ExportFormat {
             Self::Pptx => {
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             }
+            Self::Html => "text/html; charset=utf-8",
         }
     }
 }
@@ -103,9 +109,36 @@ pub async fn api_export(
         return api_error(
             StatusCode::BAD_REQUEST,
             "invalid_format",
-            "format must be pdf, png or pptx",
+            "format must be pdf, png, pptx or html",
         );
     };
+
+    if format == ExportFormat::Html {
+        let (deck_copy, deck_title) = {
+            let core = state.core.read().await;
+            (
+                core.presentation().clone(),
+                core.presentation().title.clone(),
+            )
+        };
+        let html_string = sandbox::render_standalone_presentation(&deck_copy);
+        let filename = format!("{}.html", storage::file_stem_for(&deck_title));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap(),
+        );
+        let _ = state.events.send(ServerEvent::ExportProgress {
+            format: "html".to_string(),
+            completed: 1,
+            total: 1,
+        });
+        return (StatusCode::OK, headers, html_string.into_bytes()).into_response();
+    }
 
     // Snapshot the deck, then drop the lock: an export must never block the
     // editor (or an AI agent) while Chrome renders.
@@ -189,6 +222,7 @@ pub async fn api_export(
                 .await
                 .map(|written| vec![written])
         }
+        ExportFormat::Html => unreachable!("html export returns before chrome render"),
         ExportFormat::Png | ExportFormat::Pptx => {
             let targets: Vec<SlideTarget> = slide_ids
                 .iter()
@@ -257,6 +291,7 @@ pub async fn api_export(
                 Err(err) => Err(format!("packaging task failed: {err}")),
             }
         }
+        ExportFormat::Html => unreachable!("html export returns before packaging"),
         ExportFormat::Pptx => {
             let files = files.clone();
             let notes = slide_notes.clone();
@@ -427,7 +462,33 @@ mod tests {
             ExportFormat::parse(Some("POWERPOINT")),
             Some(ExportFormat::Pptx)
         );
+        assert_eq!(ExportFormat::parse(Some("html")), Some(ExportFormat::Html));
+        assert_eq!(ExportFormat::parse(Some("WEB")), Some(ExportFormat::Html));
         assert_eq!(ExportFormat::parse(None), None);
+    }
+
+    #[tokio::test]
+    async fn html_export_returns_standalone_document_without_chrome() {
+        use tower::ServiceExt;
+        let app = crate::routes::app_router(test_state());
+        let res = app
+            .oneshot(
+                axum::http::Request::post("/api/export?t=tok_test&format=html")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let content_type = res.headers().get(header::CONTENT_TYPE).unwrap();
+        assert_eq!(content_type, "text/html; charset=utf-8");
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("slyde-offline-slide"));
+        assert!(html.contains("slyde-laser"));
     }
 
     #[test]

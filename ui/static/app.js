@@ -9,6 +9,7 @@ import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
+import { mountPresenterDraw } from "./presenter-draw.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
@@ -409,9 +410,15 @@ function boot(sessionToken) {
     }
   }
 
+  let panOffset = { x: 0, y: 0 };
+  let spacePressed = false;
+  let isPanning = false;
+  let panStart = { x: 0, y: 0 };
+
   function setZoom(delta) {
     if (delta === 0) {
       currentZoomIdx = 0;
+      panOffset = { x: 0, y: 0 };
     } else {
       currentZoomIdx = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, currentZoomIdx + delta));
     }
@@ -426,6 +433,53 @@ function boot(sessionToken) {
   if (els.zoomOut) els.zoomOut.addEventListener("click", () => setZoom(-1));
   if (els.zoomIn) els.zoomIn.addEventListener("click", () => setZoom(1));
   if (els.zoomValue) els.zoomValue.addEventListener("click", () => setZoom(0));
+
+  // Canvas pan with Space + Drag, and continuous zoom with Ctrl + Wheel.
+  const stageEl = $("stage");
+  if (stageEl) {
+    document.addEventListener("keydown", (e) => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || e.target.isContentEditable) return;
+      if (e.code === "Space" && !spacePressed) {
+        spacePressed = true;
+        stageEl.classList.add("is-space-pan");
+      }
+    });
+    document.addEventListener("keyup", (e) => {
+      if (e.code === "Space") {
+        spacePressed = false;
+        isPanning = false;
+        stageEl.classList.remove("is-space-pan", "is-panning");
+      }
+    });
+    stageEl.addEventListener("pointerdown", (e) => {
+      if (!spacePressed || e.button !== 0) return;
+      isPanning = true;
+      panStart = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+      stageEl.classList.add("is-panning");
+      stageEl.setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!isPanning) return;
+      panOffset = { x: e.clientX - panStart.x, y: e.clientY - panStart.y };
+      const d = deck();
+      if (d) fitStage(d);
+    });
+    const endPan = () => {
+      if (!isPanning) return;
+      isPanning = false;
+      stageEl.classList.remove("is-panning");
+    };
+    window.addEventListener("pointerup", endPan);
+    window.addEventListener("pointercancel", endPan);
+
+    stageEl.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
+  }
 
   function setStatus(state) {
     els.statusDot.dataset.state = state;
@@ -731,6 +785,7 @@ function boot(sessionToken) {
     const height = baseH * scale;
     els.frameWrap.style.width = `${Math.round(width)}px`;
     els.frameWrap.style.height = `${Math.round(height)}px`;
+    els.frameWrap.style.transform = `translate(${Math.round(panOffset.x)}px, ${Math.round(panOffset.y)}px)`;
   }
 
   // ---------- Bimodal canvas ----------
@@ -799,6 +854,9 @@ function boot(sessionToken) {
     actions: {
       command: run,
       selectElement: selectElementById,
+      redesignSlide: () => {
+        askCopilotForElement(t("copilot.prompt.redesign") || "Redesign this slide with an editorial, highly balanced layout while preserving the content.");
+      },
       pickImage: (file) => canvas.insertFile(file),
       saveDeck: () => {
         const link = document.createElement("a");
@@ -1048,25 +1106,135 @@ function boot(sessionToken) {
     { capture: true }
   );
 
+  let slideClipboard = null;
+
   document.addEventListener("keydown", (event) => {
     const tag = (event.target.tagName || "").toLowerCase();
-    const typing = tag === "input" || tag === "textarea" || tag === "select";
+    const typing =
+      tag === "input" ||
+      tag === "textarea" ||
+      tag === "select" ||
+      (event.target && event.target.isContentEditable);
     const mod = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
 
-    if (mod && event.key.toLowerCase() === "z" && !typing) {
+    // 1. Undo / Redo (never trapped by typing inside regular buttons/storyboard).
+    if (mod && key === "z" && !typing) {
       event.preventDefault();
       run(event.shiftKey ? "redo" : "undo");
       return;
     }
+
+    // 2. Presenter launches (F5 / Shift+F5 or Mod+Enter / Mod+Shift+Enter).
+    if (!typing && (event.key === "F5" || (mod && (event.key === "Enter" || key === "p")))) {
+      event.preventDefault();
+      const speaker = event.shiftKey || event.altKey;
+      openPresentationInStudio(speaker);
+      return;
+    }
+
     if (typing) return;
 
+    // 3. Slide navigation.
     if (event.key === "ArrowDown" || event.key === "ArrowRight") {
       event.preventDefault();
       moveSelection(1);
-    } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      return;
+    }
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
       event.preventDefault();
       moveSelection(-1);
+      return;
     }
+
+    // 4. Duplicate (Cmd+D / Ctrl+D).
+    if (mod && key === "d" && selectedId) {
+      event.preventDefault();
+      run("duplicate_slide", { slide_id: selectedId });
+      toast(t("toast.duplicated") || t("storyboard.duplicate"));
+      return;
+    }
+
+    // 5. Delete (Delete or Backspace when not typing). A selected canvas block
+    // owns the key: removing the whole slide from under it would be a surprise.
+    if ((event.key === "Delete" || event.key === "Backspace") && selectedId && !mod) {
+      if (canvas.selectedElement) return;
+      const d = deck();
+      if (d && d.slides.length > 1) {
+        event.preventDefault();
+        const idToDelete = selectedId;
+        run("remove_slide", { slide_id: idToDelete }, { silent: true }).then((ok) => {
+          if (ok) {
+            selectedId = null;
+            stageKey = "";
+            applyView(view);
+            toast(t("toast.deleted") || t("action.delete"));
+          }
+        });
+      }
+      return;
+    }
+
+    // 6. Copy slide (Cmd+C / Ctrl+C without an active text selection).
+    if (mod && key === "c" && selectedId) {
+      const activeSelection = window.getSelection();
+      if (!activeSelection || activeSelection.isCollapsed || !activeSelection.toString().trim()) {
+        const current = slide();
+        if (current) {
+          slideClipboard = JSON.parse(JSON.stringify(current));
+          toast(t("toast.slideCopied") || "Slide copied");
+        }
+      }
+      return;
+    }
+
+    // 7. Paste slide (Cmd+V / Ctrl+V).
+    if (mod && key === "v" && slideClipboard) {
+      const d = deck();
+      if (d) {
+        event.preventDefault();
+        const currentIdx = d.slides.findIndex((s) => s.id === selectedId);
+        const insertAt = currentIdx >= 0 ? currentIdx + 1 : d.slides.length;
+        run("paste_slide", {
+          index: insertAt,
+          code: slideClipboard.code,
+          template: slideClipboard.template,
+          animation: slideClipboard.animation || [],
+        }).then((ok) => {
+          if (ok) {
+            toast(t("toast.slidePasted") || "Slide pasted");
+          }
+        });
+      }
+      return;
+    }
+  });
+
+  // Also support paste event (e.g. context menu or paste command).
+  document.addEventListener("paste", (event) => {
+    if (event.defaultPrevented || !slideClipboard) return;
+    const clip = event.clipboardData;
+    const hasImage =
+      clip && [...(clip.items || [])].some((item) => item.type && item.type.startsWith("image/"));
+    if (hasImage) return;
+    const target = event.target;
+    const tag = ((target && target.tagName) || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || (target && target.isContentEditable)) return;
+    const d = deck();
+    if (!d) return;
+    event.preventDefault();
+    const currentIdx = d.slides.findIndex((s) => s.id === selectedId);
+    const insertAt = currentIdx >= 0 ? currentIdx + 1 : d.slides.length;
+    run("paste_slide", {
+      index: insertAt,
+      code: slideClipboard.code,
+      template: slideClipboard.template,
+      animation: slideClipboard.animation || [],
+    }).then((ok) => {
+      if (ok) {
+        toast(t("toast.slidePasted") || "Slide pasted");
+      }
+    });
   });
 
   function moveSelection(delta) {
@@ -1187,6 +1355,7 @@ function boot(sessionToken) {
   // ---------- In-Studio Presentation Mode (No popup / in-place) ----------
   let isPresenting = false;
   let presentIndex = 0;
+  let presentDraw = null;
   let presentSpeakerMode = false;
   let presentBlackout = false;
   let presentSlideKey = "";
@@ -1380,6 +1549,7 @@ function boot(sessionToken) {
       presentSlideKey = key;
       presentReveal.reload();
       presentSlideStartSeconds = presentTimerSeconds;
+      if (presentDraw) presentDraw.clear();
       if (presentEls.frame) {
         presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
       }
@@ -1471,6 +1641,15 @@ function boot(sessionToken) {
       case "fullscreen":
         togglePresentFullscreen();
         break;
+      case "laser":
+        if (presentDraw) presentDraw.toggle("laser");
+        break;
+      case "pen":
+        if (presentDraw) presentDraw.toggle("pen");
+        break;
+      case "clearDraw":
+        if (presentDraw) presentDraw.clear();
+        break;
       case "escape":
         if (presentBlackout) {
           togglePresentBlackout();
@@ -1545,6 +1724,9 @@ function boot(sessionToken) {
       presentClockInterval = setInterval(updatePresentWallClock, 1000);
     }
 
+    if (!presentDraw && presentEls.frameWrap) {
+      presentDraw = mountPresenterDraw(presentEls.frameWrap);
+    }
     renderPresentSlide();
 
     document.addEventListener("keydown", handlePresentKeydown);
@@ -1557,6 +1739,10 @@ function boot(sessionToken) {
   function closePresentation() {
     if (!isPresenting) return;
     isPresenting = false;
+    if (presentDraw) {
+      presentDraw.toggle("none");
+      presentDraw.clear();
+    }
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }

@@ -400,12 +400,16 @@ impl PresentationState {
             }
         })?;
 
-        let props: [(&str, String); 5] = [
+        // `max-width`/`max-height` are lifted too: authored caps such as a title's
+        // `max-width: 15ch` would otherwise silently clamp a deliberate resize.
+        let props: [(&str, String); 7] = [
             ("position", "absolute".to_string()),
             ("left", css_px(rect.x)),
             ("top", css_px(rect.y)),
             ("width", css_px(rect.w)),
             ("height", css_px(rect.h)),
+            ("max-width", "none".to_string()),
+            ("max-height", "none".to_string()),
         ];
         let new_open = apply_style_properties(&slide.code[span.open.clone()], &props);
 
@@ -1601,6 +1605,10 @@ mod tests {
             "the stale value is gone: {code}"
         );
         assert!(code.contains("width: 200px"), "{code}");
+        assert!(
+            code.contains("max-width: none"),
+            "caps must not clamp a resize: {code}"
+        );
         assert!(code.contains("position: absolute"), "{code}");
         assert!(
             code.contains("border-radius: 8px"),

@@ -60,6 +60,20 @@ pub enum AgentCommand {
         #[serde(default)]
         html: Option<String>,
     },
+    SetTheme {
+        #[serde(default)]
+        theme_id: Option<String>,
+        #[serde(default)]
+        background: Option<String>,
+        #[serde(default)]
+        foreground: Option<String>,
+        #[serde(default)]
+        accent: Option<String>,
+        #[serde(default)]
+        muted: Option<String>,
+        #[serde(default)]
+        font_family: Option<String>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -137,6 +151,12 @@ impl AgentCommand {
                 phase: AgentPhase::Writing,
                 action: AgentAction::MutateElement,
                 slide_id: slide_id.clone(),
+                slide_index: None,
+            },
+            AgentCommand::SetTheme { .. } => Activity {
+                phase: AgentPhase::Writing,
+                action: AgentAction::SetTheme,
+                slide_id: None,
                 slide_index: None,
             },
         }
@@ -230,6 +250,38 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
                 mutated_slide_id: Some(slide_id),
                 ..AgentOutcome::default()
             })
+        }
+        AgentCommand::SetTheme {
+            theme_id,
+            background,
+            foreground,
+            accent,
+            muted,
+            font_family,
+        } => {
+            let mut theme = match theme_id.as_deref() {
+                Some(id) => Theme::resolve(id)
+                    .ok_or_else(|| CoreError::InvalidTheme(format!("unknown theme: {id}")))?,
+                None => core.presentation().theme.clone(),
+            };
+            if let Some(bg) = background {
+                theme.background = bg;
+            }
+            if let Some(fg) = foreground {
+                theme.foreground = fg;
+            }
+            if let Some(acc) = accent {
+                theme.accent = acc;
+            }
+            if let Some(m) = muted {
+                theme.muted = m;
+            }
+            if let Some(ff) = font_family {
+                theme.font_family = ff;
+            }
+            theme.validate()?;
+            core.set_theme(theme)?;
+            Ok(AgentOutcome::default())
         }
     }
 }

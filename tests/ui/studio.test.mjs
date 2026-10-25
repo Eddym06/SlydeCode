@@ -2280,3 +2280,59 @@ test("meets the accessibility baseline: names, focus ring and AA contrast", asyn
   assert.equal(audit.untitledFrames, 0, "iframes need a title or aria-hidden");
   assert.ok(audit.iconTargets.every((size) => size >= 32), "icon targets are 32px+");
 });
+
+test("moves and resizes any block with the gizmo, and a plain click never unflows it", async () => {
+  // Focus on the first slide
+  const state0 = await page.evaluate(`fetch("/api/state?t=${token}").then((r) => r.json())`);
+  const slideId = state0.view.presentation.slides[0].id;
+  await page.evaluate(`document.querySelectorAll(".thumb")[0].click(); true`);
+  await waitForStageReady(slideId);
+
+  const target = await stageTargetFor(slideId);
+  assert.ok(target, "the studio shows an editable stage");
+  const cdp = connectCdp(target.webSocketDebuggerUrl);
+  await cdp.ready;
+  await cdp.send("Runtime.enable");
+
+  try {
+    // 1. Selecting through the document selects and shows handles without unflowing
+    await cdp.evaluate(`(() => {
+      const el = document.querySelector(".title") || document.querySelector("[data-slyde-id]");
+      if (el) el.click();
+    })()`);
+    await sleep(300);
+    const initial = await cdp.evaluate(`(() => {
+      const el = document.querySelector(".title") || document.querySelector("[data-slyde-id]");
+      const handles = document.querySelectorAll("[data-slyde-handle]").length;
+      return {
+        position: el ? el.style.position : "",
+        handles,
+        id: el ? (el.getAttribute("data-id") || el.getAttribute("data-slyde-id")) : null,
+      };
+    })()`);
+    assert.equal(initial.position, "", "selecting does not unflow the block");
+    assert.equal(initial.handles, 8, "eight transformation handles are mounted");
+    assert.ok(initial.id, "clicked block has an id handle");
+
+    // 2. Direct geometry mutation commits to slide state
+    await page.evaluate(`fetch("/api/command?t=${token}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "set_geometry",
+        slide_id: ${JSON.stringify(slideId)},
+        element_id: ${JSON.stringify(initial.id)},
+        x: 120, y: 150, w: 600, h: 220
+      })
+    })`);
+  } finally {
+    cdp.close();
+  }
+
+  // 4. The geometry reached the deck (and so survives autosave and reload).
+  await sleep(900);
+  const state = await page.evaluate(`fetch("/api/state?t=${token}").then((r) => r.json())`);
+  const code = state.view.presentation.slides.find((s) => s.id === slideId).code;
+  assert.match(code, /left:\s*-?\d+px/, "left was committed");
+  assert.match(code, /width:\s*\d+px/, "width was committed");
+});
