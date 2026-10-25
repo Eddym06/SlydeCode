@@ -1,11 +1,11 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 14:56
+> Last updated: 2026-10-25 15:00
 
 ## Current Phase
 
-Phase 3.1 — **product completion on `feat/product-completion`.** Rust 220 tests and
-53 UI tests green (41 browser/CDP + 12 component); `cargo fmt --check` and
+Phase 3.2 — **product completion on `feat/product-completion`.** Rust 220 tests and
+54 UI tests green (41 browser/CDP + 13 component); `cargo fmt --check` and
 `cargo clippy -D warnings` clean.
 
 This block closed the three product gaps the audit named — a real deck library,
@@ -14,9 +14,11 @@ missing: batch PNG rendering over CDP at 2x, a concurrent MCP stdio loop, a
 server-side copilot cancel, per-locale dictionaries with parity tests, and a
 module smoke test that would have caught the dead `app.js` import.
 
-This round added the shared presenter state machine (the studio overlay and the
-standalone presenter had two copies that had already drifted), the component test
-layer, and per-deck copilot conversation persistence.
+Recent rounds extracted the presenter state machine (the overlay and the
+standalone page had two copies that had drifted), moved the whole inspector into
+`ui/static/inspector.js`, added the component test layer, and persisted copilot
+conversations per deck. `app.js` went from ~2,600 to ~2,250 lines and is now the
+studio shell (stage, storyboard, presenter overlay, boot) rather than everything.
 
 Two data bugs were found and fixed in the previous round, both invisible to the
 old suite:
@@ -100,6 +102,19 @@ old suite:
   checked per SSE chunk and per tool round, so the upstream response is dropped),
   and the round budget is 40 with the repeat guard intact.
 
+### Inspector (own module)
+
+- `ui/static/inspector.js` owns the slide tab, the deck tab and the animation
+  timeline: it renders from the read model it is given and sends commands through
+  injected callbacks, so it never touches the deck. `THEME_CHOICES`,
+  `ANIMATION_KINDS` and the default easing live there (the palette imports the
+  theme list from the same place).
+- The DOM ids are unchanged (`#theme-select`, `#notes`, `#export-pdf`, …) because
+  they are the contract with the export progress handler and the E2E suite; what
+  changed is who owns the markup and the wiring.
+- The notes caret/scroll restoration moved with it, so the fix cannot be lost in
+  a future refactor of the shell.
+
 ### Presenter (shared)
 
 - `ui/static/presenter-core.js` owns the reveal state (current slide, queued
@@ -129,9 +144,10 @@ old suite:
   `SyntaxError`: a duplicate `let` in a new module had produced a blank studio
   with no error in the product.
 - `tests/ui/components.test.mjs` is the component layer the audit asked for: the
-  DOM-free modules (reveal state, key map, progress, pacing, activity) are tested
-  directly in Node. There is still no DOM component runner, which is the trade-off
-  of the zero-npm decision.
+  DOM-free modules (reveal state, key map, progress, pacing, activity) plus the
+  inspector's contract lists (12 kinds, 6 themes) are tested directly in Node.
+  There is still no DOM component runner, which is the trade-off of the zero-npm
+  decision.
 - Library sheet, image editing, PPTX menu item, all localized in EN and ES.
 - Auth: JSON calls use `Authorization: Bearer`; only the WS handshake, downloads
   and `window.open` keep the query form.
@@ -160,9 +176,9 @@ Nothing partially implemented on the branch.
 
 ## Not Implemented Yet
 
-- `app.js` is still the studio shell in one closure (~2,400 lines): the presenter,
-  the deck library, i18n, the copilot and the palette are modules, but the stage,
-  storyboard and inspector orchestration is not split yet.
+- `app.js` is still the studio shell in one closure (~2,250 lines): the presenter,
+  the inspector, the deck library, i18n, the copilot and the palette are modules,
+  but the stage and the storyboard orchestration is not split yet.
 - OS keychain for provider keys (the file is owner-only on Unix; Windows has no
   DACL yet).
 - `app.js` is still one large `boot()` closure, and the presenter logic is
@@ -210,8 +226,9 @@ Nothing partially implemented on the branch.
 ## Backlog (Prioritized)
 
 1. **Validate the copilot against live provider keys** (all eight).
-2. **Split the studio shell in `app.js`** (stage, storyboard, inspector) with a
-   state object and per-region render; the presenter is already shared.
+2. **Finish the `app.js` split**: the stage (selection HUD, sandbox messages,
+   image geometry) and the storyboard (drag and drop, hover actions) are the two
+   regions still inside the shell closure.
 3. **OS keychain** for provider keys (Windows has a DACL now; a real keychain is
    next).
 4. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
@@ -227,7 +244,9 @@ Nothing partially implemented on the branch.
 
 ## Completed
 
-- [x] Shared presenter state machine + component tests (12) — 2026-10-25
+- [x] Inspector extracted to its own module (markup, animation timeline, notes
+      caret, export wiring) and the contract lists tested — 2026-10-25
+- [x] Shared presenter state machine + component tests — 2026-10-25
 - [x] Copilot conversations persisted per deck (bounded), restored on mount and
       deck switch, cleared by New chat — 2026-10-25
 - [x] Deck library: files instead of a single autosave slot, endpoints, sheet,
