@@ -24,7 +24,9 @@ const timerDisplay = document.getElementById("timer-display");
 const timerToggle = document.getElementById("timer-toggle");
 const timerReset = document.getElementById("timer-reset");
 const exitSpeaker = document.getElementById("exit-speaker");
+const speakerCloseBtn = document.getElementById("speaker-close-btn");
 const hudSpeaker = document.getElementById("hud-speaker");
+const hudExit = document.getElementById("hud-exit");
 const notesFontDown = document.getElementById("notes-font-down");
 const notesFontUp = document.getElementById("notes-font-up");
 
@@ -44,6 +46,7 @@ let timerInterval = null;
 let notesFontSize = 18;
 let isSpeakerMode = new URLSearchParams(window.location.search).get("speaker") === "1";
 let isBlackout = false;
+let client = null;
 
 applyI18n();
 
@@ -78,6 +81,12 @@ function pauseTimer() {
   clearInterval(timerInterval);
 }
 
+function resetTimer() {
+  pauseTimer();
+  timerSeconds = 0;
+  if (timerDisplay) timerDisplay.textContent = "00:00";
+}
+
 if (timerToggle) {
   timerToggle.addEventListener("click", () => {
     if (timerRunning) pauseTimer();
@@ -86,11 +95,7 @@ if (timerToggle) {
 }
 
 if (timerReset) {
-  timerReset.addEventListener("click", () => {
-    pauseTimer();
-    timerSeconds = 0;
-    if (timerDisplay) timerDisplay.textContent = "00:00";
-  });
+  timerReset.addEventListener("click", resetTimer);
 }
 
 function toggleSpeakerMode(force) {
@@ -102,8 +107,165 @@ function toggleSpeakerMode(force) {
   if (view) renderSpeakerConsole();
 }
 
+function renderSpeakerConsole() {
+  if (!speakerConsole || speakerConsole.hidden || !view) return;
+  const slides = view.presentation.slides;
+  if (!slides.length) return;
+  const slide = slides[index];
+  if (speakerTitle) speakerTitle.textContent = view.presentation.title || "SlydeCode";
+  if (scCurrent) scCurrent.textContent = String(index + 1);
+  if (scTotal) scTotal.textContent = String(slides.length);
+  if (scCurrentFrame) {
+    scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?static=1`;
+  }
+  if (index + 1 < slides.length) {
+    const nextSlide = slides[index + 1];
+    if (scNextFrame) {
+      scNextFrame.hidden = false;
+      scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
+    }
+    if (noNextHint) noNextHint.hidden = true;
+  } else {
+    if (scNextFrame) scNextFrame.hidden = true;
+    if (noNextHint) noNextHint.hidden = false;
+  }
+  if (speakerNotesBody) {
+    if (slide.notes && slide.notes.trim()) {
+      speakerNotesBody.textContent = slide.notes;
+      speakerNotesBody.classList.remove("speaker-notes-empty");
+    } else {
+      speakerNotesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
+    }
+  }
+}
+
+function applyView(next) {
+  view = next;
+  const slides = view.presentation.slides;
+  if (!slides.length) {
+    if (frameWrap) frameWrap.hidden = true;
+    if (empty) empty.hidden = false;
+    if (totalEl) totalEl.textContent = "0";
+    if (currentEl) currentEl.textContent = "0";
+    if (progress) progress.style.width = "0%";
+    if (progressBar) progressBar.setAttribute("aria-valuenow", "0");
+    return;
+  }
+
+  if (empty) empty.hidden = true;
+  if (frameWrap) frameWrap.hidden = false;
+  index = Math.min(index, slides.length - 1);
+
+  const slide = slides[index];
+  if (totalEl) totalEl.textContent = String(slides.length);
+  if (currentEl) currentEl.textContent = String(index + 1);
+  const percent = Math.round(((index + 1) / slides.length) * 100);
+  if (progress) progress.style.width = `${percent}%`;
+  if (progressBar) progressBar.setAttribute("aria-valuenow", String(percent));
+
+  const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
+  if (key !== slideKey) {
+    slideKey = key;
+    pendingSteps = slide.animation.slice();
+    if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
+  }
+
+  try {
+    history.replaceState(null, "", `#${index + 1}`);
+  } catch {}
+
+  fit();
+  renderSpeakerConsole();
+}
+
+function toggleBlackout() {
+  isBlackout = !isBlackout;
+  if (frameWrap) frameWrap.style.opacity = isBlackout ? "0" : "1";
+}
+
+function fit() {
+  if (!view || !frameWrap) return;
+  const ratio = view.presentation.aspect_ratio.split(":").map(Number);
+  const [w, h] = ratio;
+  const availableW = window.innerWidth;
+  const availableH = window.innerHeight;
+  let width = availableW;
+  let height = (width * h) / w;
+  if (height > availableH) {
+    height = availableH;
+    width = (height * w) / h;
+  }
+  frameWrap.style.width = `${Math.round(width)}px`;
+  frameWrap.style.height = `${Math.round(height)}px`;
+}
+
+function playPending() {
+  const steps = pendingSteps;
+  pendingSteps = [];
+  steps.forEach((step) => {
+    frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+  });
+}
+
+function advance() {
+  if (pendingSteps.length > 0) {
+    const step = pendingSteps.shift();
+    frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+    return;
+  }
+  go(1);
+}
+
+function go(delta) {
+  if (!view) return;
+  const slides = view.presentation.slides;
+  const next = Math.min(slides.length - 1, Math.max(0, index + delta));
+  if (next === index) return;
+  index = next;
+  slideKey = "";
+  applyView(view);
+}
+
+function jumpTo(targetIndex) {
+  if (!view) return;
+  const slides = view.presentation.slides;
+  const next = Math.min(slides.length - 1, Math.max(0, targetIndex));
+  if (next === index) return;
+  index = next;
+  slideKey = "";
+  applyView(view);
+}
+
+function exitToStudio() {
+  try {
+    window.close();
+  } catch {}
+  window.location.href = `/?t=${encodeURIComponent(token)}`;
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch {
+    /* Fullscreen can be denied; presenting still works. */
+  }
+}
+
+function showHud() {
+  if (!hud) return;
+  hud.dataset.visible = "true";
+  if (hudTimer) window.clearTimeout(hudTimer);
+  hudTimer = window.setTimeout(() => {
+    if (hud) hud.dataset.visible = "false";
+  }, 2600);
+}
+
+// Event Listeners
 if (exitSpeaker) exitSpeaker.addEventListener("click", () => toggleSpeakerMode(false));
+if (speakerCloseBtn) speakerCloseBtn.addEventListener("click", exitToStudio);
 if (hudSpeaker) hudSpeaker.addEventListener("click", () => toggleSpeakerMode(true));
+if (hudExit) hudExit.addEventListener("click", exitToStudio);
 
 if (notesFontDown) {
   notesFontDown.addEventListener("click", () => {
@@ -118,228 +280,88 @@ if (notesFontUp) {
   });
 }
 
-if (token) {
-  start(token);
-} else {
-  empty.hidden = false;
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || data.__slyde !== true) return;
+  if (data.type === "ready") playPending();
+});
+
+if (frame) {
+  frame.addEventListener("load", () => {
+    frame.style.opacity = "1";
+    window.setTimeout(playPending, 100);
+  });
 }
 
+window.addEventListener("resize", () => {
+  if (view) fit();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
+    event.preventDefault();
+    advance();
+  } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
+    event.preventDefault();
+    go(-1);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    jumpTo(0);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    if (view) jumpTo(view.presentation.slides.length - 1);
+  } else if (event.key.toLowerCase() === "b" || event.key === ".") {
+    event.preventDefault();
+    toggleBlackout();
+  } else if (event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    toggleSpeakerMode();
+  } else if (event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    toggleFullscreen();
+  } else if (event.key === "Escape") {
+    if (isBlackout) {
+      toggleBlackout();
+    } else if (isSpeakerMode) {
+      toggleSpeakerMode(false);
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else {
+      exitToStudio();
+    }
+  }
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
+  if (event.clientX < window.innerWidth / 2) go(-1);
+  else advance();
+});
+
+window.addEventListener("mousemove", showHud);
+showHud();
+
 async function start(sessionToken) {
-  const client = createClient(sessionToken);
+  client = createClient(sessionToken);
   try {
     const payload = await client.getState();
     sandboxOrigin = payload.sandbox_origin;
     applyView(payload.view);
     if (isSpeakerMode) toggleSpeakerMode(true);
-    client.connect({ onEvent: onEvent, onStatus: () => {} });
-  } catch {
-    empty.hidden = false;
-  }
-
-  function onEvent(event) {
-    if (event.type === "state_changed") applyView(event.view);
-  }
-
-  function renderSpeakerConsole() {
-    if (!speakerConsole || speakerConsole.hidden || !view) return;
-    const slides = view.presentation.slides;
-    if (!slides.length) return;
-    const slide = slides[index];
-    if (speakerTitle) speakerTitle.textContent = view.presentation.title || "SlydeCode";
-    if (scCurrent) scCurrent.textContent = String(index + 1);
-    if (scTotal) scTotal.textContent = String(slides.length);
-    if (scCurrentFrame) {
-      scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?static=1`;
-    }
-    if (index + 1 < slides.length) {
-      const nextSlide = slides[index + 1];
-      if (scNextFrame) {
-        scNextFrame.hidden = false;
-        scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
-      }
-      if (noNextHint) noNextHint.hidden = true;
-    } else {
-      if (scNextFrame) scNextFrame.hidden = true;
-      if (noNextHint) noNextHint.hidden = false;
-    }
-    if (speakerNotesBody) {
-      if (slide.notes && slide.notes.trim()) {
-        speakerNotesBody.textContent = slide.notes;
-        speakerNotesBody.classList.remove("speaker-notes-empty");
-      } else {
-        speakerNotesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
-      }
-    }
-  }
-
-  function applyView(next) {
-    view = next;
-    const slides = view.presentation.slides;
-    if (!slides.length) {
-      frameWrap.hidden = true;
-      empty.hidden = false;
-      totalEl.textContent = "0";
-      currentEl.textContent = "0";
-      progress.style.width = "0%";
-      progressBar.setAttribute("aria-valuenow", "0");
-      return;
-    }
-
-    empty.hidden = true;
-    frameWrap.hidden = false;
-    index = Math.min(index, slides.length - 1);
-
-    const slide = slides[index];
-    totalEl.textContent = String(slides.length);
-    currentEl.textContent = String(index + 1);
-    const percent = Math.round(((index + 1) / slides.length) * 100);
-    progress.style.width = `${percent}%`;
-    progressBar.setAttribute("aria-valuenow", String(percent));
-
-    const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
-    if (key !== slideKey) {
-      slideKey = key;
-      pendingSteps = slide.animation.slice();
-      frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
-    }
-
-    try {
-      history.replaceState(null, "", `#${index + 1}`);
-    } catch {}
-
-    fit();
-    renderSpeakerConsole();
-  }
-
-  function toggleBlackout() {
-    isBlackout = !isBlackout;
-    if (frameWrap) frameWrap.style.opacity = isBlackout ? "0" : "1";
-  }
-
-  function fit() {
-    const ratio = view.presentation.aspect_ratio.split(":").map(Number);
-    const [w, h] = ratio;
-    const availableW = window.innerWidth;
-    const availableH = window.innerHeight;
-    let width = availableW;
-    let height = (width * h) / w;
-    if (height > availableH) {
-      height = availableH;
-      width = (height * w) / h;
-    }
-    frameWrap.style.width = `${Math.round(width)}px`;
-    frameWrap.style.height = `${Math.round(height)}px`;
-  }
-
-  function playPending() {
-    const steps = pendingSteps;
-    pendingSteps = [];
-    steps.forEach((step) => {
-      frame.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+    client.connect({
+      onEvent: (e) => {
+        if (e.type === "state_changed") applyView(e.view);
+      },
+      onStatus: () => {},
     });
+  } catch (err) {
+    console.error("Presentation start failed:", err);
+    if (empty) empty.hidden = false;
   }
+}
 
-  window.addEventListener("message", (event) => {
-    const data = event.data;
-    if (!data || data.__slyde !== true) return;
-    if (data.type === "ready") playPending();
-  });
-
-  frame.addEventListener("load", () => {
-    frame.style.opacity = "1";
-    window.setTimeout(playPending, 100);
-  });
-
-  function jumpTo(targetIndex) {
-    if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, targetIndex));
-    if (next === index) return;
-    index = next;
-    slideKey = "";
-    applyView(view);
-  }
-
-  function go(delta) {
-    if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, index + delta));
-    if (next === index) return;
-    index = next;
-    slideKey = "";
-    applyView(view);
-  }
-
-  window.addEventListener("resize", () => {
-    if (view) fit();
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
-      event.preventDefault();
-      go(1);
-    } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
-      event.preventDefault();
-      go(-1);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      jumpTo(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      if (view) jumpTo(view.presentation.slides.length - 1);
-    } else if (event.key.toLowerCase() === "b" || event.key === ".") {
-      event.preventDefault();
-      toggleBlackout();
-    } else if (event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      toggleSpeakerMode();
-    } else if (event.key.toLowerCase() === "f") {
-      toggleFullscreen();
-    } else if (event.key === "Escape") {
-      if (isBlackout) {
-        toggleBlackout();
-      } else if (isSpeakerMode) {
-        toggleSpeakerMode(false);
-      } else if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        window.close();
-        window.location.href = `/?t=${encodeURIComponent(token)}`;
-      }
-    }
-  });
-
-  const hudExit = document.getElementById("hud-exit");
-  if (hudExit) {
-    hudExit.addEventListener("click", () => {
-      window.close();
-      window.location.href = `/?t=${encodeURIComponent(token)}`;
-    });
-  }
-
-  document.addEventListener("click", (event) => {
-    if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
-    if (event.clientX < window.innerWidth / 2) go(-1);
-    else go(1);
-  });
-
-  async function toggleFullscreen() {
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
-    } catch {
-      /* Fullscreen can be denied; presenting still works. */
-    }
-  }
-
-  function showHud() {
-    hud.dataset.visible = "true";
-    if (hudTimer) window.clearTimeout(hudTimer);
-    hudTimer = window.setTimeout(() => {
-      hud.dataset.visible = "false";
-    }, 2600);
-  }
-
-  window.addEventListener("mousemove", showHud);
-  showHud();
+if (token) {
+  start(token);
+} else {
+  if (empty) empty.hidden = false;
 }
