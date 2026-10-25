@@ -179,6 +179,8 @@ SlydeCode/
   a ZIP bundle (`deck.json` + `assets/`) as soon as a slide uses one.
 - **Exports.** PDF (exact 16:9), PNG (2560×1440, one Chrome session for the whole
   deck) and PPTX (one full-bleed picture per slide, notes preserved).
+- **Copilot memory.** The conversation is stored per deck and comes back after a
+  reload or a deck switch; "New chat" clears it.
 
 ---
 
@@ -188,8 +190,9 @@ SlydeCode/
 # Rust: 161 unit and integration tests across the five crates
 cargo test --workspace
 
-# UI: 29 end-to-end tests (28 browser flows + the activity state machine).
-# They spawn the real binary in headless Chrome over CDP and need no npm packages.
+# UI: 53 tests. Browser flows drive the real studio in headless Chrome over CDP;
+# the component and i18n suites run the DOM-free modules directly in Node.
+# No npm packages are involved.
 cargo build --workspace
 node --test "tests/ui/*.test.mjs"
 ```

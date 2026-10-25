@@ -1,11 +1,12 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 14:45
+> Last updated: 2026-10-25 14:56
 
 ## Current Phase
 
-Phase 3.0 — **product completion on `feat/product-completion`.** Rust 217 tests and
-41 UI tests green; `cargo fmt --check` and `cargo clippy -D warnings` clean.
+Phase 3.1 — **product completion on `feat/product-completion`.** Rust 220 tests and
+53 UI tests green (41 browser/CDP + 12 component); `cargo fmt --check` and
+`cargo clippy -D warnings` clean.
 
 This block closed the three product gaps the audit named — a real deck library,
 real images, and PowerPoint export — plus the infrastructure that had been
@@ -13,8 +14,12 @@ missing: batch PNG rendering over CDP at 2x, a concurrent MCP stdio loop, a
 server-side copilot cancel, per-locale dictionaries with parity tests, and a
 module smoke test that would have caught the dead `app.js` import.
 
-Two data bugs were found and fixed along the way, both invisible to the old
-suite:
+This round added the shared presenter state machine (the studio overlay and the
+standalone presenter had two copies that had already drifted), the component test
+layer, and per-deck copilot conversation persistence.
+
+Two data bugs were found and fixed in the previous round, both invisible to the
+old suite:
 
 - the autosave wrote into a placeholder `unset.slyde` instead of the active deck
   (`watch::Sender::send` silently drops the value when nobody is subscribed yet),
@@ -84,7 +89,7 @@ suite:
 - `slyde-core` (54 tests): model, `PresentationState` with snapshot history and
   coalescing typing, validation, `.slyde` project format, element scoping,
   `insert_image` / `set_element_geometry`, `ImageRect`.
-- `slyde-server` (126 tests): two listeners, all HTTP/WS endpoints, token +
+- `slyde-server` (128 tests): two listeners, all HTTP/WS endpoints, token +
   Origin guards, the deck library, the asset store, the copilot, exports.
 - `slyde-mcp` (16 tests): JSON-RPC stdio with **concurrent dispatch** — each line
   becomes a task under a `Semaphore(8)`, one writer task serialises stdout, and a
@@ -94,6 +99,24 @@ suite:
 - Copilot: `POST /api/copilot/cancel` stops a turn server-side (the flag is
   checked per SSE chunk and per tool round, so the upstream response is dropped),
   and the round budget is 40 with the repeat guard intact.
+
+### Presenter (shared)
+
+- `ui/static/presenter-core.js` owns the reveal state (current slide, queued
+  animation steps, frame readiness, intro-once) and the key map. The studio
+  overlay (`app.js`) and the standalone page (`present.js`) both drive it, so
+  "one step per advance", Home/End, `B`/`S`/`F`/Esc and the progress bar cannot
+  disagree between surfaces. It is pure, and `tests/ui/components.test.mjs` covers
+  it (intro once, wait-before-ready, slide advance, end, clamping, reload,
+  malformed slides, every key).
+
+### Copilot conversation
+
+- One thread per deck, stored next to the keys (`copilot-threads.json`): bounded
+  at 40 messages, 20k characters each and 100 decks. The panel restores it when
+  it mounts and when the deck changes, "New chat" clears it, and every settled
+  turn saves it. Tool rows and reasoning are not persisted: they were live UI, and
+  replaying them next session would be a lie about what the model did.
 
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
 
@@ -105,6 +128,10 @@ suite:
 - `tests/ui/modules.test.mjs` imports every UI module in Node and fails on any
   `SyntaxError`: a duplicate `let` in a new module had produced a blank studio
   with no error in the product.
+- `tests/ui/components.test.mjs` is the component layer the audit asked for: the
+  DOM-free modules (reveal state, key map, progress, pacing, activity) are tested
+  directly in Node. There is still no DOM component runner, which is the trade-off
+  of the zero-npm decision.
 - Library sheet, image editing, PPTX menu item, all localized in EN and ES.
 - Auth: JSON calls use `Authorization: Bearer`; only the WS handshake, downloads
   and `window.open` keep the query form.
@@ -133,12 +160,15 @@ Nothing partially implemented on the branch.
 
 ## Not Implemented Yet
 
-- Copilot conversations are not persisted per deck; the thread lives in the page.
+- `app.js` is still the studio shell in one closure (~2,400 lines): the presenter,
+  the deck library, i18n, the copilot and the palette are modules, but the stage,
+  storyboard and inspector orchestration is not split yet.
 - OS keychain for provider keys (the file is owner-only on Unix; Windows has no
   DACL yet).
 - `app.js` is still one large `boot()` closure, and the presenter logic is
   duplicated between `app.js` and `present.js`.
-- Component-level DOM tests (the module smoke test is not a component runner).
+- A DOM component runner (the pure modules are covered; the DOM wiring is only
+  covered end-to-end).
 - Deck thumbnails in the library (rows show title, slide count, age and theme).
 - PPTX exports pictures, not editable text shapes.
 
@@ -157,6 +187,8 @@ Nothing partially implemented on the branch.
 - The inspector still rebuilds itself with `innerHTML`; the notes caret and
   scroll are restored explicitly, but focus can be lost while a remote change
   lands.
+- A restored copilot thread shows text only: tool rows and reasoning from the
+  previous session are gone by design.
 - Copilot: 40 rounds is still a budget, not a guarantee, and large decks may need
   a second "continue".
 - PNG export at 2x triples the file size; there is no user-facing 1x/2x choice.
@@ -178,14 +210,15 @@ Nothing partially implemented on the branch.
 ## Backlog (Prioritized)
 
 1. **Validate the copilot against live provider keys** (all eight).
-2. **Split `ui/static/app.js`** into modules with a state object and per-region
-   render, and share one presenter implementation with `present.js`.
-3. **Persist copilot conversations** per deck and add token/cost estimates.
-4. **OS keychain** for provider keys (Windows DACL first).
-5. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
-6. **Editable PPTX** (text shapes) behind the current image-per-slide baseline.
-7. Component-level DOM tests once a runner is chosen.
-8. Content-addressed assets so two decks can share one image.
+2. **Split the studio shell in `app.js`** (stage, storyboard, inspector) with a
+   state object and per-region render; the presenter is already shared.
+3. **OS keychain** for provider keys (Windows has a DACL now; a real keychain is
+   next).
+4. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
+5. **Editable PPTX** (text shapes) behind the current image-per-slide baseline.
+6. A DOM component runner if the zero-npm rule is ever relaxed.
+7. Content-addressed assets so two decks can share one image.
+8. Token/cost estimates for copilot turns.
 
 ## Next Immediate Step
 
@@ -194,6 +227,9 @@ Nothing partially implemented on the branch.
 
 ## Completed
 
+- [x] Shared presenter state machine + component tests (12) — 2026-10-25
+- [x] Copilot conversations persisted per deck (bounded), restored on mount and
+      deck switch, cleared by New chat — 2026-10-25
 - [x] Deck library: files instead of a single autosave slot, endpoints, sheet,
       `⌘K` entries, migration of `current.slyde` — 2026-10-25
 - [x] Images: asset store, paste/drop, move/resize, `.slyde` bundle v2 — 2026-10-25
