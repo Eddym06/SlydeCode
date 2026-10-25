@@ -7,7 +7,7 @@ export function readToken() {
   if (fromQuery) {
     sessionStorage.setItem("slyde.token", fromQuery);
     url.searchParams.delete("t");
-    window.history.replaceState({}, "", url.pathname + url.search);
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     return fromQuery;
   }
   return sessionStorage.getItem("slyde.token");

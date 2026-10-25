@@ -1,7 +1,7 @@
 /* Presenter: the slide is the only thing on screen. */
 
-html,
-body {
+html.present-standalone,
+body.present-standalone {
   margin: 0;
   height: 100%;
   background: #0b0b0d;
@@ -9,6 +9,24 @@ body {
   font-family: var(--font-ui);
   overflow: hidden;
   cursor: default;
+}
+
+.present-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #0b0b0d;
+  color: #f4f3f1;
+  font-family: var(--font-ui);
+  overflow: hidden;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.present-overlay[hidden] {
+  display: none !important;
 }
 
 .present {
@@ -56,6 +74,30 @@ body {
 
 .hud[data-visible="true"] {
   opacity: 1;
+}
+
+.hud-exit-btn {
+  background: rgba(244, 243, 241, 0.12);
+  color: #f4f3f1;
+  border: 1px solid rgba(244, 243, 241, 0.22);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 140ms ease;
+}
+
+.hud-exit-btn:hover {
+  background: rgba(244, 243, 241, 0.25);
+  border-color: rgba(244, 243, 241, 0.4);
+}
+
+.hud-hint span[id^="hud-"],
+.hud-hint kbd {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .hud-count {

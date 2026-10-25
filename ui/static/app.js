@@ -75,6 +75,7 @@ function boot(sessionToken) {
     presentMenu: $("present-menu"),
     presentFullscreen: $("present-fullscreen"),
     presentSpeaker: $("present-speaker"),
+    presentWindow: $("present-window"),
     storyboard: $("storyboard"),
     slideCount: $("slide-count"),
     templatePopover: $("template-popover"),
@@ -1196,23 +1197,394 @@ function boot(sessionToken) {
     }
   }
 
-  function openPresentation(speaker = false) {
+  // ---------- In-Studio Presentation Mode (No popup / in-place) ----------
+  let isPresenting = false;
+  let presentIndex = 0;
+  let presentSpeakerMode = false;
+  let presentBlackout = false;
+  let presentSlideKey = "";
+  let presentPendingSteps = [];
+  let presentTimerSeconds = 0;
+  let presentTimerRunning = false;
+  let presentTimerInterval = null;
+  let presentHudTimer = null;
+  let presentClockInterval = null;
+  let presentNotesFontSize = 18;
+
+  const presentEls = {
+    overlay: $("present-overlay"),
+    screen: $("present-screen"),
+    frameWrap: $("present-frame"),
+    frame: $("present-slide"),
+    empty: $("present-empty"),
+    hud: $("hud"),
+    current: $("hud-current"),
+    total: $("hud-total"),
+    progress: $("progress"),
+    progressFill: $("progress-fill"),
+    hudSpeaker: $("hud-speaker"),
+    hudFullscreen: $("hud-fullscreen"),
+    hudExitBtn: $("hud-exit-btn"),
+    speakerConsole: $("speaker-console"),
+    speakerTitle: $("speaker-deck-title"),
+    wallClock: $("wall-clock"),
+    timerDisplay: $("timer-display"),
+    timerToggle: $("timer-toggle"),
+    timerReset: $("timer-reset"),
+    exitSpeaker: $("exit-speaker"),
+    speakerCloseBtn: $("speaker-close-btn"),
+    scCurrent: $("sc-current"),
+    scTotal: $("sc-total"),
+    scCurrentFrame: $("sc-current-frame"),
+    scNextFrame: $("sc-next-frame"),
+    noNextHint: $("no-next-hint"),
+    notesBody: $("speaker-notes-body"),
+    notesDown: $("notes-font-down"),
+    notesUp: $("notes-font-up"),
+  };
+
+  function formatPresentTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  function startPresentTimer() {
+    if (presentTimerRunning) return;
+    presentTimerRunning = true;
+    if (presentEls.timerToggle) presentEls.timerToggle.textContent = "⏸";
+    presentTimerInterval = setInterval(() => {
+      presentTimerSeconds += 1;
+      if (presentEls.timerDisplay) presentEls.timerDisplay.textContent = formatPresentTime(presentTimerSeconds);
+    }, 1000);
+  }
+
+  function pausePresentTimer() {
+    presentTimerRunning = false;
+    if (presentEls.timerToggle) presentEls.timerToggle.textContent = "▶";
+    clearInterval(presentTimerInterval);
+  }
+
+  function resetPresentTimer() {
+    pausePresentTimer();
+    presentTimerSeconds = 0;
+    if (presentEls.timerDisplay) presentEls.timerDisplay.textContent = "00:00";
+  }
+
+  function updatePresentWallClock() {
+    if (presentEls.wallClock) {
+      const now = new Date();
+      presentEls.wallClock.textContent = now.toTimeString().slice(0, 8);
+    }
+  }
+
+  function fitPresentFrame() {
+    if (!view || !presentEls.frameWrap) return;
+    const ratio = view.presentation.aspect_ratio.split(":").map(Number);
+    const [w, h] = ratio;
+    const availableW = window.innerWidth;
+    const availableH = window.innerHeight;
+    let width = availableW;
+    let height = (width * h) / w;
+    if (height > availableH) {
+      height = availableH;
+      width = (height * w) / h;
+    }
+    presentEls.frameWrap.style.width = `${Math.round(width)}px`;
+    presentEls.frameWrap.style.height = `${Math.round(height)}px`;
+  }
+
+  function showPresentHud() {
+    if (!presentEls.hud) return;
+    presentEls.hud.dataset.visible = "true";
+    if (presentHudTimer) clearTimeout(presentHudTimer);
+    presentHudTimer = setTimeout(() => {
+      if (presentEls.hud) presentEls.hud.dataset.visible = "false";
+    }, 2800);
+  }
+
+  function renderPresentSpeakerConsole() {
+    if (!presentEls.speakerConsole || presentEls.speakerConsole.hidden || !view) return;
+    const slides = view.presentation.slides;
+    if (!slides.length) return;
+    const s = slides[presentIndex];
+    if (presentEls.speakerTitle) presentEls.speakerTitle.textContent = view.presentation.title || "SlydeCode";
+    if (presentEls.scCurrent) presentEls.scCurrent.textContent = String(presentIndex + 1);
+    if (presentEls.scTotal) presentEls.scTotal.textContent = String(slides.length);
+    if (presentEls.scCurrentFrame) {
+      presentEls.scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1`;
+    }
+    if (presentIndex + 1 < slides.length) {
+      const nextSlide = slides[presentIndex + 1];
+      if (presentEls.scNextFrame) {
+        presentEls.scNextFrame.hidden = false;
+        presentEls.scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1`;
+      }
+      if (presentEls.noNextHint) presentEls.noNextHint.hidden = true;
+    } else {
+      if (presentEls.scNextFrame) presentEls.scNextFrame.hidden = true;
+      if (presentEls.noNextHint) presentEls.noNextHint.hidden = false;
+    }
+    if (presentEls.notesBody) {
+      if (s.notes && s.notes.trim()) {
+        presentEls.notesBody.textContent = s.notes;
+        presentEls.notesBody.classList.remove("speaker-notes-empty");
+      } else {
+        presentEls.notesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
+      }
+    }
+  }
+
+  function renderPresentSlide() {
+    if (!view || !isPresenting) return;
+    const slides = view.presentation.slides;
+    if (!slides.length) {
+      if (presentEls.frameWrap) presentEls.frameWrap.hidden = true;
+      if (presentEls.empty) presentEls.empty.hidden = false;
+      return;
+    }
+    if (presentEls.empty) presentEls.empty.hidden = true;
+    if (presentEls.frameWrap) presentEls.frameWrap.hidden = false;
+
+    presentIndex = Math.min(slides.length - 1, Math.max(0, presentIndex));
+    const s = slides[presentIndex];
+
+    if (presentEls.current) presentEls.current.textContent = String(presentIndex + 1);
+    if (presentEls.total) presentEls.total.textContent = String(slides.length);
+
+    const percent = Math.round(((presentIndex + 1) / slides.length) * 100);
+    if (presentEls.progressFill) presentEls.progressFill.style.width = `${percent}%`;
+    if (presentEls.progress) presentEls.progress.setAttribute("aria-valuenow", String(percent));
+
+    const key = `${s.id}:${s.code.length}:${s.animation.length}`;
+    if (key !== presentSlideKey) {
+      presentSlideKey = key;
+      presentPendingSteps = s.animation.slice();
+      if (presentEls.frame) {
+        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}`;
+      }
+    }
+
+    fitPresentFrame();
+    renderPresentSpeakerConsole();
+    showPresentHud();
+  }
+
+  function advancePresentSlide() {
+    if (presentPendingSteps.length > 0) {
+      const step = presentPendingSteps.shift();
+      if (presentEls.frame && presentEls.frame.contentWindow) {
+        presentEls.frame.contentWindow.postMessage({ __slyde: true, type: "animate", step }, "*");
+      }
+      return;
+    }
+    goPresentDelta(1);
+  }
+
+  function goPresentDelta(delta) {
+    if (!view) return;
+    const slides = view.presentation.slides;
+    const next = Math.min(slides.length - 1, Math.max(0, presentIndex + delta));
+    if (next === presentIndex) return;
+    presentIndex = next;
+    presentSlideKey = "";
+    renderPresentSlide();
+  }
+
+  function jumpPresentIndex(target) {
+    if (!view) return;
+    const slides = view.presentation.slides;
+    const next = Math.min(slides.length - 1, Math.max(0, target));
+    if (next === presentIndex) return;
+    presentIndex = next;
+    presentSlideKey = "";
+    renderPresentSlide();
+  }
+
+  function togglePresentBlackout() {
+    presentBlackout = !presentBlackout;
+    if (presentEls.frameWrap) presentEls.frameWrap.style.opacity = presentBlackout ? "0" : "1";
+  }
+
+  function togglePresentSpeakerMode(force) {
+    presentSpeakerMode = typeof force === "boolean" ? force : !presentSpeakerMode;
+    if (presentEls.speakerConsole) presentEls.speakerConsole.hidden = !presentSpeakerMode;
+    if (presentSpeakerMode && !presentTimerRunning && presentTimerSeconds === 0) {
+      startPresentTimer();
+    }
+    if (view) renderPresentSpeakerConsole();
+  }
+
+  function handlePresentKeydown(event) {
+    if (!isPresenting) return;
+    if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
+      event.preventDefault();
+      advancePresentSlide();
+    } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
+      event.preventDefault();
+      goPresentDelta(-1);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      jumpPresentIndex(0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      if (view) jumpPresentIndex(view.presentation.slides.length - 1);
+    } else if (event.key.toLowerCase() === "b" || event.key === ".") {
+      event.preventDefault();
+      togglePresentBlackout();
+    } else if (event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      togglePresentSpeakerMode();
+    } else if (event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else document.documentElement.requestFullscreen().catch(() => {});
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      if (presentBlackout) {
+        togglePresentBlackout();
+      } else if (presentSpeakerMode) {
+        togglePresentSpeakerMode(false);
+      } else {
+        closePresentation();
+      }
+    }
+  }
+
+  function handlePresentClick(event) {
+    if (!isPresenting) return;
+    if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
+    if (event.clientX < window.innerWidth / 2) goPresentDelta(-1);
+    else advancePresentSlide();
+  }
+
+  function openPresentationInStudio(speaker = false) {
     const d = deck();
-    const slideIndex = d ? Math.max(0, d.slides.findIndex((s) => s.id === selectedId)) : 0;
-    const hash = slideIndex > 0 ? `#${slideIndex + 1}` : "";
-    const speakerParam = speaker ? "&speaker=1" : "";
-    const url = `/present?t=${encodeURIComponent(sessionToken)}${speakerParam}${hash}`;
-    // Open in a new tab without window feature restrictions to avoid popup blocker in app mode
-    const win = window.open(url, "_blank");
-    if (!win || win.closed || typeof win.closed === "undefined") {
-      // Fallback if popup blocker intercepted it
-      window.location.href = url;
+    if (!d || !d.slides.length) {
+      toast(t("present.empty"));
+      return;
+    }
+    isPresenting = true;
+    presentBlackout = false;
+    presentIndex = Math.max(0, d.slides.findIndex((s) => s.id === selectedId));
+    presentSlideKey = "";
+
+    if (presentEls.overlay) presentEls.overlay.hidden = false;
+    document.documentElement.requestFullscreen().catch(() => {});
+
+    if (speaker) {
+      togglePresentSpeakerMode(true);
+    } else {
+      togglePresentSpeakerMode(false);
+    }
+
+    if (!presentClockInterval) {
+      updatePresentWallClock();
+      presentClockInterval = setInterval(updatePresentWallClock, 1000);
+    }
+
+    renderPresentSlide();
+
+    document.addEventListener("keydown", handlePresentKeydown);
+    document.addEventListener("click", handlePresentClick);
+    window.addEventListener("mousemove", showPresentHud);
+    window.addEventListener("resize", fitPresentFrame);
+  }
+
+  function closePresentation() {
+    if (!isPresenting) return;
+    isPresenting = false;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    if (presentEls.overlay) presentEls.overlay.hidden = true;
+
+    document.removeEventListener("keydown", handlePresentKeydown);
+    document.removeEventListener("click", handlePresentClick);
+    window.removeEventListener("mousemove", showPresentHud);
+    window.removeEventListener("resize", fitPresentFrame);
+
+    if (view && view.presentation.slides[presentIndex]) {
+      selectedId = view.presentation.slides[presentIndex].id;
+    }
+    stageKey = "";
+    applyView(view);
+  }
+
+  function initPresenterListeners() {
+    if (presentEls.hudExitBtn) {
+      presentEls.hudExitBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closePresentation();
+      });
+    }
+    if (presentEls.speakerCloseBtn) {
+      presentEls.speakerCloseBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closePresentation();
+      });
+    }
+    if (presentEls.exitSpeaker) {
+      presentEls.exitSpeaker.addEventListener("click", (e) => {
+        e.stopPropagation();
+        togglePresentSpeakerMode(false);
+      });
+    }
+    if (presentEls.hudSpeaker) {
+      presentEls.hudSpeaker.addEventListener("click", (e) => {
+        e.stopPropagation();
+        togglePresentSpeakerMode();
+      });
+    }
+    if (presentEls.hudFullscreen) {
+      presentEls.hudFullscreen.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else document.documentElement.requestFullscreen().catch(() => {});
+      });
+    }
+    if (presentEls.timerToggle) {
+      presentEls.timerToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (presentTimerRunning) pausePresentTimer();
+        else startPresentTimer();
+      });
+    }
+    if (presentEls.timerReset) {
+      presentEls.timerReset.addEventListener("click", (e) => {
+        e.stopPropagation();
+        resetPresentTimer();
+      });
+    }
+    if (presentEls.notesDown) {
+      presentEls.notesDown.addEventListener("click", (e) => {
+        e.stopPropagation();
+        presentNotesFontSize = Math.max(14, presentNotesFontSize - 2);
+        if (presentEls.notesBody) presentEls.notesBody.style.fontSize = `${presentNotesFontSize}px`;
+      });
+    }
+    if (presentEls.notesUp) {
+      presentEls.notesUp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        presentNotesFontSize = Math.min(32, presentNotesFontSize + 2);
+        if (presentEls.notesBody) presentEls.notesBody.style.fontSize = `${presentNotesFontSize}px`;
+      });
+    }
+    if (presentEls.frame) {
+      presentEls.frame.addEventListener("load", () => {
+        while (presentPendingSteps.length) {
+          const step = presentPendingSteps.shift();
+          presentEls.frame.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+        }
+      });
     }
   }
 
   function setupPresentGroup() {
+    initPresenterListeners();
+
     if (els.present) {
-      els.present.addEventListener("click", () => openPresentation(false));
+      els.present.addEventListener("click", () => openPresentationInStudio(false));
     }
     if (els.presentMenuTrigger && els.presentMenu) {
       els.presentMenuTrigger.addEventListener("click", (e) => {
@@ -1231,13 +1603,23 @@ function boot(sessionToken) {
     if (els.presentFullscreen) {
       els.presentFullscreen.addEventListener("click", () => {
         if (els.presentMenu) els.presentMenu.hidden = true;
-        openPresentation(false);
+        openPresentationInStudio(false);
       });
     }
     if (els.presentSpeaker) {
       els.presentSpeaker.addEventListener("click", () => {
         if (els.presentMenu) els.presentMenu.hidden = true;
-        openPresentation(true);
+        openPresentationInStudio(true);
+      });
+    }
+    const presentWindow = $("present-window");
+    if (presentWindow) {
+      presentWindow.addEventListener("click", () => {
+        if (els.presentMenu) els.presentMenu.hidden = true;
+        const d = deck();
+        const slideIndex = d ? Math.max(0, d.slides.findIndex((s) => s.id === selectedId)) : 0;
+        const hash = slideIndex > 0 ? `#${slideIndex + 1}` : "";
+        window.open(`/present?t=${encodeURIComponent(sessionToken)}${hash}`, "_blank");
       });
     }
   }

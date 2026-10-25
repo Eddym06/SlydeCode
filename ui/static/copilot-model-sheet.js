@@ -120,7 +120,7 @@ export function createModelSheet({
           <p class="sheet-eyebrow">${escapeHtml(t("copilot.title"))}</p>
           <h2 id="copilot-sheet-title">${escapeHtml(t("copilot.sheetTitle"))}</h2>
         </div>
-        <button type="button" class="icon-btn icon-btn-sm" id="sheet-close"
+        <button type="button" class="sheet-close-btn" id="sheet-close"
           aria-label="${escapeHtml(t("copilot.close"))}" title="${escapeHtml(t("copilot.close"))}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
             stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>

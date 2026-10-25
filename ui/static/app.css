@@ -254,6 +254,9 @@
 .icon-btn {
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   border-radius: var(--r-control);
@@ -1124,6 +1127,9 @@ details.dev[open] summary::before {
 .icon-btn-sm {
   width: 32px;
   height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
 }
 
 .icon-btn-sm svg {
@@ -2470,6 +2476,7 @@ details.dev[open] summary::before {
   background: var(--surface-sunken);
   border: 1px solid var(--border);
   border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .zoom-pill {
@@ -2648,6 +2655,26 @@ details.dev[open] summary::before {
 .popover-title {
   font-size: 12px;
   font-weight: 600;
+  color: var(--ink);
+}
+
+.popover-close-btn,
+.sheet-close-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+
+.popover-close-btn:hover,
+.sheet-close-btn:hover {
+  background: var(--surface-sunken);
   color: var(--ink);
 }
 

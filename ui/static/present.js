@@ -200,7 +200,6 @@ async function start(sessionToken) {
     if (key !== slideKey) {
       slideKey = key;
       pendingSteps = slide.animation.slice();
-      frame.style.opacity = "0.2";
       frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
     }
 
@@ -305,9 +304,18 @@ async function start(sessionToken) {
         document.exitFullscreen();
       } else {
         window.close();
+        window.location.href = `/?t=${encodeURIComponent(token)}`;
       }
     }
   });
+
+  const hudExit = document.getElementById("hud-exit");
+  if (hudExit) {
+    hudExit.addEventListener("click", () => {
+      window.close();
+      window.location.href = `/?t=${encodeURIComponent(token)}`;
+    });
+  }
 
   document.addEventListener("click", (event) => {
     if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
