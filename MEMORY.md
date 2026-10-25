@@ -238,6 +238,7 @@ MIT and the license is compatible with a commercial product.
   clippy-driver.exe --edition 2024 --crate-type lib --target x86_64-unknown-linux-gnu -D warnings <file>.rs --emit metadata -o out.rmeta
   ```
   with `#![allow(dead_code)]` and the file's own type stubs; it reproduces "variable does not need to be mutable" exactly.
+- **A fixed sleep after a state change races the stage iframe reload.** The scoped-edit E2E clicked the canvas 900 ms after a slide switch and asserted on the outgoing command 600 ms after a HUD click: on the CI runner the click landed while the frame was still reloading, nothing got selected, and the suite failed once and passed once without a code change. Drive the interaction until the observable effect appears (HUD tag non-empty) and poll for the outcome; a retry loop with a bound turns a coin flip into a diagnostic ("the stage selected nothing" vs "the HUD sent nothing").
 
 ## Design System Reference
 

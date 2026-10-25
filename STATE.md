@@ -269,6 +269,10 @@ Nothing partially implemented on the branch.
       per OS, so no platform leaves a dead `mut` (`unused_mut` under
       `-D warnings` on Linux); Linux also gained absolute snap/flatpak paths, and
       a test guards against an empty candidate list — 2026-10-25
+- [x] CI is green on the pull request (Linux fmt/clippy/tests and the Windows
+      studio suite). The scoped-edit E2E test that failed once was racing the
+      stage reload: it now clicks until the HUD confirms a selection and polls
+      for the outgoing command — 2026-10-25
 - [x] Canvas extracted (selection, HUD, inline editing, image placement) and the
       storyboard extracted (thumbnails, drag-and-drop, hover actions) — 2026-10-25
 - [x] Inspector extracted to its own module (markup, animation timeline, notes
