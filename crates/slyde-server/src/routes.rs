@@ -28,6 +28,15 @@ pub struct SandboxQuery {
     pub t: Option<String>,
 }
 
+async fn no_cache_header(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(req).await;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+    response
+}
+
 pub fn app_router(state: Arc<AppState>) -> Router {
     let static_dir = ServeDir::new(state.ui_dir.join("static"));
     Router::new()
@@ -61,6 +70,7 @@ pub fn app_router(state: Arc<AppState>) -> Router {
         )
         .route("/ws", get(crate::ws::upgrade))
         .nest_service("/static", static_dir)
+        .layer(axum::middleware::from_fn(no_cache_header))
         .with_state(state)
 }
 

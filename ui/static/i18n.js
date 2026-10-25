@@ -209,6 +209,10 @@ const DICT = {
     "present.jump": "Jump to slide",
     "present.clock": "Clock",
     "present.blackout": "blank",
+    "present.exit": "Exit",
+    "present.empty": "No slides yet. Add one in the studio.",
+    "present.fullscreen": "Fullscreen",
+    "present.navigate": "Navigate",
   },
   es: {
     "brand.sub": "estudio",
@@ -417,6 +421,10 @@ const DICT = {
     "present.jump": "Ir a diapositiva",
     "present.clock": "Reloj",
     "present.blackout": "en negro",
+    "present.exit": "Salir",
+    "present.empty": "Aún no hay diapositivas. Añade una en el estudio.",
+    "present.fullscreen": "Pantalla completa",
+    "present.navigate": "Navegar",
   },
 };
 
