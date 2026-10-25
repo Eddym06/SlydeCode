@@ -23,7 +23,10 @@ use super::wire::{ChatEvent, ImagePart, Turn};
 const MAX_MESSAGES: usize = 40;
 const MAX_TEXT_CHARS: usize = 80_000;
 const MAX_TOTAL_ATTACHMENTS: usize = 8;
-const MAX_TOOL_ROUNDS: usize = 8;
+/// Rounds the model may spend calling tools. A deck of a dozen slides plus a
+/// couple of reads fits comfortably; the loop also stops on its own when the
+/// model stops making progress.
+const MAX_TOOL_ROUNDS: usize = 20;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatMessageInput {
@@ -104,18 +107,25 @@ async fn run_inner(
     state.copilot.remember(provider.id, &request.model).await;
     state.broadcast(activity(AgentPhase::Thinking));
 
-    let view = state.view().await;
-    let deck = &view.presentation;
-    let selected = request
-        .selected_slide_id
-        .as_deref()
-        .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
     let language = request.language.as_deref().unwrap_or("en");
+
+    let mut last_signature: Option<String> = None;
+    let mut repeats: u32 = 0;
 
     for _round in 0..MAX_TOOL_ROUNDS {
         if tx.is_closed() {
             return Err(CopilotError::Cancelled);
         }
+        // Tools mutate the deck, so the prompt is rebuilt from the live state on
+        // every round. A snapshot taken before the loop told the model nothing
+        // had changed, so it re-created slides that already existed and burned
+        // through the step budget.
+        let view = state.view().await;
+        let deck = &view.presentation;
+        let selected = request
+            .selected_slide_id
+            .as_deref()
+            .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
         let system = prompt::system_prompt(deck, selected, request.selected_element_id.as_deref(), language);
         let assistant = transport::stream(
             state.copilot.http(),
@@ -140,6 +150,26 @@ async fn run_inner(
                 ));
             }
             return Ok(());
+        }
+
+        // A model that repeats the exact same call is stuck, not working. Stop
+        // before spending the rest of the budget on it.
+        let signature = calls
+            .iter()
+            .map(|call| format!("{}|{}", call.name, call.arguments))
+            .collect::<Vec<_>>()
+            .join(";");
+        if last_signature.as_deref() == Some(signature.as_str()) {
+            repeats += 1;
+        } else {
+            repeats = 0;
+        }
+        last_signature = Some(signature);
+        if repeats >= 2 {
+            return Err(CopilotError::ToolLimit(
+                "the copilot repeated the same step three times and stopped; the changes it already made are saved"
+                    .into(),
+            ));
         }
 
         turns.push(Turn::Assistant {
@@ -178,9 +208,9 @@ async fn run_inner(
         state.broadcast(activity(AgentPhase::Thinking));
     }
 
-    Err(CopilotError::Upstream(
-        "the copilot reached its limit of consecutive tool calls".into(),
-    ))
+    Err(CopilotError::ToolLimit(format!(
+        "the copilot reached its limit of {MAX_TOOL_ROUNDS} steps and stopped; the changes it already made are saved"
+    )))
 }
 
 fn activity(phase: AgentPhase) -> ServerEvent {

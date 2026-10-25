@@ -20,6 +20,8 @@ pub enum CopilotError {
     InvalidRequest(String),
     #[error("this model does not support the capability the copilot needs")]
     Unsupported,
+    #[error("{0}")]
+    ToolLimit(String),
     #[error("generation cancelled")]
     Cancelled,
 }
@@ -34,6 +36,7 @@ impl CopilotError {
             Self::Upstream(_) => "upstream",
             Self::InvalidRequest(_) => "invalid_request",
             Self::Unsupported => "unsupported",
+            Self::ToolLimit(_) => "tool_limit",
             Self::Cancelled => "cancelled",
         }
     }
@@ -51,6 +54,7 @@ impl CopilotError {
                 }
             }
             Self::InvalidRequest(detail) => detail.clone(),
+            Self::ToolLimit(detail) => detail.clone(),
             other => other.to_string(),
         }
     }
@@ -62,6 +66,14 @@ impl CopilotError {
         }
         if status == 429 {
             return Self::RateLimited;
+        }
+        // A 4xx that complains about tools means the model cannot call them;
+        // "try another model" is then the actionable advice, not a retry.
+        let lower = body.to_ascii_lowercase();
+        if (400..500).contains(&status)
+            && (lower.contains("tool") || lower.contains("function calling"))
+        {
+            return Self::Unsupported;
         }
         Self::Upstream(format!("HTTP {status}: {body}"))
     }
@@ -76,6 +88,18 @@ mod tests {
         let error = CopilotError::from_status(401, "Bearer sk-secret was rejected");
         assert_eq!(error.code(), "invalid_key");
         assert!(!error.public_message().contains("sk-secret"));
+    }
+
+    #[test]
+    fn tool_related_rejections_point_at_the_model() {
+        let error = CopilotError::from_status(
+            400,
+            r#"{"error":{"message":"tools are not supported by this model"}}"#,
+        );
+        assert_eq!(error.code(), "unsupported");
+
+        let generic = CopilotError::from_status(400, r#"{"error":"bad request"}"#);
+        assert_eq!(generic.code(), "upstream");
     }
 
     #[test]

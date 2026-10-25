@@ -152,6 +152,7 @@ fn error_response(error: CopilotError) -> Response {
         CopilotError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
         CopilotError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
         CopilotError::Unsupported => StatusCode::BAD_REQUEST,
+        CopilotError::ToolLimit(_) => StatusCode::OK,
         CopilotError::Cancelled => StatusCode::REQUEST_TIMEOUT,
         CopilotError::Network | CopilotError::Upstream(_) => StatusCode::BAD_GATEWAY,
     };

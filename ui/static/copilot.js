@@ -371,19 +371,34 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       thinkingEl.hidden = !hasThinking;
       if (hasThinking) {
         const isStreamingThinking = message.state === "streaming" && !message.text;
-        const wasOpen = thinkingEl.querySelector(".thinking-drawer")?.open ?? isStreamingThinking;
-        thinkingEl.innerHTML = `
-          <details class="thinking-drawer" ${wasOpen ? "open" : ""}>
-            <summary class="thinking-header">
-              <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
-              <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
-              <span class="thinking-badge ${isStreamingThinking ? "is-live" : ""}">${isStreamingThinking ? "pensando…" : "razonamiento"}</span>
-              <svg class="thinking-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
-            </summary>
-            <div class="thinking-body">
-              <div class="thinking-stream">${escapeHtml(message.thinking)}</div>
-            </div>
-          </details>`;
+        // The drawer is built once and then only its text changes: rebuilding
+        // it on every token destroyed the user's scroll and selection.
+        let drawer = thinkingEl.querySelector(".thinking-drawer");
+        if (!drawer) {
+          thinkingEl.innerHTML = `
+            <details class="thinking-drawer" ${isStreamingThinking ? "open" : ""}>
+              <summary class="thinking-header">
+                <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
+                <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
+                <span class="thinking-badge"></span>
+                <svg class="thinking-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
+              </summary>
+              <div class="thinking-body">
+                <div class="thinking-stream"></div>
+              </div>
+            </details>`;
+          drawer = thinkingEl.querySelector(".thinking-drawer");
+        }
+        const stream = drawer.querySelector(".thinking-stream");
+        if (stream && stream.textContent !== message.thinking) {
+          stream.textContent = message.thinking;
+        }
+        const badge = drawer.querySelector(".thinking-badge");
+        if (badge) {
+          const label = t(isStreamingThinking ? "copilot.thinking.live" : "copilot.thinking.done");
+          if (badge.textContent !== label) badge.textContent = label;
+          badge.classList.toggle("is-live", isStreamingThinking);
+        }
       }
     }
 
@@ -408,7 +423,17 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (failed) {
       const canRetry = messages[messages.length - 1] === message;
       const generic = message.state === "stopped" ? t("copilot.stopped") : errorText(message.errorCode);
-      const detail = message.errorMessage ? `<div class="msg-error-detail">${escapeHtml(message.errorMessage)}</div>` : "";
+      // Provider payloads are untrusted and usually English: they never reach
+      // the thread. Our own validation messages are shown because they say what
+      // to fix; everything else goes to the console for debugging.
+      const showDetail =
+        message.errorCode === "invalid_request" && Boolean(message.errorMessage);
+      if (message.errorMessage && !showDetail) {
+        console.warn("[copilot]", message.errorCode, message.errorMessage);
+      }
+      const detail = showDetail
+        ? `<div class="msg-error-detail">${escapeHtml(message.errorMessage)}</div>`
+        : "";
       error.innerHTML = `
         <p>${escapeHtml(generic)}</p>
         ${detail}

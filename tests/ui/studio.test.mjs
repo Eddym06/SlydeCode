@@ -1105,6 +1105,134 @@ test("copilot streams text and localized tool status into the thread", async () 
   }
 });
 
+test("a failed turn explains itself without echoing provider text", async () => {
+  const fakeConfig = {
+    providers: [
+      { id: "openai", name: "ChatGPT", company: "OpenAI", icon: "openai", key_url: "https://platform.openai.com/api-keys", configured: true },
+    ],
+    last_provider: "openai",
+    last_model: "free-model",
+  };
+  const rawLimit =
+    "the copilot reached its limit of 20 steps and stopped; the changes it already made are saved";
+  const rawInvalid = "provider is required";
+  const responses = [
+    { type: "error", code: "tool_limit", message: rawLimit },
+    { type: "error", code: "invalid_request", message: rawInvalid },
+  ];
+  let chatCalls = 0;
+
+  const fulfill = (requestId, payload, contentType = "application/json") =>
+    page.send("Fetch.fulfillRequest", {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: "content-type", value: contentType }],
+      body: Buffer.from(
+        typeof payload === "string" ? payload : JSON.stringify(payload)
+      ).toString("base64"),
+    });
+
+  const off = page.client.on("Fetch.requestPaused", async ({ requestId, request }) => {
+    try {
+      if (request.url.includes("/api/copilot/config")) {
+        await fulfill(requestId, { ok: true, config: fakeConfig });
+      } else if (request.url.includes("/api/copilot/chat")) {
+        const payload = responses[Math.min(chatCalls, responses.length - 1)];
+        chatCalls += 1;
+        await fulfill(requestId, `data: ${JSON.stringify(payload)}\n\n`, "text/event-stream");
+      } else {
+        await page.send("Fetch.continueRequest", { requestId });
+      }
+    } catch {
+      /* The page may have been torn down; nothing to resume. */
+    }
+  });
+
+  await page.send("Fetch.enable", {
+    patterns: [
+      { urlPattern: "*api/copilot/config*", requestStage: "Request" },
+      { urlPattern: "*api/copilot/chat*", requestStage: "Request" },
+    ],
+  });
+
+  const readError = `(() => {
+    const boxes = [...document.querySelectorAll(".msg-assistant .msg-error")];
+    const box = boxes[boxes.length - 1];
+    return {
+      visible: Boolean(box && !box.hidden),
+      text: box ? box.querySelector("p")?.textContent ?? "" : "",
+      detail: box?.querySelector(".msg-error-detail")?.textContent ?? null,
+      retry: Boolean(box?.querySelector("[data-retry]")),
+      thread: document.getElementById("copilot-thread").textContent
+    };
+  })()`;
+
+  try {
+    const timeOrigin = await page.evaluate("performance.timeOrigin");
+    await page.evaluate(`(() => {
+      localStorage.setItem("slyde.copilot.selection", JSON.stringify({ provider: "openai", model: "free-model" }));
+      localStorage.setItem("slyde.lang", "es");
+      return true;
+    })()`);
+    await page.send("Page.reload", { ignoreCache: true });
+    await page.waitFor(
+      `performance.timeOrigin !== ${JSON.stringify(timeOrigin)} &&
+       document.getElementById("app") && !document.getElementById("app").hidden`,
+      { timeout: 15000 }
+    );
+    await page.evaluate(`document.getElementById("tab-copilot").click(); true`);
+    await page.waitFor(
+      `document.getElementById("copilot-provider-name").textContent === "ChatGPT"`
+    );
+
+    await page.evaluate(`(() => {
+      const input = document.getElementById("copilot-input");
+      input.value = "Hazme una portada";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.getElementById("copilot-form").requestSubmit();
+      return true;
+    })()`);
+
+    await page.waitFor(
+      `(() => {
+        const box = document.querySelector(".msg-assistant .msg-error");
+        return box && !box.hidden && Boolean(box.querySelector("[data-retry]"));
+      })()`,
+      { timeout: 5000 }
+    );
+
+    const stopped = await page.evaluate(readError);
+    assert.equal(stopped.visible, true);
+    assert.match(stopped.text, /El copiloto se detuvo tras muchos pasos/);
+    assert.equal(stopped.detail, null, "provider payloads never reach the thread");
+    assert.ok(!stopped.thread.includes(rawLimit), "the raw loop message stays out of the DOM");
+    assert.equal(stopped.retry, true, "a failed turn offers a retry");
+
+    await page.evaluate(`document.querySelector(".msg-assistant [data-retry]").click(); true`);
+    await page.waitFor(
+      `document.getElementById("copilot-thread").textContent.includes("provider is required") ||
+       document.querySelector(".msg-assistant").dataset.state === "error"`,
+      { timeout: 5000 }
+    );
+    await page.waitFor(
+      `(() => {
+        const box = document.querySelector(".msg-assistant .msg-error");
+        return box && !box.hidden && box.querySelector(".msg-error-detail");
+      })()`,
+      { timeout: 5000 }
+    );
+
+    const invalid = await page.evaluate(readError);
+    assert.equal(invalid.detail, rawInvalid, "our own validation message is actionable");
+    assert.match(invalid.text, /petición no era válida/);
+    assert.ok(!invalid.thread.includes(rawLimit));
+    assert.equal(chatCalls, 2);
+  } finally {
+    off();
+    await page.send("Fetch.disable").catch(() => {});
+  }
+});
+
 test("selects a block on the canvas and lists the slide structure", async () => {
   // Give the stage a deterministic slide with authored blocks.
   await page.evaluate(`fetch("/api/command?t=${token}", {

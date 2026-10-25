@@ -1,9 +1,9 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 00:20
+> Last updated: 2026-10-25 05:40
 
 ## Current Phase
-Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust tests (+3 new tests for slide duplication, custom index, and reasoning content capture) are green. Resolved DeepSeek integration end-to-end: added live `Thinking` SSE event streaming so reasoning tokens from models like DeepSeek-V4.1-Flash provide instant visual feedback (under 300ms) instead of silent delays, fixed typing indicator retention during multi-round tool execution, fixed event dispatch on prompt suggestion pills, and added reasoning fallback to prevent false "empty response" errors. Verified end-to-end with real DeepSeek API creating 4 editorial slides with custom layouts, motion, and notes.
+Phase 2.7: **Copilot loop reliability & honest failure reporting.** Rust 144 tests and 25 UI tests green. Fixed the two defects behind the repeated "provider rejected the request" reports: the system prompt was built from a deck snapshot taken before the tool loop (so after creating slides the model still counted the old deck and re-created them until the round cap), and the round cap itself was reported as an upstream failure. The loop now re-reads the deck every round, allows 20 rounds, stops early when the model repeats an identical tool call three times, and reports a dedicated `tool_limit` code the UI localizes. The chat panel no longer prints provider-authored text, keeps the reasoning drawer stable while streaming, localizes its badges and re-renders on language change.
 
 ## Implemented & Working
 
@@ -48,7 +48,8 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - Accessibility: six text/token pairs per mode measured above 4.5:1; Tab produces a visible 2px focus ring; every button has an accessible name.
 - Copilot provider path: `cargo test -p slyde-server` covers catalog endpoints, model normalization/free flags, key rejection before network, attachment extraction, tool schemas, OpenAI fragmented tool calls, Anthropic streaming (including parallel tool results in one user turn) and deck-summary context.
 - Copilot browser E2E: provider config/key/model responses are mocked with CDP `Fetch.fulfillRequest`, so the suite proves the eight-provider sheet, key form focus, model search, Free filter, selection persistence, attachment chip/remove, and typed SSE text + tool rows + completion announcement without a real key or network.
-- UI suite: 24 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 16 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, the animation timeline editor, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming and the accessibility audit.
+- UI suite: 25 tests green (`node --test "tests/ui/*.test.mjs"`): 8 deterministic activity-state tests plus 17 browser E2E tests covering fonts, sandbox isolation, storyboard + arrow keys, EN/ES switch, theme toggle, notes autosave, `.slyde` export, real PDF/PNG downloads, agent activity, canvas selection + palette + structure tree, the animation timeline editor, KaTeX/Mermaid/highlighted code, presenter progress, in-studio presenter reveal, present menu → speaker console, the copilot panel/provider/model flow, copilot SSE streaming, the localized `tool_limit` error bubble (retry offered, raw provider text absent) and the accessibility audit.
+- Copilot loop: the system prompt is rebuilt from `state.view()` on every round, so tools that change the deck are visible to the model immediately. Verified by unit test that the round cap surfaces as `tool_limit` (HTTP 200) instead of `upstream`, and by E2E that a `tool_limit` SSE event renders our own copy, hides the provider payload, and offers retry.
 
 ## In Progress
 - Real-provider manual validation (needs user keys): OpenAI, Anthropic, Gemini, xAI, Groq, OpenRouter, DeepSeek and NVIDIA. Endpoints and wire formats are unit-tested/mocked; vendor-specific tool-calling quirks are not yet proven in this environment.
@@ -78,7 +79,8 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - Copilot conversation history is not persisted across reloads. Keys and the last provider/model are stored; the thread lives in the page.
 - Stop aborts the HTTP stream; there is no server-side cancel endpoint or partial-response persistence.
 - The copilot is desktop-only: the right panel is hidden below 1100px, so the empty-state "Ask the copilot" CTA is hidden there too.
-- Provider model lists include models that may not support tool calling or vision; the UI shows metadata when the provider supplies it but does not pre-validate capability. A failed call surfaces a localized `unsupported`/`upstream` error.
+- Provider model lists include models that may not support tool calling or vision; the UI shows metadata when the provider supplies it but does not pre-validate capability. A tool-mentioning 4xx now maps to `unsupported` ("pick a model that supports tools") instead of a generic upstream error.
+- The copilot stop conditions are a budget, not a guarantee: 20 rounds, plus an early exit after three identical tool calls. Very large decks still need a second "continue" turn.
 - API keys are stored as plaintext in the app-data JSON with owner-only Unix permissions. There is no OS keychain integration.
 - PDF/DOCX/PPTX extraction is text-only (no OCR, no layout or image extraction); scanned PDFs yield no text and are rejected with a readable error.
 - Real provider calls are unverified with live keys; the test suite mocks the HTTP boundary. NVIDIA/Gemini tool-calling behavior in particular needs a real pass.
@@ -103,6 +105,7 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] Copilot loop reliability: per-round deck snapshot, 20 rounds, repeat guard, `tool_limit` error code, provider text kept out of the thread, stable reasoning drawer, localized thinking badges, re-render on language change — 2026-10-25
 - [x] Manual animation editor in the inspector: add, edit kind/target/delay/duration, reorder and remove steps (`set_animation`, validated) — 2026-10-25
 - [x] Presenter reveal steps advance one per click/arrow again (first step on slide entry); authoring contract now matches behaviour — 2026-10-25
 - [x] Plan phases A–D: bimodal canvas, `⌘K` palette, KaTeX/hljs/Mermaid rendering, teleprompter pace, structure tree — 2026-10-25
