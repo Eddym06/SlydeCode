@@ -1,6 +1,7 @@
 import { createClient, readToken } from "./api.js";
 import { apply as applyI18n, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
+import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 
 const token = readToken();
 const frame = document.getElementById("present-slide");
@@ -43,8 +44,7 @@ let sandboxOrigin = "";
 let sourceQuery = "";
 let slideKey = "";
 let hudTimer = null;
-let pendingSteps = [];
-let introPlayed = false;
+const reveal = createReveal([]);
 let timerSeconds = 0;
 let timerRunning = false;
 let timerInterval = null;
@@ -185,16 +185,16 @@ function applyView(next) {
   const slide = slides[index];
   if (totalEl) totalEl.textContent = String(slides.length);
   if (currentEl) currentEl.textContent = String(index + 1);
-  const percent = Math.round(((index + 1) / slides.length) * 100);
+  const percent = progressPercent(index, slides.length);
   if (progress) progress.style.width = `${percent}%`;
   if (progressBar) progressBar.setAttribute("aria-valuenow", String(percent));
 
   const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
+  reveal.setSlides(slides);
   if (key !== slideKey) {
     slideKey = key;
     slideStartSeconds = timerSeconds;
-    pendingSteps = slide.animation.slice();
-    introPlayed = false;
+    reveal.reload();
     if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}${sourceQuery}`;
   }
 
@@ -227,44 +227,42 @@ function fit() {
   frameWrap.style.height = `${Math.round(height)}px`;
 }
 
+/** Plays a step inside the slide document. */
+function playStep(step) {
+  frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+}
+
+/** One step per advance: the first plays as the slide appears. */
 function playPending() {
-  // One step per advance: the first plays as the slide appears, the rest wait
-  // for the presenter's next click or key press.
-  if (introPlayed) return;
-  introPlayed = true;
-  const step = pendingSteps.shift();
-  if (step) {
-    frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
-  }
+  const step = reveal.takeIntro();
+  if (step) playStep(step);
+}
+
+function showSlide(action) {
+  index = action.index;
+  slideKey = "";
+  applyView(view);
 }
 
 function advance() {
-  if (pendingSteps.length > 0) {
-    const step = pendingSteps.shift();
-    frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
+  const action = reveal.advance();
+  if (action.type === "step") {
+    playStep(action.step);
     return;
   }
-  go(1);
+  if (action.type === "slide") showSlide(action);
 }
 
 function go(delta) {
   if (!view) return;
-  const slides = view.presentation.slides;
-  const next = Math.min(slides.length - 1, Math.max(0, index + delta));
-  if (next === index) return;
-  index = next;
-  slideKey = "";
-  applyView(view);
+  const action = reveal.delta(delta);
+  if (action) showSlide(action);
 }
 
 function jumpTo(targetIndex) {
   if (!view) return;
-  const slides = view.presentation.slides;
-  const next = Math.min(slides.length - 1, Math.max(0, targetIndex));
-  if (next === index) return;
-  index = next;
-  slideKey = "";
-  applyView(view);
+  const action = reveal.goTo(targetIndex);
+  if (action) showSlide(action);
 }
 
 function exitToStudio() {
@@ -320,6 +318,7 @@ window.addEventListener("message", (event) => {
   const data = event.data;
   if (!data || data.__slyde !== true) return;
   if (data.type === "ready") {
+    reveal.markReady();
     playPending();
     return;
   }
@@ -354,37 +353,44 @@ window.addEventListener("resize", () => {
 });
 
 function onKeydown(event) {
-  if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
-    event.preventDefault();
-    advance();
-  } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
-    event.preventDefault();
-    go(-1);
-  } else if (event.key === "Home") {
-    event.preventDefault();
-    jumpTo(0);
-  } else if (event.key === "End") {
-    event.preventDefault();
-    if (view) jumpTo(view.presentation.slides.length - 1);
-  } else if (event.key.toLowerCase() === "b" || event.key === ".") {
-    event.preventDefault();
-    toggleBlackout();
-  } else if (event.key.toLowerCase() === "s") {
-    event.preventDefault();
-    toggleSpeakerMode();
-  } else if (event.key.toLowerCase() === "f") {
-    event.preventDefault();
-    toggleFullscreen();
-  } else if (event.key === "Escape") {
-    if (isBlackout) {
+  const action = keyToAction(event);
+  if (!action) return;
+  if (action !== "escape") event.preventDefault();
+  switch (action) {
+    case "advance":
+      advance();
+      break;
+    case "back":
+      go(-1);
+      break;
+    case "first":
+      jumpTo(0);
+      break;
+    case "last":
+      if (view) jumpTo(view.presentation.slides.length - 1);
+      break;
+    case "blackout":
       toggleBlackout();
-    } else if (isSpeakerMode) {
-      toggleSpeakerMode(false);
-    } else if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    } else {
-      exitToStudio();
-    }
+      break;
+    case "speaker":
+      toggleSpeakerMode();
+      break;
+    case "fullscreen":
+      toggleFullscreen();
+      break;
+    case "escape":
+      if (isBlackout) {
+        toggleBlackout();
+      } else if (isSpeakerMode) {
+        toggleSpeakerMode(false);
+      } else if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        exitToStudio();
+      }
+      break;
+    default:
+      break;
   }
 }
 

@@ -8,6 +8,7 @@ import {
 import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
+import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -38,6 +39,8 @@ function boot(sessionToken) {
   // Authorizes slide documents only. It is embedded in every iframe URL, so a
   // slide's own script can read it; the session token stays out of that document.
   let sandboxToken = "";
+  // Active deck id: keys the copilot conversation and the library actions.
+  let activeDeckId = null;
   /// `&t=…` suffix appended to every slide URL (`""` when the server sent none).
   let sourceQuery = "";
   let selectedId = null;
@@ -1905,14 +1908,14 @@ function boot(sessionToken) {
   let presentSpeakerMode = false;
   let presentBlackout = false;
   let presentSlideKey = "";
-  let presentPendingSteps = [];
+
   // Steps can only be delivered once the sandboxed document has registered
   // its message listener. Messages posted before that are silently dropped,
   // which left every animated element frozen at `opacity: 0` (a black slide).
-  let presentFrameReady = false;
-  // The first step plays as the slide appears; the rest wait for a click, which
-  // is what "advances step-by-step" promises the author.
-  let presentIntroPlayed = false;
+  // Reveal state (slide + queued steps + frame readiness) lives in
+  // `presenter-core.js`, shared with the standalone presenter so the two can
+  // never disagree about when a step plays.
+  const presentReveal = createReveal([]);
   // Set right before a deliberate exit from fullscreen (F), so leaving
   // fullscreen does not end the presentation.
   let presentKeepWindowed = false;
@@ -2086,16 +2089,14 @@ function boot(sessionToken) {
     if (presentEls.current) presentEls.current.textContent = String(presentIndex + 1);
     if (presentEls.total) presentEls.total.textContent = String(slides.length);
 
-    const percent = Math.round(((presentIndex + 1) / slides.length) * 100);
+    const percent = progressPercent(presentIndex, slides.length);
     if (presentEls.progressFill) presentEls.progressFill.style.width = `${percent}%`;
     if (presentEls.progress) presentEls.progress.setAttribute("aria-valuenow", String(percent));
 
     const key = `${s.id}:${s.code.length}:${s.animation.length}`;
     if (key !== presentSlideKey) {
       presentSlideKey = key;
-      presentPendingSteps = s.animation.slice();
-      presentFrameReady = false;
-      presentIntroPlayed = false;
+      presentReveal.reload();
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
         presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
@@ -2115,38 +2116,34 @@ function boot(sessionToken) {
 
   /** Plays the slide's first step once the document is listening. */
   function flushPresentSteps() {
-    if (!presentFrameReady || presentIntroPlayed) return;
-    presentIntroPlayed = true;
-    if (presentPendingSteps.length > 0) {
-      postPresentStep(presentPendingSteps.shift());
-    }
+    const step = presentReveal.takeIntro();
+    if (step) postPresentStep(step);
   }
+
   function advancePresentSlide() {
-    if (presentPendingSteps.length > 0) {
-      // Still loading: keep the step queued so it is not lost.
-      if (!presentFrameReady) return;
-      postPresentStep(presentPendingSteps.shift());
+    const action = presentReveal.advance();
+    if (action.type === "step") {
+      postPresentStep(action.step);
       return;
     }
-    goPresentDelta(1);
+    if (action.type === "slide") showPresentSlide(action);
   }
 
   function goPresentDelta(delta) {
     if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, presentIndex + delta));
-    if (next === presentIndex) return;
-    presentIndex = next;
-    presentSlideKey = "";
-    renderPresentSlide();
+    const action = presentReveal.delta(delta);
+    if (action) showPresentSlide(action);
   }
 
   function jumpPresentIndex(target) {
     if (!view) return;
-    const slides = view.presentation.slides;
-    const next = Math.min(slides.length - 1, Math.max(0, target));
-    if (next === presentIndex) return;
-    presentIndex = next;
+    const action = presentReveal.goTo(target);
+    if (action) showPresentSlide(action);
+  }
+
+  /// Renders the slide the reveal controller just loaded.
+  function showPresentSlide(action) {
+    presentIndex = action.index;
     presentSlideKey = "";
     renderPresentSlide();
   }
@@ -2167,36 +2164,42 @@ function boot(sessionToken) {
 
   function handlePresentKeydown(event) {
     if (!isPresenting) return;
-    if (event.key === "ArrowRight" || event.key === " " || event.key === "PageDown" || event.key === "Enter") {
-      event.preventDefault();
-      advancePresentSlide();
-    } else if (event.key === "ArrowLeft" || event.key === "PageUp" || event.key === "Backspace") {
-      event.preventDefault();
-      goPresentDelta(-1);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      jumpPresentIndex(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      if (view) jumpPresentIndex(view.presentation.slides.length - 1);
-    } else if (event.key.toLowerCase() === "b" || event.key === ".") {
-      event.preventDefault();
-      togglePresentBlackout();
-    } else if (event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      togglePresentSpeakerMode();
-    } else if (event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      togglePresentFullscreen();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      if (presentBlackout) {
+    const action = keyToAction(event);
+    if (!action) return;
+    event.preventDefault();
+    switch (action) {
+      case "advance":
+        advancePresentSlide();
+        break;
+      case "back":
+        goPresentDelta(-1);
+        break;
+      case "first":
+        jumpPresentIndex(0);
+        break;
+      case "last":
+        if (view) jumpPresentIndex(view.presentation.slides.length - 1);
+        break;
+      case "blackout":
         togglePresentBlackout();
-      } else if (presentSpeakerMode) {
-        togglePresentSpeakerMode(false);
-      } else {
-        closePresentation();
-      }
+        break;
+      case "speaker":
+        togglePresentSpeakerMode();
+        break;
+      case "fullscreen":
+        togglePresentFullscreen();
+        break;
+      case "escape":
+        if (presentBlackout) {
+          togglePresentBlackout();
+        } else if (presentSpeakerMode) {
+          togglePresentSpeakerMode(false);
+        } else {
+          closePresentation();
+        }
+        break;
+      default:
+        break;
     }
   }
 
@@ -2241,7 +2244,9 @@ function boot(sessionToken) {
     }
     isPresenting = true;
     presentBlackout = false;
+    presentReveal.setSlides(d.slides);
     presentIndex = Math.max(0, d.slides.findIndex((s) => s.id === selectedId));
+    presentReveal.goTo(presentIndex, { force: true });
     presentSlideKey = "";
 
     if (presentEls.overlay) presentEls.overlay.hidden = false;
@@ -2351,8 +2356,7 @@ function boot(sessionToken) {
         // `load` fires after the slide runtime installed its listener, and it is
         // the only signal tied to *this* document. A stale `ready` from the
         // document being replaced must never consume the intro step.
-        presentFrameReady = true;
-        presentIntroPlayed = false;
+        presentReveal.markReady();
         flushPresentSteps();
       });
     }
@@ -2361,7 +2365,7 @@ function boot(sessionToken) {
       if (!data || data.__slyde !== true) return;
       const frameWindow = presentEls.frame && presentEls.frame.contentWindow;
       if (data.type === "ready") {
-        presentFrameReady = true;
+        presentReveal.markReady();
         return;
       }
       if (data.type === "key") {
@@ -2442,7 +2446,13 @@ function boot(sessionToken) {
   /// the studio, so the stage, the storyboard selection and the canvas selection
   /// have to be rebuilt from scratch rather than patched.
   function applyLibraryPayload(payload) {
-    if (!payload || !payload.view) return;
+    if (!payload) return;
+    // A different deck means a different conversation.
+    if (typeof payload.active === "string" && payload.active !== activeDeckId) {
+      activeDeckId = payload.active;
+      if (copilot && typeof copilot.refreshThread === "function") copilot.refreshThread();
+    }
+    if (!payload.view) return;
     stageKey = "";
     thumbsKey = "";
     selectedElement = null;
@@ -2553,6 +2563,7 @@ function boot(sessionToken) {
       const payload = await client.getState();
       sandboxOrigin = payload.sandbox_origin;
       sandboxToken = payload.sandbox_token || "";
+      activeDeckId = payload.active_deck || null;
       sourceQuery = sandboxToken ? `&t=${encodeURIComponent(sandboxToken)}` : "";
       setStatus("connecting");
       setupTemplatePicker();
@@ -2581,6 +2592,7 @@ function boot(sessionToken) {
         getSelectedSlideId: () => selectedId,
         getSelectedElementId: () => (selectedElement ? selectedElement.id : null),
         notify: toast,
+        getDeckId: () => activeDeckId,
       });
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {
