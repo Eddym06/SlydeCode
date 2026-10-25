@@ -64,8 +64,6 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
   - [x] Docs updated (`STATE.md`, `MEMORY.md`, `assets/vendor/README.md`)
 
 ## Not Implemented Yet (audited 2026-10-24)
-- **QR / LAN remote control**: needs a non-loopback listener plus a QR encoder. Opening `0.0.0.0` contradicts the documented security model (loopback + token + Origin check), so it needs an explicit product decision before implementation
-- Timeline scrubbing bar (the storyboard already covers thumbnails and drag reordering)
 - Drag & drop assets with an `assets/images` store and a `.slyde` bundle format for them
 - Optimistic DOM updates / `startViewTransition` morphs; token-by-token visual fill
 - `SlideElement.elements` is modelled and reachable through tools, but the canvas still edits one HTML blob per slide; nothing populates the structured array yet
@@ -93,8 +91,7 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - Linux: not verified (no machine).
 
 ## Backlog (Prioritized)
-1. **Validate the copilot against live provider keys** (all eight), starting with OpenAI, Anthropic and OpenRouter; record model/tool quirks and add any provider-specific compatibility shims.
-2. **Persist copilot conversations** per deck (thread, tool traces, timestamps) and add token usage/cost estimates.
+1. **Validate the copilot against live provider keys** (all eight), starting with OpenAI, Anthropic and OpenRouter; record model/tool quirks and add any provider-specific compatibility shims.2. **Persist copilot conversations** per deck (thread, tool traces, timestamps) and add token usage/cost estimates.
 3. **PPTX export** behind an `Exporter` trait — research first (`ppt-rs` 0.2.37 unvalidated), validate real files in PowerPoint/Keynote/Google Slides.
 4. **Image asset strategy** for `.slyde` decks (sandbox CSP currently allows only `data:`/`blob:`), including a bundle format decision.
 5. **Faster PNG export**: one Chrome/CDP session for all slides, useful before decks grow beyond a handful.
