@@ -590,29 +590,45 @@ test("in-studio presenter paints the slide instead of a black stage", async () =
 
     const slideFrame = await waitForSlideFrame(/[?&]p=\d/);
     try {
-      const started = Date.now();
-      let probe = [];
-      while (Date.now() - started < 6000) {
-        probe = await slideFrame.evaluate(`(${JSON.stringify(targets)}).map((selector) => {
+      const readOpacity = () =>
+        slideFrame.evaluate(`(${JSON.stringify(targets)}).map((selector) => {
           const el = document.querySelector(selector);
-          return {
-            selector,
-            opacity: el ? getComputedStyle(el).opacity : "missing",
-            visibility: document.visibilityState,
-            animations: el ? el.getAnimations().map((animation) => ({
-              state: animation.playState,
-              time: animation.currentTime
-            })) : []
-          };
+          return el ? getComputedStyle(el).opacity : "missing";
         })`);
-        if (probe.every((entry) => entry.opacity === "1")) break;
+      const started = Date.now();
+      let entered = [];
+      while (Date.now() - started < 6000) {
+        entered = await readOpacity();
+        if (entered[0] === "1") break;
         await sleep(120);
       }
-      assert.deepEqual(
-        probe.map((entry) => entry.opacity),
-        targets.map(() => "1"),
-        `every animated element is revealed after the pending steps are delivered: ${JSON.stringify(probe)}`
+      assert.equal(
+        entered[0],
+        "1",
+        `the first step plays as the slide appears: ${JSON.stringify(entered)}`
       );
+      if (targets.length > 1) {
+        assert.equal(
+          entered[1],
+          "0",
+          `later steps wait for the presenter: ${JSON.stringify(entered)}`
+        );
+        for (let index = 1; index < targets.length; index += 1) {
+          await page.press("ArrowRight", { keyCode: 39 });
+          await sleep(320);
+        }
+        const deadline = Date.now() + 4000;
+        let revealed = await readOpacity();
+        while (Date.now() < deadline && revealed.some((value) => value !== "1")) {
+          await sleep(120);
+          revealed = await readOpacity();
+        }
+        assert.deepEqual(
+          revealed,
+          targets.map(() => "1"),
+          "each key press reveals the next step"
+        );
+      }
     } finally {
       slideFrame.close();
     }

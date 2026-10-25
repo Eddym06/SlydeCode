@@ -1589,6 +1589,9 @@ function boot(sessionToken) {
   // its message listener. Messages posted before that are silently dropped,
   // which left every animated element frozen at `opacity: 0` (a black slide).
   let presentFrameReady = false;
+  // The first step plays as the slide appears; the rest wait for a click, which
+  // is what "advances step-by-step" promises the author.
+  let presentIntroPlayed = false;
   // Set right before a deliberate exit from fullscreen (F), so leaving
   // fullscreen does not end the presentation.
   let presentKeepWindowed = false;
@@ -1771,6 +1774,7 @@ function boot(sessionToken) {
       presentSlideKey = key;
       presentPendingSteps = s.animation.slice();
       presentFrameReady = false;
+      presentIntroPlayed = false;
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
         presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}`;
@@ -1788,14 +1792,14 @@ function boot(sessionToken) {
     win.postMessage({ __slyde: true, type: "animate", step }, "*");
   }
 
-  /** Sends every queued step; only safe once the slide document is listening. */
+  /** Plays the slide's first step once the document is listening. */
   function flushPresentSteps() {
-    if (!presentFrameReady) return;
-    while (presentPendingSteps.length > 0) {
+    if (!presentFrameReady || presentIntroPlayed) return;
+    presentIntroPlayed = true;
+    if (presentPendingSteps.length > 0) {
       postPresentStep(presentPendingSteps.shift());
     }
   }
-
   function advancePresentSlide() {
     if (presentPendingSteps.length > 0) {
       // Still loading: keep the step queued so it is not lost.
@@ -2023,9 +2027,11 @@ function boot(sessionToken) {
     }
     if (presentEls.frame) {
       presentEls.frame.addEventListener("load", () => {
-        // `load` fires after the slide runtime has installed its listener, so
-        // it is a safe fallback for the `ready` handshake below.
+        // `load` fires after the slide runtime installed its listener, and it is
+        // the only signal tied to *this* document. A stale `ready` from the
+        // document being replaced must never consume the intro step.
         presentFrameReady = true;
+        presentIntroPlayed = false;
         flushPresentSteps();
       });
     }
@@ -2035,7 +2041,6 @@ function boot(sessionToken) {
       const frameWindow = presentEls.frame && presentEls.frame.contentWindow;
       if (data.type === "ready") {
         presentFrameReady = true;
-        flushPresentSteps();
         return;
       }
       if (data.type === "key") {

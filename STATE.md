@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 01:10
+> Last updated: 2026-10-25 00:20
 
 ## Current Phase
 Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust tests (+3 new tests for slide duplication, custom index, and reasoning content capture) are green. Resolved DeepSeek integration end-to-end: added live `Thinking` SSE event streaming so reasoning tokens from models like DeepSeek-V4.1-Flash provide instant visual feedback (under 300ms) instead of silent delays, fixed typing indicator retention during multi-round tool execution, fixed event dispatch on prompt suggestion pills, and added reasoning fallback to prevent false "empty response" errors. Verified end-to-end with real DeepSeek API creating 4 editorial slides with custom layouts, motion, and notes.
@@ -103,6 +103,7 @@ Phase 2.6: **Copilot DeepSeek Integration & Live Streaming Polish.** 129 Rust te
 - The user should run the copilot with at least one real key and report any provider/model that fails; then either harden those adapters or move to PPTX research (explicit approval required before touching the export architecture).
 
 ## Completed
+- [x] Presenter reveal steps advance one per click/arrow again (first step on slide entry); authoring contract now matches behaviour — 2026-10-25
 - [x] Plan phases A–D: bimodal canvas, `⌘K` palette, KaTeX/hljs/Mermaid rendering, teleprompter pace, structure tree — 2026-10-25
 - [x] Spec audit + fixes: `mutate_element` nested-markup corruption, `get_selected_element` payload, honest `search_asset`/`generate_image` contracts, truthful technical-slide prompt — 2026-10-24
 - [x] Presenter keyboard: non-interactive slide frame, key forwarding, Escape from fullscreen — 2026-10-24

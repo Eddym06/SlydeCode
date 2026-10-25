@@ -42,6 +42,7 @@ let sandboxOrigin = "";
 let slideKey = "";
 let hudTimer = null;
 let pendingSteps = [];
+let introPlayed = false;
 let timerSeconds = 0;
 let timerRunning = false;
 let timerInterval = null;
@@ -191,6 +192,7 @@ function applyView(next) {
     slideKey = key;
     slideStartSeconds = timerSeconds;
     pendingSteps = slide.animation.slice();
+    introPlayed = false;
     if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}`;
   }
 
@@ -224,11 +226,14 @@ function fit() {
 }
 
 function playPending() {
-  const steps = pendingSteps;
-  pendingSteps = [];
-  steps.forEach((step) => {
+  // One step per advance: the first plays as the slide appears, the rest wait
+  // for the presenter's next click or key press.
+  if (introPlayed) return;
+  introPlayed = true;
+  const step = pendingSteps.shift();
+  if (step) {
     frame?.contentWindow?.postMessage({ __slyde: true, type: "animate", step }, "*");
-  });
+  }
 }
 
 function advance() {
