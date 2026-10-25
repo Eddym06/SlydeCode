@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use slyde_server::RuntimeInfo;
-use slyde_server::http::{get_json, post_json};
+use slyde_server::http::{get_json, post_bytes, post_json};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -121,11 +121,11 @@ pub fn definitions() -> Value {
         },
         {
             "name": "export_presentation",
-            "description": "Export the deck through the same Chrome renderer the presenter uses. PDF produces one page per slide at the deck aspect ratio; PNG produces one image per slide.",
+            "description": "Export the deck through the same Chrome renderer the presenter uses. PDF produces one page per slide at the deck aspect ratio; PNG produces one image per slide; PPTX produces a PowerPoint file with one full-bleed picture per slide and the speaker notes intact.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "format": { "type": "string", "enum": ["pdf", "png"], "default": "pdf" },
+                    "format": { "type": "string", "enum": ["pdf", "png", "pptx"], "default": "pdf" },
                     "output_path": {
                         "type": "string",
                         "description": "File path for PDF, directory for PNG. Defaults to exports/ inside the working directory."
@@ -397,6 +397,27 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                         .map_err(|err| ToolFailure(err.to_string()))?;
                     Ok(format!("Exported PDF to {}", written.display()))
                 }
+                "pptx" => {
+                    // The server owns the pipeline (render + OOXML packaging), so
+                    // the MCP surface gets the same file the UI produces.
+                    let path = output
+                        .unwrap_or_else(|| PathBuf::from("exports").join(format!("{stem}.pptx")));
+                    let url = format!(
+                        "http://127.0.0.1:{}/api/export?format=pptx&t={}",
+                        runtime.port, runtime.token
+                    );
+                    let bytes = post_bytes(&url, REQUEST_TIMEOUT * 6)
+                        .await
+                        .map_err(|err| ToolFailure(format!("could not export: {err}")))?;
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|err| ToolFailure(err.to_string()))?;
+                    }
+                    std::fs::write(&path, bytes).map_err(|err| {
+                        ToolFailure(format!("could not write {}: {err}", path.display()))
+                    })?;
+                    Ok(format!("Exported PPTX to {}", path.display()))
+                }
                 "png" => {
                     let dir = output.unwrap_or_else(|| PathBuf::from("exports").join(&stem));
                     let files =
@@ -415,7 +436,7 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
                     ))
                 }
                 other => Err(ToolFailure(format!(
-                    "unsupported format: {other} (use pdf or png)"
+                    "unsupported format: {other} (use pdf, png or pptx)"
                 ))),
             }
         }

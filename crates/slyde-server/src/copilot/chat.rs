@@ -26,7 +26,7 @@ const MAX_TOTAL_ATTACHMENTS: usize = 8;
 /// Rounds the model may spend calling tools. A deck of a dozen slides plus a
 /// couple of reads fits comfortably; the loop also stops on its own when the
 /// model stops making progress.
-const MAX_TOOL_ROUNDS: usize = 20;
+const MAX_TOOL_ROUNDS: usize = 40;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatMessageInput {
@@ -50,17 +50,32 @@ pub struct ChatRequest {
     pub selected_element_id: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    /// Opaque id for this turn. When present, `POST /api/copilot/cancel` with the
+    /// same id stops the provider call and the tool rounds it would still run.
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender<ChatEvent>) {
     let provider_id = request.provider.clone();
     let model = request.model.clone();
+    let request_id = request.request_id.clone();
     let _ = tx.send(ChatEvent::Meta {
         provider: provider_id.clone(),
         model: model.clone(),
     });
 
-    let result = run_inner(&state, request, &tx).await;
+    let (idle_tx, idle_rx) = tokio::sync::watch::channel(false);
+    let cancel = match &request_id {
+        Some(id) => state.copilot.begin_turn(id),
+        None => idle_rx,
+    };
+    drop(idle_tx);
+
+    let result = run_inner(&state, request, &tx, cancel).await;
+    if let Some(id) = &request_id {
+        state.copilot.end_turn(id);
+    }
     match result {
         Ok(()) => {
             let _ = tx.send(ChatEvent::Done);
@@ -83,6 +98,7 @@ async fn run_inner(
     state: &AppState,
     request: ChatRequest,
     tx: &UnboundedSender<ChatEvent>,
+    cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), CopilotError> {
     let provider = catalog::find(&request.provider)
         .ok_or_else(|| CopilotError::InvalidRequest("unknown provider".into()))?;
@@ -113,7 +129,7 @@ async fn run_inner(
     let mut repeats: u32 = 0;
 
     for _round in 0..MAX_TOOL_ROUNDS {
-        if tx.is_closed() {
+        if tx.is_closed() || crate::copilot::CopilotState::was_cancelled(&cancel) {
             return Err(CopilotError::Cancelled);
         }
         // Tools mutate the deck, so the prompt is rebuilt from the live state on
@@ -134,11 +150,14 @@ async fn run_inner(
         );
         let assistant = transport::stream(
             state.copilot.http(),
-            provider,
-            &key,
-            request.model.trim(),
-            &system,
-            &turns,
+            &transport::StreamRequest {
+                provider,
+                key: &key,
+                model: request.model.trim(),
+                system: &system,
+                turns: &turns,
+                cancel: &cancel,
+            },
             tx,
         )
         .await?;

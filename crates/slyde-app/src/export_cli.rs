@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use slyde_core::AspectRatio;
 use slyde_export::{ExportProgress, SlideTarget, export_pdf, export_png};
-use slyde_server::{discover_browser, http::get_json, probe_health, read_runtime};
+use slyde_server::{
+    discover_browser, http::get_json, http::post_bytes, probe_health, read_runtime,
+};
 
 const NOT_RUNNING: &str = "SlydeCode is not running. Open the app first, then export.";
 const NO_BROWSER: &str = "no supported browser found; install Google Chrome or set SLYDE_BROWSER";
@@ -19,6 +21,9 @@ const NO_BROWSER: &str = "no supported browser found; install Google Chrome or s
 enum Format {
     Pdf,
     Png,
+    /// Rendered by the server and wrapped into a `.pptx` there, so the CLI and
+    /// the UI export exactly the same file.
+    Pptx,
 }
 
 impl Format {
@@ -26,7 +31,10 @@ impl Format {
         match raw.to_ascii_lowercase().as_str() {
             "pdf" => Ok(Self::Pdf),
             "png" | "images" => Ok(Self::Png),
-            other => Err(format!("unsupported format: {other} (use pdf or png)")),
+            "pptx" | "powerpoint" => Ok(Self::Pptx),
+            other => Err(format!(
+                "unsupported format: {other} (use pdf, png or pptx)"
+            )),
         }
     }
 }
@@ -122,6 +130,24 @@ pub async fn run(args: &[String]) -> Result<(), String> {
                 .await
                 .map(|written| vec![written])
         }
+        Format::Pptx => {
+            // One implementation: the running server already renders the slides
+            // and packages the deck, so the CLI asks for the finished file.
+            let path =
+                output.unwrap_or_else(|| PathBuf::from("exports").join(format!("{stem}.pptx")));
+            let url = format!(
+                "http://127.0.0.1:{}/api/export?format=pptx&t={}",
+                runtime.port, runtime.token
+            );
+            let bytes = post_bytes(&url, Duration::from_secs(180))
+                .await
+                .map_err(|err| err.to_string())?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            std::fs::write(&path, bytes).map_err(|err| err.to_string())?;
+            Ok(vec![path])
+        }
         Format::Png => {
             let dir = output.unwrap_or_else(|| PathBuf::from("exports").join(&stem));
             let targets: Vec<SlideTarget> = slide_ids
@@ -163,7 +189,9 @@ mod tests {
         assert_eq!(Format::parse("PDF").unwrap(), Format::Pdf);
         assert_eq!(Format::parse("png").unwrap(), Format::Png);
         assert_eq!(Format::parse("images").unwrap(), Format::Png);
-        assert!(Format::parse("pptx").is_err());
+        assert_eq!(Format::parse("pptx").unwrap(), Format::Pptx);
+        assert_eq!(Format::parse("PowerPoint").unwrap(), Format::Pptx);
+        assert!(Format::parse("gif").is_err());
     }
 
     #[tokio::test]

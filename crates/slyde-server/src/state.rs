@@ -26,13 +26,51 @@ pub struct AppState {
     pub ui_dir: PathBuf,
     /// Origin of the sandbox listener, e.g. `http://127.0.0.1:4322`.
     pub sandbox_origin: String,
-    /// When present, every committed deck is also handed to the autosave task.
+    /// Image store. Always present: an in-memory server points it at a scratch
+    /// directory so tests never touch the user's app-data.
+    pub assets: Arc<crate::assets::AssetStore>,
+    /// When present, the deck endpoints can list or switch decks in the library
+    /// and the autosave task writes to the active deck file.
     /// Tests and ephemeral servers leave it `None` and never touch the disk.
+    pub library: Option<Arc<crate::library::Library>>,
+    /// When present, every committed deck is handed to the autosave task.
     deck_tx: Option<watch::Sender<Presentation>>,
     /// Provider keys, model discovery and chat transports. The deck remains
     /// the only shared mutable domain state; the copilot mutates it through
     /// `agent::run`, never directly.
     pub copilot: Arc<CopilotState>,
+}
+
+/// The on-disk half of the server: which decks exist, where autosave writes and
+/// where images live. Grouping them keeps the constructor readable and lets a
+/// memory-only server be built in one expression.
+#[derive(Clone)]
+pub struct Persistence {
+    pub library: Option<Arc<crate::library::Library>>,
+    pub deck_sink: Option<watch::Sender<Presentation>>,
+    pub assets: Arc<crate::assets::AssetStore>,
+}
+
+impl Persistence {
+    /// Nothing is persisted: tests and ephemeral servers use this.
+    pub fn memory() -> Self {
+        Self {
+            library: None,
+            deck_sink: None,
+            assets: Arc::new(crate::assets::AssetStore::for_tests()),
+        }
+    }
+
+    pub fn with_library(
+        library: Arc<crate::library::Library>,
+        deck_sink: watch::Sender<Presentation>,
+    ) -> Self {
+        Self {
+            library: Some(library),
+            deck_sink: Some(deck_sink),
+            assets: Arc::new(crate::assets::AssetStore::from_app_data()),
+        }
+    }
 }
 
 impl AppState {
@@ -43,7 +81,15 @@ impl AppState {
         allowed_origins: Vec<String>,
         sandbox_origin: String,
     ) -> Arc<Self> {
-        Self::with_deck_sink(core, token, ui_dir, allowed_origins, sandbox_origin, None)
+        Self::with_copilot(
+            core,
+            token,
+            ui_dir,
+            allowed_origins,
+            sandbox_origin,
+            Arc::new(CopilotState::in_memory()),
+            Persistence::memory(),
+        )
     }
 
     pub fn with_deck_sink(
@@ -60,8 +106,11 @@ impl AppState {
             ui_dir,
             allowed_origins,
             sandbox_origin,
-            deck_tx,
             Arc::new(CopilotState::in_memory()),
+            Persistence {
+                deck_sink: deck_tx,
+                ..Persistence::memory()
+            },
         )
     }
 
@@ -74,9 +123,14 @@ impl AppState {
         ui_dir: PathBuf,
         allowed_origins: Vec<String>,
         sandbox_origin: String,
-        deck_tx: Option<watch::Sender<Presentation>>,
         copilot: Arc<CopilotState>,
+        persistence: Persistence,
     ) -> Arc<Self> {
+        let Persistence {
+            library,
+            deck_sink: deck_tx,
+            assets,
+        } = persistence;
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Arc::new(Self {
             core: RwLock::new(core),
@@ -86,8 +140,10 @@ impl AppState {
             allowed_origins,
             ui_dir,
             sandbox_origin,
+            library,
             deck_tx,
             copilot,
+            assets,
         })
     }
 
@@ -238,6 +294,24 @@ pub enum UiCommand {
     SetAnimation {
         slide_id: String,
         animation: Vec<slyde_core::AnimationStep>,
+    },
+    /// Appends a stored image to a slide.
+    InsertImage {
+        slide_id: String,
+        src: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
+    /// Moves/resizes an element; the canvas sends the final geometry.
+    SetGeometry {
+        slide_id: String,
+        element_id: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
     },
 }
 

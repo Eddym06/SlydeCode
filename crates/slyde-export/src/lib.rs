@@ -12,6 +12,10 @@
 //! That keeps it usable from the running server (the UI export buttons) and
 //! from the `slyde export` command alike.
 
+mod cdp;
+
+pub use cdp::export_png_batch;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -196,7 +200,7 @@ fn report(progress: Option<&UnboundedSender<ExportProgress>>, completed: usize, 
 
 /// A profile per export attempt: two exports at once must never fight over the
 /// same Chrome profile lock.
-fn export_profile_dir(tag: &str) -> PathBuf {
+pub(crate) fn export_profile_dir(tag: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())

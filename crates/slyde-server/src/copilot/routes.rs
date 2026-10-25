@@ -164,6 +164,32 @@ fn error_response(error: CopilotError) -> Response {
     (status, Json(body)).into_response()
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct CancelRequest {
+    pub request_id: String,
+}
+
+/// Stops a running turn server-side.
+///
+/// The browser aborting the fetch is enough to end the stream, but an explicit
+/// cancel also stops the tool rounds that were already scheduled and drops the
+/// upstream response instead of waiting for the provider to finish.
+pub async fn api_cancel(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(request): Json<CancelRequest>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    let cancelled = state.copilot.cancel_turn(&request.request_id);
+    Json(json!({ "ok": true, "cancelled": cancelled })).into_response()
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,

@@ -1,0 +1,14 @@
+[package]
+name = "slyde-pptx"
+description = "Hand-written OOXML writer for SlydeCode decks: one full-bleed PNG per slide."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+# The only archive dependency: deflate-capable ZIP. It is already in the
+# workspace tree through `slyde-server`, and there is no lighter maintained
+# OOXML-aware alternative, so the crate stays on plain ZIP + hand-written XML.
+zip = { version = "2", default-features = false, features = ["deflate"] }

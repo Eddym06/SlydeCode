@@ -43,11 +43,19 @@ pub struct CopilotConfigView {
     pub last_model: Option<String>,
 }
 
+/// Live turns: request id → the flag a running turn polls.
+type TurnCancels = std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>;
+
 #[derive(Debug)]
 pub struct CopilotState {
     store: ConfigStore,
     config: RwLock<CopilotConfig>,
     http: reqwest::Client,
+    /// Live turns by request id. The browser sends the id with the turn and can
+    /// cancel it with `POST /api/copilot/cancel`, which is the difference between
+    /// "stop" aborting a stream locally and the server really stopping the
+    /// provider call (and the tool rounds it would run).
+    cancels: std::sync::Mutex<TurnCancels>,
 }
 
 impl CopilotState {
@@ -72,7 +80,45 @@ impl CopilotState {
             store,
             config: RwLock::new(config),
             http,
+            cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Registers a turn and returns the flag it must poll to notice a cancel.
+    pub(crate) fn begin_turn(&self, request_id: &str) -> tokio::sync::watch::Receiver<bool> {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let mut cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cancels.insert(request_id.to_string(), tx);
+        rx
+    }
+
+    /// Removes a finished turn. Returns false when the turn was already gone.
+    pub(crate) fn end_turn(&self, request_id: &str) -> bool {
+        let mut cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        cancels.remove(request_id).is_some()
+    }
+
+    /// Signals a running turn. Returns false when no such turn is in flight.
+    pub(crate) fn cancel_turn(&self, request_id: &str) -> bool {
+        let cancels = self
+            .cancels
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        match cancels.get(request_id) {
+            Some(tx) => tx.send(true).is_ok(),
+            None => false,
+        }
+    }
+
+    /// True when the browser asked to stop this turn.
+    pub(crate) fn was_cancelled(flag: &tokio::sync::watch::Receiver<bool>) -> bool {
+        *flag.borrow()
     }
 
     pub(crate) fn http(&self) -> &reqwest::Client {
@@ -220,6 +266,28 @@ fn has_key(config: &CopilotConfig, provider: ProviderDef) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_turn_can_be_cancelled_by_its_request_id() {
+        let state = super::CopilotState::in_memory();
+        let flag = state.begin_turn("turn-1");
+        assert!(!super::CopilotState::was_cancelled(&flag));
+
+        assert!(state.cancel_turn("turn-1"), "a live turn is cancellable");
+        assert!(
+            super::CopilotState::was_cancelled(&flag),
+            "the running loop sees the cancel"
+        );
+
+        // Unknown ids and finished turns are reported honestly, not silently.
+        assert!(!state.cancel_turn("missing"));
+        assert!(state.end_turn("turn-1"));
+        assert!(!state.end_turn("turn-1"), "a turn is only removed once");
+        assert!(
+            !state.cancel_turn("turn-1"),
+            "a finished turn cannot be cancelled"
+        );
+    }
+
     use super::*;
 
     #[tokio::test]

@@ -16,18 +16,26 @@ use super::error::CopilotError;
 use super::tools;
 use super::wire::{ChatEvent, ImagePart, ToolCall, Turn};
 
+/// One streaming turn: everything the transport needs except the event sink.
+pub struct StreamRequest<'a> {
+    pub provider: &'static ProviderDef,
+    pub key: &'a str,
+    pub model: &'a str,
+    pub system: &'a str,
+    pub turns: &'a [Turn],
+    /// Flipped by `POST /api/copilot/cancel`; checked per chunk so cancelling
+    /// drops the upstream response instead of waiting for it to finish.
+    pub cancel: &'a tokio::sync::watch::Receiver<bool>,
+}
+
 pub async fn stream(
     client: &reqwest::Client,
-    provider: &'static ProviderDef,
-    key: &str,
-    model: &str,
-    system: &str,
-    turns: &[Turn],
+    request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<Turn, CopilotError> {
-    match provider.wire {
-        Wire::OpenAi => stream_openai(client, provider, key, model, system, turns, tx).await,
-        Wire::Anthropic => stream_anthropic(client, provider, key, model, system, turns, tx).await,
+    match request.provider.wire {
+        Wire::OpenAi => stream_openai(client, request, tx).await,
+        Wire::Anthropic => stream_anthropic(client, request, tx).await,
     }
 }
 
@@ -68,13 +76,17 @@ async fn post(
 
 async fn stream_openai(
     client: &reqwest::Client,
-    provider: &'static ProviderDef,
-    key: &str,
-    model: &str,
-    system: &str,
-    turns: &[Turn],
+    request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<Turn, CopilotError> {
+    let StreamRequest {
+        provider,
+        key,
+        model,
+        system,
+        turns,
+        cancel,
+    } = *request;
     let body = json!({
         "model": model,
         "messages": openai_messages(system, turns),
@@ -85,7 +97,7 @@ async fn stream_openai(
     let response = post(client, provider, key, &body).await?;
     let mut state = OpenAiAccum::default();
 
-    consume_sse(response, tx, |data| {
+    consume_sse(response, tx, cancel, |data| {
         if data == "[DONE]" {
             return Ok(());
         }
@@ -120,13 +132,17 @@ async fn stream_openai(
 
 async fn stream_anthropic(
     client: &reqwest::Client,
-    provider: &'static ProviderDef,
-    key: &str,
-    model: &str,
-    system: &str,
-    turns: &[Turn],
+    request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
 ) -> Result<Turn, CopilotError> {
+    let StreamRequest {
+        provider,
+        key,
+        model,
+        system,
+        turns,
+        cancel,
+    } = *request;
     let body = json!({
         "model": model,
         "system": system,
@@ -138,7 +154,7 @@ async fn stream_anthropic(
     let response = post(client, provider, key, &body).await?;
     let mut state = AnthropicAccum::default();
 
-    consume_sse(response, tx, |data| {
+    consume_sse(response, tx, cancel, |data| {
         let value: Value = match serde_json::from_str(data) {
             Ok(value) => value,
             Err(_) => return Ok(()),
@@ -168,12 +184,14 @@ async fn stream_anthropic(
 async fn consume_sse(
     response: reqwest::Response,
     tx: &UnboundedSender<ChatEvent>,
+    cancel: &tokio::sync::watch::Receiver<bool>,
     mut on_data: impl FnMut(&str) -> Result<(), CopilotError>,
 ) -> Result<(), CopilotError> {
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     while let Some(chunk) = stream.next().await {
-        if tx.is_closed() {
+        // Dropping the response here is what actually aborts the provider call.
+        if tx.is_closed() || *cancel.borrow() {
             return Err(CopilotError::Cancelled);
         }
         let bytes = chunk.map_err(|error| CopilotError::from_network(&error))?;
