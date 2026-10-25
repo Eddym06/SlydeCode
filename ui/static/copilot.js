@@ -36,7 +36,7 @@ const TEXT_EXT = new Set([
 
 const $ = (id) => document.getElementById(id);
 
-export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify }) {
+export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify, getDeckId }) {
   const els = {
     panel: $("copilot-panel"),
     thread: $("copilot-thread"),
@@ -818,6 +818,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         controller = null;
         setComposerBusy(false);
         syncAssistant(assistant);
+        persistThread();
       }
     }
   }
@@ -895,6 +896,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       setComposerBusy(false);
     }
     messages = [];
+    persistThread();
     pending = [];
     els.input.value = "";
     els.file.value = "";
@@ -904,6 +906,50 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     renderThread();
     updateSendEnabled();
     els.input.focus();
+  }
+
+  /// Conversation persistence: one thread per deck, so switching decks does not
+  /// mix two conversations and a reload does not lose the argument you were in.
+  function currentDeckId() {
+    if (typeof getDeckId !== "function") return null;
+    const deck = getDeckId();
+    return typeof deck === "string" && deck ? deck : null;
+  }
+
+  async function restoreThread() {
+    const deck = currentDeckId();
+    if (!deck || streaming) return;
+    try {
+      const stored = await client.copilotThread(deck);
+      if (!stored.length) {
+        messages = [];
+        renderThread();
+        return;
+      }
+      messages = stored.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        text: message.text || "",
+        attachments: [],
+        thinking: "",
+        tools: [],
+        state: "done",
+        errorCode: null,
+        el: null,
+      }));
+      renderThread({ forceScroll: true });
+    } catch {
+      /* The thread is a convenience; the panel still works without it. */
+    }
+  }
+
+  function persistThread() {
+    const deck = currentDeckId();
+    if (!deck || !messages.length) return;
+    const payload = messages
+      .filter((message) => message.state !== "streaming")
+      .map((message) => ({ role: message.role, text: message.text || "" }))
+      .filter((message) => message.text.trim());
+    client.copilotSaveThread(deck, payload).catch(() => {});
   }
 
   function buildHistory() {
@@ -1076,9 +1122,17 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   autosize();
   loadConfig();
 
+  // Restore the conversation for the deck that is already open when the panel
+  // mounts (a reload, or coming back to a deck).
+  restoreThread();
+
   return {
     focus() {
       els.input.focus();
+    },
+    /** Re-reads the conversation for the current deck (after a deck switch). */
+    refreshThread() {
+      restoreThread();
     },
     open() {
       openSheet();

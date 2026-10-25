@@ -80,6 +80,10 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::copilot::routes::api_cancel),
         )
         .route(
+            "/api/copilot/thread",
+            get(crate::copilot::routes::api_thread).post(crate::copilot::routes::api_save_thread),
+        )
+        .route(
             "/api/copilot/chat",
             post(crate::copilot::routes::api_chat).layer(DefaultBodyLimit::max(
                 crate::copilot::routes::MAX_CHAT_BODY_BYTES,
@@ -151,11 +155,14 @@ async fn api_state(
     if !is_authorized(&state, &headers, &auth) {
         return unauthorized();
     }
+    let active_deck = state.library.as_ref().and_then(|library| library.active());
     Json(json!({
         "ok": true,
         "sandbox_origin": state.sandbox_origin,
         // Embedded in every `<iframe src>`: authorizes slide documents only.
         "sandbox_token": state.sandbox_token,
+        // Which deck the conversation and autosave belong to.
+        "active_deck": active_deck,
         "view": state.view().await
     }))
     .into_response()

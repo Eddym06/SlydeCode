@@ -169,6 +169,67 @@ pub struct CancelRequest {
     pub request_id: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct ThreadQuery {
+    pub deck: String,
+    #[serde(flatten)]
+    pub auth: AuthQuery,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ThreadInput {
+    pub deck: String,
+    #[serde(default)]
+    pub messages: Vec<super::StoredMessage>,
+}
+
+/// Returns the conversation stored for one deck.
+pub async fn api_thread(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ThreadQuery>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &query.auth) {
+        return unauthorized();
+    }
+    let messages = state.copilot.thread(&query.deck);
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "deck": query.deck, "messages": messages })),
+    )
+        .into_response()
+}
+
+/// Replaces the conversation stored for one deck.
+pub async fn api_save_thread(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<ThreadInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match state.copilot.save_thread(&input.deck, input.messages) {
+        Ok(stored) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "stored": stored })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": error.public_message() })),
+        )
+            .into_response(),
+    }
+}
+
 /// Stops a running turn server-side.
 ///
 /// The browser aborting the fetch is enough to end the stream, but an explicit

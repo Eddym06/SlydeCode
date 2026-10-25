@@ -86,6 +86,21 @@ export function createClient(token) {
       return payload.models || [];
     },
 
+    /** The conversation stored for one deck. */
+    async copilotThread(deck) {
+      const payload = await json(`/api/copilot/thread?deck=${encodeURIComponent(deck)}`);
+      return payload.messages || [];
+    },
+
+    /** Replaces the conversation stored for one deck. */
+    async copilotSaveThread(deck, messages) {
+      return json(`/api/copilot/thread`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deck, messages }),
+      });
+    },
+
     /** Stops a running turn on the server (the local fetch is aborted too). */
     copilotCancel(requestId) {
       return json(`/api/copilot/cancel`, {
