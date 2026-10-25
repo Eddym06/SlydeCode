@@ -10,6 +10,7 @@ import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { createStoryboard } from "./storyboard.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -46,7 +47,6 @@ function boot(sessionToken) {
   let sourceQuery = "";
   let selectedId = null;
   let stageKey = "";
-  let thumbsKey = "";
   let pendingAnimations = [];
   let titleTimer = null;
   let resizeTimer = null;
@@ -661,134 +661,35 @@ function boot(sessionToken) {
     });
   }
 
-  /// Every thumb is a button; only the selected one is in the tab order, so
-  /// Tab jumps straight into the deck and the arrow keys walk the slides.
-  function syncStoryboardSelection() {
-    els.storyboard.querySelectorAll(".thumb").forEach((el) => {
-      const current = el.dataset.id === selectedId;
-      el.setAttribute("aria-current", String(current));
-      el.tabIndex = current ? 0 : -1;
+  /// The storyboard is its own module; the shell only hands it the slides.
+  const storyboard = createStoryboard({
+    root: els.storyboard,
+    t,
+    escapeHtml,
+    hash,
+    actions: {
+      command: run,
+      applyI18n,
+      selectSlide: (slideId) => {
+        selectedId = slideId;
+        stageKey = "";
+        applyView(view);
+      },
+    },
+  });
+
+  function renderStoryboard(d) {
+    storyboard.render({
+      slides: d.slides,
+      aspectRatio: d.aspect_ratio,
+      selectedId,
+      sandboxOrigin,
+      sourceQuery,
     });
   }
 
   function focusSelectedThumb() {
-    const target = [...els.storyboard.querySelectorAll(".thumb")].find(
-      (el) => el.dataset.id === selectedId
-    );
-    if (target) target.focus();
-  }
-
-  function renderStoryboard(d) {
-    const key = d.slides.map((s) => `${s.id}:${hash(s.code)}:${s.template}`).join("|") + `:${d.aspect_ratio}`;
-    if (key === thumbsKey) {
-      syncStoryboardSelection();
-      return;
-    }
-    thumbsKey = key;
-
-    const hadFocus = els.storyboard.contains(document.activeElement);
-    const [w, h] = d.aspect_ratio.split(":").map(Number);
-
-    els.storyboard.innerHTML = "";
-    if (!d.slides.length) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.style.padding = "8px 4px";
-      hint.textContent = t("empty.body");
-      els.storyboard.append(hint);
-      return;
-    }
-
-    d.slides.forEach((s, index) => {
-      const label = t("storyboard.slide", {
-        n: index + 1,
-        template: t(`template.${s.template}`),
-      });
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "thumb";
-      button.dataset.id = s.id;
-      button.draggable = true;
-      button.tabIndex = s.id === selectedId ? 0 : -1;
-      button.setAttribute("aria-current", String(s.id === selectedId));
-      button.setAttribute("aria-label", label);
-
-      button.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("text/plain", String(index));
-        e.dataTransfer.effectAllowed = "move";
-        button.classList.add("dragging");
-      });
-      button.addEventListener("dragend", () => {
-        button.classList.remove("dragging");
-        els.storyboard.querySelectorAll(".thumb").forEach((t) => {
-          t.classList.remove("drag-over-top", "drag-over-bottom");
-        });
-      });
-      button.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        const rect = button.getBoundingClientRect();
-        const mid = rect.top + rect.height / 2;
-        if (e.clientY < mid) {
-          button.classList.add("drag-over-top");
-          button.classList.remove("drag-over-bottom");
-        } else {
-          button.classList.add("drag-over-bottom");
-          button.classList.remove("drag-over-top");
-        }
-      });
-      button.addEventListener("dragleave", () => {
-        button.classList.remove("drag-over-top", "drag-over-bottom");
-      });
-      button.addEventListener("drop", (e) => {
-        e.preventDefault();
-        const fromIdx = Number(e.dataTransfer.getData("text/plain"));
-        if (Number.isNaN(fromIdx) || fromIdx === index) return;
-        const rect = button.getBoundingClientRect();
-        const mid = rect.top + rect.height / 2;
-        let toIdx = index;
-        if (e.clientY >= mid && fromIdx > index) toIdx += 1;
-        run("move_slide", { from: fromIdx, to: toIdx });
-      });
-
-      button.innerHTML = `
-        <span class="thumb-media" style="aspect-ratio:${w}/${h}">
-          <iframe sandbox="allow-scripts" loading="lazy" tabindex="-1" aria-hidden="true" title=""
-            src="${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1${sourceQuery}"></iframe>
-        </span>
-        <span class="thumb-foot">
-          <span class="thumb-index">${String(index + 1).padStart(2, "0")}</span>
-          <span class="thumb-template">${escapeHtml(t(`template.${s.template}`))}</span>
-          <span class="thumb-actions">
-            ${index > 0 ? `<button type="button" class="thumb-btn" data-action="up" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveUp"))}" aria-label="${escapeHtml(t("storyboard.moveUp"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>` : ""}
-            ${index < d.slides.length - 1 ? `<button type="button" class="thumb-btn" data-action="down" data-id="${s.id}" data-idx="${index}" title="${escapeHtml(t("storyboard.moveDown"))}" aria-label="${escapeHtml(t("storyboard.moveDown"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>` : ""}
-            <button type="button" class="thumb-btn" data-action="dup" data-id="${s.id}" title="${escapeHtml(t("storyboard.duplicate"))}" aria-label="${escapeHtml(t("storyboard.duplicate"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
-            <button type="button" class="thumb-btn thumb-btn-danger" data-action="del" data-id="${s.id}" title="${escapeHtml(t("storyboard.delete"))}" aria-label="${escapeHtml(t("storyboard.delete"))}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-          </span>
-        </span>`;
-
-      button.querySelectorAll(".thumb-btn").forEach((btn) => {
-        btn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          const action = btn.dataset.action;
-          const slideId = btn.dataset.id;
-          const slideIdx = Number(btn.dataset.idx);
-          if (action === "dup") run("duplicate_slide", { slide_id: slideId });
-          else if (action === "del") run("remove_slide", { slide_id: slideId });
-          else if (action === "up") run("move_slide", { from: slideIdx, to: slideIdx - 1 });
-          else if (action === "down") run("move_slide", { from: slideIdx, to: slideIdx + 1 });
-        });
-      });
-
-      button.addEventListener("click", () => {
-        selectedId = s.id;
-        stageKey = "";
-        applyView(view);
-      });
-      els.storyboard.append(button);
-    });
-
-    if (hadFocus) focusSelectedThumb();
+    storyboard.focusSelected();
   }
 
   function renderStage(d) {
@@ -1182,7 +1083,7 @@ function boot(sessionToken) {
           const payload = await client.openDeck(text);
           selectedId = null;
           stageKey = "";
-          thumbsKey = "";
+          storyboard.invalidate();
           applyView(payload.view);
           toast(t("toast.opened"));
         } catch (error) {
@@ -1200,7 +1101,7 @@ function boot(sessionToken) {
       },
       aspectRatioChanged: (ratio) => {
         stageKey = "";
-        thumbsKey = "";
+        storyboard.invalidate();
         run("set_aspect_ratio", { ratio });
       },
       applyI18n,
@@ -1395,7 +1296,7 @@ function boot(sessionToken) {
       renderElementHud();
     }
     if (view) {
-      thumbsKey = "";
+      storyboard.invalidate();
       applyView(view);
     }
     renderAgentActivity({ announce: false });
@@ -1457,7 +1358,7 @@ function boot(sessionToken) {
   window.addEventListener("resize", () => {
     if (resizeTimer) window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
-      thumbsKey = "";
+      storyboard.invalidate();
       if (view) applyView(view);
     }, 120);
   });
@@ -2107,7 +2008,7 @@ function boot(sessionToken) {
     }
     if (!payload.view) return;
     stageKey = "";
-    thumbsKey = "";
+    storyboard.invalidate();
     selectedElement = null;
     selectedId = payload.view.presentation.slides[0]?.id || "";
     applyView(payload.view);
