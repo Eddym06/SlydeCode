@@ -190,7 +190,7 @@ SlydeCode/
 # Rust: 161 unit and integration tests across the five crates
 cargo test --workspace
 
-# UI: 54 tests. Browser flows drive the real studio in headless Chrome over CDP;
+# UI: 55 tests. Browser flows drive the real studio in headless Chrome over CDP;
 # the component and i18n suites run the DOM-free modules directly in Node.
 # No npm packages are involved.
 cargo build --workspace
