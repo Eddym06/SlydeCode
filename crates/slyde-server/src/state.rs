@@ -382,6 +382,9 @@ pub struct GeometryItem {
 pub struct SlideCodeItem {
     pub slide_id: String,
     pub code: String,
+    /// Layout label to store with the new code (`hero`, `bullet`, …).
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]

@@ -14,9 +14,11 @@ import { mountMenus } from "./menus.js";
 import { createTransitioner, transitionOf } from "./transitions.js";
 import { createVersionsCard } from "./versions-card.js";
 import { mountShortcuts } from "./shortcuts.js";
-import { layoutPreview } from "./layout-previews.js";
+import { THEME_COLORS, layoutPreview } from "./layout-previews.js";
 import { createStoryboard } from "./storyboard.js";
-import { createCanvas } from "./canvas.js";
+import { canvasSize, createCanvas } from "./canvas.js";
+import { extractContent, renderLayout } from "./layouts.js";
+import { mountElementsLibrary } from "./elements-library.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -410,6 +412,18 @@ function boot(sessionToken) {
     setDrawer(false);
   });
 
+  mountElementsLibrary({
+    trigger: $("insert-elements"),
+    t,
+    applyI18n,
+    insert: (item, place) => {
+      const slideId = selectedId;
+      if (!slideId) return;
+      const rect = place(item, canvasSize(deck() ? deck().aspect_ratio : "16:9"));
+      run("insert_block", { slide_id: slideId, html: item.html, ...rect });
+      toast(t("elements.added"));
+    },
+  });
   const shortcuts = mountShortcuts({ t, applyI18n });
   mountMenus();
   $("view-shortcuts").addEventListener("click", () => shortcuts.open());
@@ -861,6 +875,7 @@ function boot(sessionToken) {
       notify: toast,
       currentSlideId: () => selectedId,
       aspectRatio: () => (deck() ? deck().aspect_ratio : "16:9"),
+      themeColors: () => (deck() && THEME_COLORS[deck().theme.id]) || THEME_COLORS.studio,
       openPaletteForElement: (element) => openPalette({ element }),
       onSelectedElement: () => {
         if (view) updateCopilotContext(view.presentation);
@@ -914,6 +929,19 @@ function boot(sessionToken) {
     actions: {
       command: run,
       mountVersions: (host) => versionsCard.mount(host),
+      applyLayout: (layout, everySlide, slideId) => {
+        const d = deck();
+        if (!d) return;
+        const size = canvasSize(d.aspect_ratio);
+        const template = { hero: "hero", bullet: "bullet", image_layout: "image_layout" }[layout] || "custom";
+        const targets = everySlide ? d.slides : d.slides.filter((slide) => slide.id === slideId);
+        const items = targets.map((slide) => ({
+          slide_id: slide.id,
+          code: renderLayout(layout, extractContent(slide.code), size),
+          template,
+        }));
+        if (items.length) run("set_slides_code", { items });
+      },
       selectElement: selectElementById,
       pickImage: (file) => canvas.insertFile(file),
       saveDeck: () => {

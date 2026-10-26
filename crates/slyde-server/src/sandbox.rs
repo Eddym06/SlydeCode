@@ -435,9 +435,10 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
 
   // ---- Visual editing layer (studio stage only) ----
   if (EDIT) {
-    var selection = null;
+    var selection = null;      // the primary block (last one picked)
+    var group = [];            // every selected block, primary included
     var editingNode = null;
-    var outline = null;
+    var outlines = [];
 
     var post = function (message) {
       if (window.parent === window) return;
@@ -460,44 +461,86 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       }
     })();
 
-    function ensureOutline() {
-      if (outline) return outline;
-      outline = document.createElement('div');
-      outline.setAttribute('data-slyde-ui', '1');
-      outline.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;display:none;' +
+    function outlineFor(index) {
+      if (outlines[index]) return outlines[index];
+      var node = document.createElement('div');
+      node.setAttribute('data-slyde-ui', '1');
+      node.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;display:none;' +
         'z-index:2147483646;box-sizing:border-box;border-radius:2px;' +
         'box-shadow:0 0 0 2px #FF6B4A, 0 0 0 3px rgba(255,107,74,.22);';
-      document.body.appendChild(outline);
-      return outline;
+      document.body.appendChild(node);
+      outlines[index] = node;
+      return node;
     }
 
     function paint() {
-      var layer = ensureOutline();
-      if (!selection) { layer.style.display = 'none'; return; }
-      var rect = selection.getBoundingClientRect();
-      if (!rect.width && !rect.height) { layer.style.display = 'none'; return; }
-      layer.style.display = 'block';
-      layer.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)';
-      layer.style.width = Math.round(rect.width) + 'px';
-      layer.style.height = Math.round(rect.height) + 'px';
+      var shown = group.length ? group : (selection ? [selection] : []);
+      for (var i = 0; i < Math.max(outlines.length, shown.length); i += 1) {
+        var layer = outlineFor(i);
+        var el = shown[i];
+        if (!el) { layer.style.display = 'none'; continue; }
+        var rect = el.getBoundingClientRect();
+        if (!rect.width && !rect.height) { layer.style.display = 'none'; continue; }
+        layer.style.display = 'block';
+        layer.style.transform = 'translate(' + Math.round(rect.left) + 'px,' + Math.round(rect.top) + 'px)';
+        layer.style.width = Math.round(rect.width) + 'px';
+        layer.style.height = Math.round(rect.height) + 'px';
+        // The primary block is solid; the others of a multi-selection are dashed.
+        layer.style.boxShadow = shown.length > 1 && el !== selection
+          ? '0 0 0 1.5px #7C3AED' : '0 0 0 2px #FF6B4A, 0 0 0 3px rgba(255,107,74,.22)';
+      }
+    }
+
+    function toHex(color) {
+      var m = /rgba?\(([^)]+)\)/.exec(color || '');
+      if (!m) return '#000000';
+      var p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number);
+      return '#' + p.slice(0, 3).map(function (v) {
+        var h = Math.round(v).toString(16);
+        return h.length < 2 ? '0' + h : h;
+      }).join('');
     }
 
     function describe(el) {
       var rect = el.getBoundingClientRect();
+      var cs = getComputedStyle(el);
       return {
         type: 'select',
         id: el.getAttribute('data-slyde-id'),
         tag: el.tagName ? el.tagName.toLowerCase() : 'div',
         text: (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80),
         rect: { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
-        viewport: { w: window.innerWidth, h: window.innerHeight }
+        geom: stageGeometry(el),
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        style: {
+          bold: parseInt(cs.fontWeight, 10) >= 600,
+          italic: cs.fontStyle === 'italic',
+          size: Math.round(parseFloat(cs.fontSize) * 10) / 10,
+          color: toHex(cs.color),
+          align: /center/.test(cs.textAlign) ? 'center' : (/right|end/.test(cs.textAlign) ? 'right' : 'left'),
+          list: !!el.querySelector(':scope > ul, :scope > ol') || /^(ul|ol)$/i.test(el.tagName)
+        }
       };
     }
 
-    function select(el) {
-      selection = el;
+    function select(el, additive) {
+      if (additive && el) {
+        var at = group.indexOf(el);
+        if (!group.length && selection && selection !== el) group = [selection];
+        if (at >= 0) group.splice(at, 1);
+        else group.push(el);
+        selection = group.length ? group[group.length - 1] : null;
+      } else {
+        group = [];
+        selection = el;
+      }
       paint();
-      post(el ? describe(el) : { type: 'deselect' });
+      if (group.length > 1) {
+        post({ type: 'multi', items: group.map(describe) });
+      } else {
+        if (group.length === 1) selection = group[0];
+        post(selection ? describe(selection) : { type: 'deselect' });
+      }
     }
 
     function closestBlock(node) {
@@ -537,33 +580,58 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
 
     var drag = null;
 
+    var DRAG_THRESHOLD = 4;
+
     stage.addEventListener('pointerdown', function (event) {
       if (editingNode || event.button !== 0) return;
-      var el = event.target;
-      if (!el || el.tagName !== 'IMG') return;
-      event.preventDefault();
-      var geometry = stageGeometry(el);
-      // Freeze the element where it is so it can move without reflowing the slide.
-      applyGeometry(el, geometry);
+      // Shift/Ctrl/Cmd-click builds a multi-selection; it must not also paint a
+      // text selection across the slide.
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        try { window.getSelection().removeAllRanges(); } catch (e) {}
+      }
+      var target = closestBlock(event.target);
+      if (!target) return;
+      var isImage = target.tagName === 'IMG';
+      // A picture moves as soon as it is grabbed. Any other block must already be
+      // selected: the first click selects, dragging an already selected block
+      // moves it, so plain text selection and double-click editing are untouched.
+      var armed = isImage || (group.length <= 1 && selection === target && !event.shiftKey);
+      if (!armed) return;
+      if (isImage) event.preventDefault();
       drag = {
-        el: el,
-        id: el.getAttribute('data-slyde-id'),
-        mode: event.shiftKey ? 'resize' : 'move',
+        el: target,
+        id: target.getAttribute('data-slyde-id'),
+        mode: event.shiftKey && isImage ? 'resize' : 'move',
         startX: event.clientX,
         startY: event.clientY,
-        geometry: geometry
+        geometry: stageGeometry(target),
+        started: isImage,
+        pointerId: event.pointerId
       };
-      select(el);
+      if (isImage) beginDrag();
+    }, true);
+
+    function beginDrag() {
+      var d = drag;
+      d.started = true;
+      // Freeze the element where it is so it can move without reflowing the slide.
+      applyGeometry(d.el, d.geometry);
+      select(d.el);
       // The stage prevents the default focus change, so without this the frame
       // never receives keydown and the arrow-key nudge would be dead.
       try { window.focus(); } catch (e) {}
-      if (el.setPointerCapture) {
-        try { el.setPointerCapture(event.pointerId); } catch (e) {}
+      if (d.el.setPointerCapture) {
+        try { d.el.setPointerCapture(d.pointerId); } catch (e) {}
       }
-    }, true);
+    }
 
     window.addEventListener('pointermove', function (event) {
       if (!drag) return;
+      if (!drag.started) {
+        if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < DRAG_THRESHOLD) return;
+        beginDrag();
+      }
       event.preventDefault();
       var s = stage.getBoundingClientRect();
       var scale = s.width ? s.width / W : 1;
@@ -585,8 +653,13 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       applyGeometry(drag.el, next);
     });
 
+    var justDragged = false;
+
     function endDrag() {
       if (!drag) return;
+      if (!drag.started) { drag = null; return; }
+      justDragged = true;
+      setTimeout(function () { justDragged = false; }, 0);
       var el = drag.el;
       var id = drag.id;
       var geometry = stageGeometry(el);
@@ -596,22 +669,37 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
     window.addEventListener('pointerup', endDrag);
     window.addEventListener('pointercancel', endDrag);
 
-    // Arrow keys nudge the selected picture: 1px, 10px with Shift. Without
+    // Arrow keys nudge the selection: 1px, 10px with Shift. Without
     // stopImmediatePropagation the document keydown forwarder would also send
     // the arrow to the studio and change the slide.
+    function nudge(dx, dy) {
+      var targets = group.length > 1 ? group : (selection ? [selection] : []);
+      if (!targets.length) return false;
+      var changed = [];
+      for (var i = 0; i < targets.length; i += 1) {
+        var g = stageGeometry(targets[i]);
+        g.x += dx;
+        g.y += dy;
+        applyGeometry(targets[i], g);
+        changed.push({ id: targets[i].getAttribute('data-slyde-id'), rect: g });
+      }
+      post({ type: 'geometry-many', items: changed });
+      return true;
+    }
+
     document.addEventListener('keydown', function (event) {
-      if (!selection || selection.tagName !== 'IMG' || editingNode) return;
+      if (editingNode || (!selection && !group.length)) return;
       var step = event.shiftKey ? 10 : 1;
-      var g = stageGeometry(selection);
-      if (event.key === 'ArrowLeft') g.x -= step;
-      else if (event.key === 'ArrowRight') g.x += step;
-      else if (event.key === 'ArrowUp') g.y -= step;
-      else if (event.key === 'ArrowDown') g.y += step;
+      var dx = 0;
+      var dy = 0;
+      if (event.key === 'ArrowLeft') dx = -step;
+      else if (event.key === 'ArrowRight') dx = step;
+      else if (event.key === 'ArrowUp') dy = -step;
+      else if (event.key === 'ArrowDown') dy = step;
       else return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      applyGeometry(selection, g);
-      post({ type: 'image-geometry', id: selection.getAttribute('data-slyde-id'), rect: g });
+      nudge(dx, dy);
     }, true);
 
     function readImage(file) {
@@ -667,7 +755,9 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
     stage.addEventListener('click', function (event) {
       if (editingNode) return;
       event.preventDefault();
-      select(closestBlock(event.target));
+      if (justDragged) return;
+      var block = closestBlock(event.target);
+      select(block, !!(block && (event.shiftKey || event.ctrlKey || event.metaKey)));
     }, true);
 
     document.addEventListener('dblclick', function (event) {
@@ -676,6 +766,33 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       event.preventDefault();
       beginEdit(block);
     }, true);
+
+    // Bullets without code: a block of lines becomes a list, and a list goes back
+    // to plain lines. The studio commits the markup through `mutate_element`.
+    function toggleList(el) {
+      var id = el.getAttribute('data-slyde-id');
+      var existing = el.querySelector(':scope > ul, :scope > ol');
+      if (existing) {
+        var lines = [].slice.call(existing.querySelectorAll('li')).map(function (li) {
+          return (li.innerText || '').trim();
+        });
+        post({ type: 'html', id: id, value: lines.join('<br>') });
+        return;
+      }
+      var raw = (el.innerText || '').trim();
+      var parts = raw.indexOf('\n') >= 0 ? raw.split(/\n+/) : raw.split(/(?<=[.!?])\s+/);
+      var items = parts.map(function (part) { return part.trim(); }).filter(Boolean);
+      if (!items.length) return;
+      var esc = function (text) {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      };
+      post({
+        type: 'html',
+        id: id,
+        value: '<ul style="margin:0;padding-left:1.2em">' +
+          items.map(function (item) { return '<li>' + esc(item) + '</li>'; }).join('') + '</ul>'
+      });
+    }
 
     function beginEdit(el) {
       editingNode = el;
@@ -733,6 +850,23 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         select(data.id ? stage.querySelector('[data-slyde-id="' + data.id + '"]') : null);
       } else if (data.type === 'clear-selection') {
         select(null);
+      } else if (data.type === 'select-step') {
+        // Tab / Shift+Tab from the studio walks the blocks in reading order.
+        var blocks = [].slice.call(stage.querySelectorAll('[data-slyde-id]')).filter(function (node) {
+          var box = node.getBoundingClientRect();
+          return box.width > 4 && box.height > 4 && node.tagName !== 'STYLE' && node.tagName !== 'BR';
+        });
+        if (!blocks.length) return;
+        var at = blocks.indexOf(selection);
+        var next = at < 0 ? (data.delta < 0 ? blocks.length - 1 : 0)
+          : (at + data.delta + blocks.length) % blocks.length;
+        select(blocks[next]);
+      } else if (data.type === 'nudge') {
+        nudge(data.dx || 0, data.dy || 0);
+      } else if (data.type === 'edit-selected') {
+        if (selection && !editingNode) beginEdit(selection);
+      } else if (data.type === 'toggle-list') {
+        if (selection) toggleList(selection);
       }
     });
 

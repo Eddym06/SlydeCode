@@ -68,3 +68,19 @@ export function labelFor(entry, t) {
   if (entry.kind === "list") return t("element.list", { n: entry.count || 0 });
   return t(`element.${entry.kind}`);
 }
+
+/** Kind of a single block for the selection toolbar ("title", "paragraph"…). */
+export function kindOfTag(tag, text = "") {
+  const lower = String(tag || "").toLowerCase();
+  if (KINDS[lower]) return KINDS[lower];
+  if (lower === "li") return "list";
+  if (text.trim()) return "text";
+  return "block";
+}
+
+/** Whether text formatting (bold, size, color, bullets) makes sense for this block. */
+export function isTextBlock(tag, text = "") {
+  const lower = String(tag || "").toLowerCase();
+  if (["img", "svg", "canvas", "pre", "table", "video", "style", "script", "br"].includes(lower)) return false;
+  return Boolean(text.trim());
+}

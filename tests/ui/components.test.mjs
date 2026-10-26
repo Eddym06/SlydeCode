@@ -399,3 +399,51 @@ test("transitions have keyframes for every kind, mirror by direction and cut cle
   assert.equal(transitionOf({ transition: { kind: "zoom", duration_ms: 99999 } }).duration, 2000);
   assert.equal(transitionOf({ transition: { kind: "spin", duration_ms: 400 } }), null);
 });
+
+test("the elements catalog is safe, unique and fits the canvas", async () => {
+  const { CATALOG, CATEGORIES, centeredPlacement } = await import("../../ui/static/elements-catalog.js");
+  const keys = CATALOG.map((item) => `${item.category}/${item.id}`);
+  assert.equal(new Set(keys).size, keys.length, "no duplicate ids per category");
+  for (const category of CATEGORIES) {
+    assert.ok(CATALOG.some((item) => item.category === category), `${category} has items`);
+  }
+  for (const item of CATALOG) {
+    assert.ok(!/<script|javascript:|\son\w+\s*=/i.test(item.html), `${item.category}/${item.id} is plain markup`);
+    assert.ok(item.w > 0 && item.h > 0);
+  }
+  const big = CATALOG.find((item) => item.id === "4x4");
+  const place = centeredPlacement(big, { w: 1280, h: 720 });
+  assert.ok(place.x >= 0 && place.y >= 0 && place.x + place.w <= 1280 && place.y + place.h <= 720);
+  const tiny = centeredPlacement({ w: 100, h: 50 }, { w: 1280, h: 720 });
+  assert.deepEqual([tiny.w, tiny.h], [100, 50], "small blocks keep their size");
+  assert.equal(tiny.x, 590);
+});
+
+test("align and distribute keep every block inside the canvas", async () => {
+  const { arrangeBoxes } = await import("../../ui/static/canvas.js");
+  const canvas = { w: 1280, h: 720 };
+  const boxes = [
+    { id: "a", x: 100, y: 50, w: 200, h: 100 },
+    { id: "b", x: 400, y: 300, w: 100, h: 60 },
+    { id: "c", x: 900, y: 500, w: 300, h: 120 },
+  ];
+  const at = (rows, id) => rows.find((row) => row.id === id);
+  const left = arrangeBoxes("arrange-left", boxes, canvas);
+  assert.deepEqual(left.map((row) => row.x), [100, 100, 100]);
+  const right = arrangeBoxes("arrange-right", boxes, canvas);
+  assert.deepEqual(right.map((row) => row.x + row.w), [1200, 1200, 1200]);
+  const center = arrangeBoxes("arrange-center", boxes, canvas);
+  assert.equal(at(center, "a").x + 100, 650, "centered on the middle of the union");
+  assert.deepEqual(arrangeBoxes("arrange-top", boxes, canvas).map((row) => row.y), [50, 50, 50]);
+
+  const spread = arrangeBoxes("distribute-h", boxes, canvas);
+  const gapAB = at(spread, "b").x - (at(spread, "a").x + at(spread, "a").w);
+  const gapBC = at(spread, "c").x - (at(spread, "b").x + at(spread, "b").w);
+  assert.ok(Math.abs(gapAB - gapBC) <= 1, `equal gaps: ${gapAB} vs ${gapBC}`);
+  assert.equal(at(spread, "a").x, 100);
+  assert.equal(at(spread, "c").x, 900, "the outer blocks stay put");
+
+  const outside = arrangeBoxes("arrange-right", [{ id: "x", x: 1200, y: 10, w: 200, h: 20 }, { id: "y", x: 0, y: 0, w: 50, h: 50 }], canvas);
+  assert.ok(outside.every((row) => row.x >= 0 && row.x + row.w <= 1280), "clamped to the canvas");
+  assert.equal(arrangeBoxes("spin", boxes, canvas), null);
+});

@@ -12,6 +12,8 @@
 import { createCodeEditor } from "./code-editor.js";
 import { describeStructure, labelFor } from "./element-labels.js";
 import { TRANSITION_KINDS, DEFAULT_TRANSITION_MS } from "./transitions.js";
+import { LAYOUTS } from "./layouts.js";
+import { layoutPreview } from "./layout-previews.js";
 import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
@@ -85,6 +87,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    layout: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M10 9v11"/>',
     transition: '<rect x="3" y="5" width="10" height="14" rx="2"/><rect x="11" y="5" width="10" height="14" rx="2" opacity=".55"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
   };
@@ -327,6 +330,36 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     ].join("");
   }
 
+  /** Which layout tile to mark: the one that wrote this slide, else its template. */
+  function activeLayoutOf(slide) {
+    const byClass = {
+      "layout-hero": "hero",
+      "layout-bullet": "bullet",
+      "layout-image": "image_layout",
+      "layout-columns": "two_columns",
+      "layout-quote": "quote",
+      "layout-number": "big_number",
+      "layout-section": "section",
+    };
+    const match = /class="slide (layout-[a-z]+)/.exec(slide.code || "");
+    if (match && byClass[match[1]]) return byClass[match[1]];
+    return ["hero", "bullet", "image_layout"].includes(slide.template) ? slide.template : null;
+  }
+
+  function layoutMarkup(slide) {
+    const themeId = (current.deck && current.deck.theme && current.deck.theme.id) || "studio";
+    const active = activeLayoutOf(slide);
+    const tiles = LAYOUTS.map(
+      (id) => `<button type="button" class="layout-tile" data-layout="${id}" role="radio" aria-checked="${id === active}">
+        <span class="layout-tile-art">${layoutPreview(id, themeId)}</span>
+        <span>${escapeHtml(t(`layout.${id}`))}</span></button>`
+    ).join("");
+    return `
+      <div class="layout-grid" role="radiogroup" aria-label="${escapeHtml(t("layout.title"))}">${tiles}</div>
+      <button type="button" class="tile-btn tile-wide" id="layout-all"${active ? "" : " disabled"}>${escapeHtml(t("layout.applyAll"))}</button>
+      <p class="hint">${escapeHtml(t("layout.hint"))}</p>`;
+  }
+
   function transitionMarkup(slide) {
     const current = (slide.transition && slide.transition.kind) || "none";
     const duration = (slide.transition && slide.transition.duration_ms) || DEFAULT_TRANSITION_MS;
@@ -379,8 +412,9 @@ export function createInspector({ root, t, escapeHtml, actions }) {
            <button type="button" class="tile-btn tile-danger" id="delete-slide">${icon("trash", 16)}<span>${escapeHtml(t("action.delete"))}</span></button>
          </div>`
       ),
+      card(1, "layout", t("layout.title"), layoutMarkup(slide)),
       card(
-        1,
+        2,
         "notes",
         t("inspector.notes"),
         `<textarea class="notes" id="notes" aria-label="${escapeHtml(t("inspector.notes"))}" placeholder="${escapeHtml(
@@ -388,17 +422,17 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         )}">${escapeHtml(slide.notes || "")}</textarea>`
       ),
       card(
-        2,
+        3,
         "motion",
         t("inspector.animation"),
         renderAnimationEditor(slide),
         { extra: steps ? `<span class="card-count">${steps}</span>` : "" }
       ),
-      card(3, "transition", t("transition.title"), transitionMarkup(slide)),
-      card(4, "elements", t("tree.title"), tree, {
+      card(4, "transition", t("transition.title"), transitionMarkup(slide)),
+      card(5, "elements", t("tree.title"), tree, {
         extra: described.length ? `<span class="card-count">${described.length}</span>` : "",
       }),
-      `<details class="dev card" style="--i:5"${devOpen ? " open" : ""}>
+      `<details class="dev card" style="--i:6"${devOpen ? " open" : ""}>
         <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
         <p class="hint dev-meta"><span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span></p>
@@ -463,6 +497,27 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     actions.applyI18n(root);
+  }
+
+  function bindLayouts(slide) {
+    const grid = root.querySelector(".layout-grid");
+    if (!grid) return;
+    const all = root.querySelector("#layout-all");
+    grid.addEventListener("click", (event) => {
+      const tile = event.target.closest("[data-layout]");
+      if (!tile) return;
+      grid.querySelectorAll("[data-layout]").forEach((node) => {
+        node.setAttribute("aria-checked", String(node === tile));
+      });
+      all.disabled = false;
+      actions.applyLayout(tile.dataset.layout, false, slide.id);
+    });
+    // The layout in use is read from the markup, so the button survives the
+    // re-render that follows every change.
+    all.addEventListener("click", () => {
+      const tile = grid.querySelector('[aria-checked="true"]');
+      if (tile) actions.applyLayout(tile.dataset.layout, true, slide.id);
+    });
   }
 
   function bindTransition(slide) {
@@ -605,6 +660,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
 
     bindAnimationEditor(currentSlide);
     bindTransition(currentSlide);
+    bindLayouts(currentSlide);
     mountCodeEditor(currentSlide, editorState);
 
     const remove = root.querySelector("#delete-slide");

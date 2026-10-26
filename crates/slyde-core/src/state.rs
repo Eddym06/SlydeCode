@@ -464,9 +464,12 @@ impl PresentationState {
 
     /// Replaces the source of several slides as one undo step (apply a layout to
     /// the whole deck).
-    pub fn set_slides_code(&mut self, items: &[(String, String)]) -> Result<(), CoreError> {
+    pub fn set_slides_code(
+        &mut self,
+        items: &[(String, String, Option<TemplateType>)],
+    ) -> Result<(), CoreError> {
         let mut next = self.presentation().clone();
-        for (slide_id, code) in items {
+        for (slide_id, code, template) in items {
             if code.trim().is_empty() {
                 return Err(CoreError::EmptySlideCode);
             }
@@ -482,6 +485,9 @@ impl PresentationState {
                 .find(|slide| &slide.id == slide_id)
                 .ok_or_else(|| CoreError::SlideNotFound(slide_id.clone()))?;
             slide.code = crate::html::ensure_element_ids(code);
+            if let Some(template) = template {
+                slide.template = *template;
+            }
         }
         self.commit("slides_code", next);
         Ok(())
@@ -2244,12 +2250,20 @@ mod tests {
         assert!(s.set_transition(Some(&["nope".into()]), None).is_err());
 
         s.set_slides_code(&[
-            (ids[0].clone(), "<h1>A</h1>".into()),
-            (ids[1].clone(), "<h1>B</h1>".into()),
+            (
+                ids[0].clone(),
+                "<h1>A</h1>".into(),
+                Some(TemplateType::Hero),
+            ),
+            (ids[1].clone(), "<h1>B</h1>".into(), None),
         ])
         .unwrap();
+        assert_eq!(s.presentation().slides[0].template, TemplateType::Hero);
         assert!(s.presentation().slides[1].code.contains("B"));
-        assert!(s.set_slides_code(&[(ids[0].clone(), "  ".into())]).is_err());
+        assert!(
+            s.set_slides_code(&[(ids[0].clone(), "  ".into(), None)])
+                .is_err()
+        );
         s.undo().unwrap();
         assert!(
             s.presentation().slides[1].code.contains("1</h1>"),

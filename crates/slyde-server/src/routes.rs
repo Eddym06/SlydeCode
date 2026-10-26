@@ -307,9 +307,12 @@ async fn apply_command(
             core.set_geometries(&slide_id, &items).map(|_| None)
         }
         UiCommand::SetSlidesCode { items } => {
-            let items: Vec<(String, String)> = items
+            let items: Vec<(String, String, Option<slyde_core::TemplateType>)> = items
                 .into_iter()
-                .map(|item| (item.slide_id, item.code))
+                .map(|item| {
+                    let template = item.template.as_deref().map(crate::starter::template_type);
+                    (item.slide_id, item.code, template)
+                })
                 .collect();
             core.set_slides_code(&items).map(|_| None)
         }
