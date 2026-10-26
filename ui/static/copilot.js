@@ -449,6 +449,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         <div class="tool-list" hidden></div>
         <div class="msg-typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="msg-error" hidden></div>
+        <div class="msg-actions" hidden></div>
       </div>`;
     return article;
   }
@@ -514,11 +515,21 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       message.state === "stopped"
         ? t("copilot.stopped")
         : message.state === "done" && message.usage
-          ? t("copilot.usage", {
-              calls: message.usage.calls,
-              tokens: formatTokens(message.usage.tokens),
-            })
+          ? usageLabel(message.usage)
           : "";
+
+    const actionsEl = message.el.querySelector(".msg-actions");
+    if (actionsEl) {
+      const canRevert =
+        message.reversible && message.state !== "streaming" && messages[messages.length - 1] === message;
+      actionsEl.hidden = !canRevert;
+      if (canRevert && !actionsEl.firstElementChild) {
+        actionsEl.innerHTML = `<button type="button" class="msg-revert" data-revert>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7H5v4"/><path d="M5.5 11a7 7 0 1 1 1.6 7.3"/></svg>
+          <span>${escapeHtml(t("copilot.revert"))}</span></button>`;
+      }
+      if (!canRevert) actionsEl.innerHTML = "";
+    }
 
     const typing = message.el.querySelector(".msg-typing");
     const running = message.tools.some((tool) => tool.status === "running");
@@ -578,8 +589,16 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
           : `<svg class="tool-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" aria-hidden="true">
                <path d="M12 7v6M12 17h.01"/></svg>`;
+    let detail = "";
+    if (tool.status === "running" && tool.progress) {
+      detail = tool.progress.items > 0
+        ? t("copilot.progress.slides", { n: tool.progress.items })
+        : t("copilot.progress.chars", { n: formatTokens(tool.progress.chars) });
+    }
     return `<div class="tool-row" data-status="${escapeHtml(tool.status)}">
-      ${glyph}<span>${escapeHtml(label)}</span></div>`;
+      ${glyph}<span>${escapeHtml(label)}</span>${
+        detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ""
+      }</div>`;
   }
 
   function userAttachment(file) {
@@ -746,6 +765,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     autosize();
     updateSendEnabled();
 
+    messages.forEach((message) => {
+      if (message.reversible) message.reversible = false;
+    });
     messages.push({
       role: "user",
       text,
@@ -831,6 +853,18 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
   }
 
+  function usageLabel(usage) {
+    const mark = usage.estimated ? "~" : "";
+    if (usage.estimated || !usage.output) {
+      return t("copilot.usage", { calls: usage.calls, tokens: `${mark}${formatTokens(usage.input)}` });
+    }
+    return t("copilot.usageFull", {
+      calls: usage.calls,
+      input: formatTokens(usage.input),
+      output: formatTokens(usage.output),
+    });
+  }
+
   function formatTokens(n) {
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
@@ -865,7 +899,24 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       return;
     }
     if (event.type === "usage") {
-      assistant.usage = { calls: event.calls, tokens: event.approx_input_tokens };
+      assistant.usage = {
+        calls: event.calls,
+        input: event.input_tokens || 0,
+        output: event.output_tokens || 0,
+        estimated: Boolean(event.estimated),
+      };
+      return;
+    }
+    if (event.type === "progress") {
+      const running = [...assistant.tools].reverse().find((tool) => tool.name === event.name);
+      if (running && running.status === "running") {
+        running.progress = { chars: event.chars, items: event.items };
+        syncAssistant(assistant);
+      }
+      return;
+    }
+    if (event.type === "reversible") {
+      assistant.reversible = true;
       return;
     }
     if (event.type === "done") {
@@ -1062,7 +1113,25 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   els.provider.addEventListener("click", openSheet);
   els.modelChip.addEventListener("click", openSheet);
   els.newChat.addEventListener("click", newChat);
-  els.thread.addEventListener("click", (event) => {
+  els.thread.addEventListener("click", async (event) => {
+    const revertButton = event.target.closest("[data-revert]");
+    if (revertButton) {
+      revertButton.disabled = true;
+      try {
+        await client.copilotRevert();
+        const article = revertButton.closest(".msg");
+        const message = messages.find((item) => item.el === article);
+        if (message) {
+          message.reversible = false;
+          syncAssistant(message);
+        }
+        notify(t("copilot.reverted"));
+      } catch (error) {
+        revertButton.disabled = false;
+        notify(error.message || t("copilot.revertFailed"));
+      }
+      return;
+    }
     const retryButton = event.target.closest("[data-retry]");
     if (!retryButton) return;
     const article = retryButton.closest(".msg");

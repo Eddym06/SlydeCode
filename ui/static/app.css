@@ -3036,8 +3036,7 @@ body.has-thinking-expanded .copilot-panel {
   }
 
   .brand-sub,
-  .save-label,
-  .zoom-controls {
+  .save-label {
     display: none;
   }
 
@@ -3860,11 +3859,10 @@ body.has-thinking-expanded .copilot-panel {
 /* Phones and very narrow windows. Kept last so it wins over the component
    rules above: the bar keeps brand, language, panel, Export and Present. */
 @media (max-width: 760px) {
-  .deck-quick-tools,
-  #theme-toggle,
   #undo,
   #redo,
-  .deck-meta .deck-title {
+  .deck-meta .deck-title,
+  .topbar-menu-btn span {
     display: none;
   }
 

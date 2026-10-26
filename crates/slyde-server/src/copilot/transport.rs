@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::catalog::{ProviderDef, Wire};
 use super::error::CopilotError;
 use super::tools;
-use super::wire::{ChatEvent, ImagePart, ToolCall, Turn};
+use super::wire::{ChatEvent, ImagePart, TokenUsage, ToolCall, Turn};
 
 /// One streaming turn: everything the transport needs except the event sink.
 pub struct StreamRequest<'a> {
@@ -32,7 +32,7 @@ pub async fn stream(
     client: &reqwest::Client,
     request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
-) -> Result<Turn, CopilotError> {
+) -> Result<(Turn, TokenUsage), CopilotError> {
     match request.provider.wire {
         Wire::OpenAi => stream_openai(client, request, tx).await,
         Wire::Anthropic => stream_anthropic(client, request, tx).await,
@@ -78,7 +78,7 @@ async fn stream_openai(
     client: &reqwest::Client,
     request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
-) -> Result<Turn, CopilotError> {
+) -> Result<(Turn, TokenUsage), CopilotError> {
     let StreamRequest {
         provider,
         key,
@@ -92,10 +92,13 @@ async fn stream_openai(
         "messages": openai_messages(system, turns),
         "tools": tools::openai_tools(),
         "tool_choice": "auto",
-        "stream": true
+        "stream": true,
+        "stream_options": { "include_usage": true }
     });
     let response = post(client, provider, key, &body).await?;
     let mut state = OpenAiAccum::default();
+    let mut usage = TokenUsage::default();
+    let mut progress = ProgressGate::default();
 
     consume_sse(response, tx, cancel, |data| {
         if data == "[DONE]" {
@@ -108,11 +111,24 @@ async fn stream_openai(
         if let Some(error) = provider_error(&value) {
             return Err(CopilotError::Upstream(error));
         }
+        if let Some(reported) = value.get("usage").filter(|usage| usage.is_object()) {
+            usage.input = reported
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(usage.input);
+            usage.output = reported
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(usage.output);
+        }
         if let Some(text) = state.apply(&value)? {
             send_delta(tx, &text)?;
         }
         if let Some(thinking) = state.take_thinking() {
             send_thinking(tx, &thinking)?;
+        }
+        if let Some((name, arguments)) = state.writing() {
+            progress.report(tx, name, arguments);
         }
         Ok(())
     })
@@ -127,14 +143,14 @@ async fn stream_openai(
     } else {
         state.text
     };
-    Ok(Turn::Assistant { text, tool_calls })
+    Ok((Turn::Assistant { text, tool_calls }, usage))
 }
 
 async fn stream_anthropic(
     client: &reqwest::Client,
     request: &StreamRequest<'_>,
     tx: &UnboundedSender<ChatEvent>,
-) -> Result<Turn, CopilotError> {
+) -> Result<(Turn, TokenUsage), CopilotError> {
     let StreamRequest {
         provider,
         key,
@@ -153,17 +169,43 @@ async fn stream_anthropic(
     });
     let response = post(client, provider, key, &body).await?;
     let mut state = AnthropicAccum::default();
+    let mut usage = TokenUsage::default();
+    let mut progress = ProgressGate::default();
 
     consume_sse(response, tx, cancel, |data| {
         let value: Value = match serde_json::from_str(data) {
             Ok(value) => value,
             Err(_) => return Ok(()),
         };
+        // `message_start` carries the input side, `message_delta` the output side.
+        let reported = value
+            .get("message")
+            .and_then(|message| message.get("usage"))
+            .or_else(|| value.get("usage"));
+        if let Some(reported) = reported {
+            let cache = reported
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                + reported
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+            if let Some(input) = reported.get("input_tokens").and_then(Value::as_u64) {
+                usage.input = input + cache;
+            }
+            if let Some(output) = reported.get("output_tokens").and_then(Value::as_u64) {
+                usage.output = output;
+            }
+        }
         if let Some(text) = state.apply(&value)? {
             send_delta(tx, &text)?;
         }
         if let Some(thinking) = state.take_thinking() {
             send_thinking(tx, &thinking)?;
+        }
+        if let Some((name, arguments)) = state.writing() {
+            progress.report(tx, name, arguments);
         }
         Ok(())
     })
@@ -178,7 +220,7 @@ async fn stream_anthropic(
     } else {
         state.text
     };
-    Ok(Turn::Assistant { text, tool_calls })
+    Ok((Turn::Assistant { text, tool_calls }, usage))
 }
 
 async fn consume_sse(
@@ -208,6 +250,30 @@ async fn consume_sse(
         on_data(data.trim())?;
     }
     Ok(())
+}
+
+/// Tells the browser that a tool call is still being written, but only when a
+/// meaningful amount has arrived since the last report: a six-slide deck is tens
+/// of thousands of characters and the UI does not need every chunk.
+#[derive(Default)]
+struct ProgressGate {
+    last: usize,
+}
+
+impl ProgressGate {
+    const STEP: usize = 600;
+
+    fn report(&mut self, tx: &UnboundedSender<ChatEvent>, name: &str, arguments: &str) {
+        if arguments.len() < self.last + Self::STEP {
+            return;
+        }
+        self.last = arguments.len();
+        let _ = tx.send(ChatEvent::Progress {
+            name: name.to_string(),
+            chars: arguments.len(),
+            items: arguments.matches("\"html_code\"").count(),
+        });
+    }
 }
 
 fn send_delta(tx: &UnboundedSender<ChatEvent>, text: &str) -> Result<(), CopilotError> {
@@ -462,6 +528,15 @@ impl OpenAiAccum {
         Ok(Some(emitted).filter(|text| !text.is_empty()))
     }
 
+    /// The tool call currently being written, with its raw arguments so far.
+    fn writing(&self) -> Option<(&str, &str)> {
+        self.calls
+            .iter()
+            .rev()
+            .find(|call| !call.name.is_empty() && !call.arguments.is_empty())
+            .map(|call| (call.name.as_str(), call.arguments.as_str()))
+    }
+
     fn finish(&mut self) -> Result<Vec<ToolCall>, CopilotError> {
         let mut calls = Vec::new();
         for (index, call) in std::mem::take(&mut self.calls).into_iter().enumerate() {
@@ -595,6 +670,13 @@ impl AnthropicAccum {
             }
             _ => Ok(None),
         }
+    }
+
+    fn writing(&self) -> Option<(&str, &str)> {
+        self.partials
+            .values()
+            .find(|tool| !tool.name.is_empty() && !tool.arguments.is_empty())
+            .map(|tool| (tool.name.as_str(), tool.arguments.as_str()))
     }
 
     fn finish(&mut self) -> Vec<ToolCall> {

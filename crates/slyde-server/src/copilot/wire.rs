@@ -20,11 +20,23 @@ pub enum ChatEvent {
         name: String,
         status: String,
     },
-    /// Provider round trips and a rough input-size estimate for the turn.
+    /// Provider round trips and token counts for the turn. `estimated` is true
+    /// when the provider reported no usage and the numbers are a size estimate.
     Usage {
         calls: u32,
-        approx_input_tokens: u64,
+        input_tokens: u64,
+        output_tokens: u64,
+        estimated: bool,
     },
+    /// A tool call is still being written by the model: how much of its
+    /// arguments has arrived and how many slides they carry so far.
+    Progress {
+        name: String,
+        chars: usize,
+        items: usize,
+    },
+    /// The turn changed the deck and can be undone in one step.
+    Reversible,
     Done,
     Error {
         code: String,
@@ -83,5 +95,18 @@ impl Turn {
             text: text.into(),
             images: Vec::new(),
         }
+    }
+}
+
+/// Tokens a provider reported for one request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+}
+
+impl TokenUsage {
+    pub fn is_reported(&self) -> bool {
+        self.input > 0 || self.output > 0
     }
 }

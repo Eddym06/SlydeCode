@@ -272,6 +272,15 @@ pub enum UiCommand {
     RemoveSlide {
         slide_id: String,
     },
+    /// Removes several slides (a multi-selection) as one undoable step.
+    RemoveSlides {
+        slide_ids: Vec<String>,
+    },
+    /// Replaces a slide's source from the code editor.
+    SetSlideCode {
+        slide_id: String,
+        code: String,
+    },
     Undo,
     Redo,
     TriggerAnimation {

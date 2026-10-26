@@ -110,6 +110,11 @@ export function createClient(token) {
       });
     },
 
+    /** Undoes everything the copilot did in its last turn, in one step. */
+    copilotRevert() {
+      return json(`/api/copilot/revert`, { method: "POST" });
+    },
+
     /** Stores a pasted/uploaded image and returns its `/assets/…` URL. */
     async uploadAsset(dataUrl) {
       const payload = await json(`/api/assets`, {

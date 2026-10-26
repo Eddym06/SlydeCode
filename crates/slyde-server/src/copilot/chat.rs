@@ -18,7 +18,7 @@ use super::error::CopilotError;
 use super::prompt;
 use super::tools;
 use super::transport;
-use super::wire::{ChatEvent, ImagePart, Turn};
+use super::wire::{ChatEvent, ImagePart, TokenUsage, Turn};
 
 const MAX_MESSAGES: usize = 40;
 const MAX_TEXT_CHARS: usize = 80_000;
@@ -72,7 +72,16 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
     };
     drop(idle_tx);
 
+    let before = state.view().await;
+    state.copilot.begin_snapshot(before.presentation.clone());
     let result = run_inner(&state, request, &tx, cancel).await;
+    let after = state.view().await;
+    let reversible = state
+        .copilot
+        .finish_snapshot(before.revision, after.revision);
+    if reversible {
+        let _ = tx.send(ChatEvent::Reversible);
+    }
     if let Some(id) = &request_id {
         state.copilot.end_turn(id);
     }
@@ -126,6 +135,8 @@ async fn run_inner(
     let language = request.language.as_deref().unwrap_or("en");
 
     let mut input_chars: u64 = 0;
+    let mut reported = TokenUsage::default();
+    let mut all_reported = true;
     let mut last_signature: Option<String> = None;
     let mut repeats: u32 = 0;
 
@@ -151,7 +162,7 @@ async fn run_inner(
         );
         compact_history(&mut turns);
         input_chars += (system.len() + turns.iter().map(Turn::chars).sum::<usize>()) as u64;
-        let assistant = transport::stream(
+        let (assistant, round_usage) = transport::stream(
             state.copilot.http(),
             &transport::StreamRequest {
                 provider,
@@ -165,6 +176,13 @@ async fn run_inner(
         )
         .await?;
 
+        if round_usage.is_reported() {
+            reported.input += round_usage.input;
+            reported.output += round_usage.output;
+        } else {
+            all_reported = false;
+        }
+
         let (text, calls) = match assistant {
             Turn::Assistant { text, tool_calls } => (text, tool_calls),
             _ => return Err(CopilotError::Upstream("unexpected provider turn".into())),
@@ -176,10 +194,21 @@ async fn run_inner(
                     "the model returned an empty response".into(),
                 ));
             }
-            let _ = tx.send(ChatEvent::Usage {
-                calls: round as u32 + 1,
-                // ~4 characters per token is close enough for a budget hint.
-                approx_input_tokens: input_chars / 4,
+            let _ = tx.send(if all_reported {
+                ChatEvent::Usage {
+                    calls: round as u32 + 1,
+                    input_tokens: reported.input,
+                    output_tokens: reported.output,
+                    estimated: false,
+                }
+            } else {
+                ChatEvent::Usage {
+                    calls: round as u32 + 1,
+                    // ~4 characters per token is close enough for a budget hint.
+                    input_tokens: input_chars / 4,
+                    output_tokens: 0,
+                    estimated: true,
+                }
             });
             return Ok(());
         }
@@ -437,7 +466,10 @@ mod tests {
             };
             (
                 [("content-type", "text/event-stream")],
-                format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+                format!(
+                    "data: {chunk}\n\ndata: {}\n\ndata: [DONE]\n\n",
+                    json!({ "choices": [], "usage": { "prompt_tokens": 1000, "completion_tokens": 200 } })
+                ),
             )
         }
 
@@ -494,10 +526,38 @@ mod tests {
             "the turn must finish cleanly: {events:?}"
         );
         assert!(
+            events.iter().any(|event| matches!(
+                event,
+                ChatEvent::Usage {
+                    calls: 2,
+                    input_tokens: 2000,
+                    output_tokens: 400,
+                    estimated: false
+                }
+            )),
+            "usage must sum what the provider reported over both calls: {events:?}"
+        );
+        assert!(
             events
                 .iter()
-                .any(|event| matches!(event, ChatEvent::Usage { calls: 2, .. })),
-            "usage must report the two provider calls"
+                .any(|event| matches!(event, ChatEvent::Progress { items: 6, .. })),
+            "a six-slide tool call must report writing progress"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ChatEvent::Reversible)),
+            "a turn that changed the deck must be revertible"
+        );
+        let revision = state.view().await.revision;
+        let before = state.copilot.take_snapshot(revision).expect("snapshot");
+        assert!(
+            before.slides.is_empty(),
+            "the snapshot is the deck before the turn"
+        );
+        assert!(
+            state.copilot.take_snapshot(revision).is_err(),
+            "a snapshot can only be used once"
         );
         let view = state.view().await;
         assert_eq!(view.presentation.slides.len(), 6);

@@ -1527,3 +1527,169 @@
     animation: none;
   }
 }
+
+/* undo-the-AI action + live tool detail */
+.msg-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.msg-revert {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--ink-muted);
+  animation: msg-in 380ms var(--ease-out) both;
+  transition: transform 220ms var(--spring), color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+}
+
+.msg-revert svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 420ms var(--spring);
+}
+
+.msg-revert:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: var(--brand);
+  border-color: var(--brand);
+}
+
+.msg-revert:hover:not(:disabled) svg {
+  transform: rotate(-200deg);
+}
+
+.msg-revert:disabled {
+  opacity: 0.5;
+}
+
+.tool-detail {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+/* ---------- topbar menus ---------- */
+.topbar-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 550;
+  border-radius: 10px;
+}
+
+.topbar-menu-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.topbar-menu-btn .menu-chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--ink-subtle);
+  transition: transform 260ms var(--spring);
+}
+
+.dropdown.is-open > .topbar-menu-btn {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.dropdown.is-open > .topbar-menu-btn .menu-chevron {
+  transform: rotate(180deg);
+}
+
+.dropdown-menu.menu-left {
+  left: 0;
+  right: auto;
+  transform-origin: top left;
+}
+
+.menu-wide {
+  min-width: 250px;
+}
+
+.menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+}
+
+.menu-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink-muted);
+}
+
+.menu-kbd {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-subtle);
+}
+
+.dropdown-item[hidden] {
+  display: none;
+}
+
+.dropdown-item:focus-visible {
+  outline: 0;
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1.5px var(--brand);
+}
+
+.menu-switch {
+  position: relative;
+  margin-left: auto;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  transition: background 240ms var(--ease-out);
+}
+
+.menu-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-1);
+  transition: transform 320ms var(--spring);
+}
+
+#theme-toggle[aria-pressed="true"] .menu-switch {
+  background: var(--gradient-action);
+}
+
+#theme-toggle[aria-pressed="true"] .menu-switch::after {
+  transform: translateX(14px);
+}
+
+/* The top bar owns the dropdowns, so it must stack above the panels it overlaps. */
+.topbar {
+  position: relative;
+  z-index: 30;
+}

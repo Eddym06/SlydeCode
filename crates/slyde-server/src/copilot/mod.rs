@@ -120,6 +120,63 @@ pub struct CopilotState {
     cancels: std::sync::Mutex<TurnCancels>,
     /// Conversations, one per deck, kept next to the key file.
     threads: std::sync::Mutex<Threads>,
+    /// The deck as it was before the latest copilot turn, so the whole turn can
+    /// be reverted in one step. It is only valid while the deck is still exactly
+    /// as that turn left it.
+    last_turn: std::sync::Mutex<Option<TurnSnapshot>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TurnSnapshot {
+    pub before: slyde_core::Presentation,
+    /// Revision right after the turn. `None` while the turn is still running.
+    pub revision_after: Option<u64>,
+}
+
+impl CopilotState {
+    pub(crate) fn begin_snapshot(&self, before: slyde_core::Presentation) {
+        let mut slot = self.last_turn.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(TurnSnapshot {
+            before,
+            revision_after: None,
+        });
+    }
+
+    /// Seals the snapshot, or drops it when the turn changed nothing.
+    pub(crate) fn finish_snapshot(&self, revision_before: u64, revision_after: u64) -> bool {
+        let mut slot = self.last_turn.lock().unwrap_or_else(|e| e.into_inner());
+        if revision_after == revision_before {
+            *slot = None;
+            return false;
+        }
+        if let Some(snapshot) = slot.as_mut() {
+            snapshot.revision_after = Some(revision_after);
+        }
+        slot.is_some()
+    }
+
+    /// Takes the snapshot when the deck still matches the end of that turn.
+    pub(crate) fn take_snapshot(
+        &self,
+        current_revision: u64,
+    ) -> Result<slyde_core::Presentation, CopilotError> {
+        let mut slot = self.last_turn.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.take() {
+            Some(TurnSnapshot {
+                before,
+                revision_after: Some(after),
+            }) if after == current_revision => Ok(before),
+            Some(other) => {
+                *slot = Some(other);
+                Err(CopilotError::InvalidRequest(
+                    "the deck changed after the copilot's last turn, so it can no longer be reverted in one step; use undo".into(),
+                ))
+            }
+            None => Err(CopilotError::InvalidRequest(
+                "there is nothing to revert".into(),
+            )),
+        }
+    }
 }
 
 impl CopilotState {
@@ -150,6 +207,7 @@ impl CopilotState {
             http,
             cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             threads: std::sync::Mutex::new(threads),
+            last_turn: std::sync::Mutex::new(None),
         }
     }
 

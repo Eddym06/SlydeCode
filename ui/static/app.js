@@ -10,6 +10,7 @@ import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { mountMenus } from "./menus.js";
 import { mountShortcuts } from "./shortcuts.js";
 import { templateIcon } from "./template-icons.js";
 import { createStoryboard } from "./storyboard.js";
@@ -362,7 +363,9 @@ function boot(sessionToken) {
     setDrawer(false);
   });
 
-  mountShortcuts({ t, applyI18n });
+  const shortcuts = mountShortcuts({ t, applyI18n });
+  mountMenus();
+  $("view-shortcuts").addEventListener("click", () => shortcuts.open());
 
   $("tab-inspector").addEventListener("click", () => setPanel("inspector"));
   $("tab-copilot").addEventListener("click", () => setPanel("copilot"));
@@ -1054,6 +1057,7 @@ function boot(sessionToken) {
   function syncThemeToggle() {
     const dark = document.documentElement.dataset.theme === "dark";
     $("theme-toggle").setAttribute("aria-pressed", String(dark));
+    $("theme-toggle").setAttribute("aria-checked", String(dark));
   }
 
   $("theme-toggle").addEventListener("click", () => {

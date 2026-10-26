@@ -251,6 +251,31 @@ pub async fn api_cancel(
     Json(json!({ "ok": true, "cancelled": cancelled })).into_response()
 }
 
+/// Reverts everything the copilot did in its last turn, as one undoable step.
+pub async fn api_revert(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(auth): Query<AuthQuery>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    let revision = state.view().await.revision;
+    let before = match state.copilot.take_snapshot(revision) {
+        Ok(before) => before,
+        Err(error) => return error_response(error),
+    };
+    let restored = state.core.write().await.restore(before);
+    if let Err(error) = restored {
+        return error_response(CopilotError::InvalidRequest(error.to_string()));
+    }
+    state.publish_state().await;
+    Json(json!({ "ok": true })).into_response()
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,

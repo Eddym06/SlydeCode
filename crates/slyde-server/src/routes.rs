@@ -80,6 +80,10 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::copilot::routes::api_cancel),
         )
         .route(
+            "/api/copilot/revert",
+            post(crate::copilot::routes::api_revert),
+        )
+        .route(
             "/api/copilot/thread",
             get(crate::copilot::routes::api_thread).post(crate::copilot::routes::api_save_thread),
         )
@@ -261,6 +265,10 @@ async fn apply_command(
         }
         UiCommand::MoveSlide { from, to } => core.move_slide(from, to).map(|_| None),
         UiCommand::RemoveSlide { slide_id } => core.remove_slide(&slide_id).map(|_| None),
+        UiCommand::RemoveSlides { slide_ids } => core.remove_slides(&slide_ids).map(|_| None),
+        UiCommand::SetSlideCode { slide_id, code } => {
+            core.set_slide_code(&slide_id, code).map(|_| None)
+        }
         UiCommand::Undo => core.undo().map(|_| None),
         UiCommand::Redo => core.redo().map(|_| None),
         UiCommand::TriggerAnimation {
@@ -614,6 +622,42 @@ mod tests {
         assert_eq!(seen[0].3, Some(0));
         assert_eq!(seen[1].0, AgentPhase::Done);
         assert_eq!(seen[1].2.as_deref(), Some("sld_a"));
+    }
+
+    #[tokio::test]
+    async fn reverting_the_copilot_turn_restores_the_deck_once_and_only_if_untouched() {
+        let state = test_state();
+        let before = state.view().await;
+        state.copilot.begin_snapshot(before.presentation.clone());
+        state
+            .core
+            .write()
+            .await
+            .upsert_slide(1, None, "<h1>AI</h1>".into(), TemplateType::Hero, vec![])
+            .unwrap();
+        let after = state.view().await;
+        assert!(
+            state
+                .copilot
+                .finish_snapshot(before.revision, after.revision)
+        );
+
+        let revert = |state: Arc<AppState>| async move {
+            app_router(state)
+                .oneshot(
+                    Request::post("/api/copilot/revert?t=tok_test")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        };
+        let res = revert(state.clone()).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(state.view().await.presentation.slides.len(), 1);
+
+        let again = revert(state.clone()).await;
+        assert_eq!(again.status(), 400, "the snapshot is single-use");
     }
 
     #[tokio::test]
