@@ -101,6 +101,65 @@ impl SlideScanner {
     }
 }
 
+/// Upper bound for a draft sent to the browser; a slide is far smaller.
+const MAX_DRAFT_BYTES: usize = 64 * 1024;
+
+/// The slide HTML a model is writing right now, decoded from the JSON text of a
+/// tool call that has not finished.
+///
+/// It reads the last `html_code` string in `arguments`, unescapes what has
+/// arrived and drops a trailing half-written tag so the browser never renders
+/// `<div cla` as text. Returns `None` until some markup exists.
+pub fn draft_html(arguments: &str) -> Option<String> {
+    let key = arguments.rfind("\"html_code\"")?;
+    let rest = arguments[key + "\"html_code\"".len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let body = rest.strip_prefix('"')?;
+    let mut out = String::with_capacity(body.len().min(MAX_DRAFT_BYTES));
+    let mut chars = body.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('b') => out.push('\u{8}'),
+                Some('f') => out.push('\u{c}'),
+                Some('u') => {
+                    let digits: String = chars.by_ref().take(4).collect();
+                    let Some(unit) = u32::from_str_radix(&digits, 16)
+                        .ok()
+                        .filter(|_| digits.len() == 4)
+                    else {
+                        break;
+                    };
+                    match char::from_u32(unit) {
+                        Some(decoded) => out.push(decoded),
+                        // A lone surrogate half: wait for its partner or drop it.
+                        None => {
+                            let _ = chars.by_ref().take(6).count();
+                        }
+                    }
+                }
+                Some(other) => out.push(other),
+                None => break,
+            },
+            other => out.push(other),
+        }
+        if out.len() >= MAX_DRAFT_BYTES {
+            break;
+        }
+    }
+    if let (Some(open), close) = (out.rfind('<'), out.rfind('>'))
+        && close.is_none_or(|close| close < open)
+    {
+        out.truncate(open);
+    }
+    let trimmed = out.trim_end();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +198,37 @@ mod tests {
         let found = scanner.feed(&ARGS[..cut]);
         assert_eq!(found.slides.len(), 1, "only the first slide has closed");
         assert!(scanner.feed(ARGS).slides.len() == 1);
+    }
+
+    #[test]
+    fn a_draft_follows_the_slide_being_written() {
+        let args = r#"{"title":"T","slides":[{"html_code":"<h1>One</h1>"},{"html_code":"<h1 class=\"x\">Tw\u00e9 \"q\"</h1><p>unfin"#;
+        let draft = draft_html(args).expect("a second slide is being written");
+        assert_eq!(draft, "<h1 class=\"x\">Twé \"q\"</h1><p>unfin");
+    }
+
+    #[test]
+    fn a_half_written_tag_is_never_shown() {
+        let args = r#"{"html_code":"<h1>Hi</h1><div cla"#;
+        assert_eq!(draft_html(args).as_deref(), Some("<h1>Hi</h1>"));
+        assert_eq!(draft_html(r#"{"html_code":"<di"#), None);
+        assert_eq!(draft_html(r#"{"html_code":"#), None);
+        assert_eq!(draft_html(r#"{"title":"no slide yet"}"#), None);
+    }
+
+    #[test]
+    fn drafts_never_panic_on_any_prefix() {
+        for end in 0..=ARGS.len() {
+            if ARGS.is_char_boundary(end) {
+                let _ = draft_html(&ARGS[..end]);
+            }
+        }
+        // A split escape or surrogate pair must simply wait for more bytes.
+        assert!(draft_html(r#"{"html_code":"<p>a\u00"#).is_some());
+        assert_eq!(
+            draft_html(r#"{"html_code":"<p>ok</p>\"#).as_deref(),
+            Some("<p>ok</p>")
+        );
     }
 
     #[test]

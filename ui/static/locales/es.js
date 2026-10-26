@@ -495,4 +495,5 @@ export default {
   "welcome.slidesCount": "{n} diapositivas",
   "welcome.prompt": "Crea una presentación completa sobre: {topic}",
   "welcome.menu": "Empezar con una plantilla o idea",
+  "copilot.draftBadge": "Escribiendo…",
 };

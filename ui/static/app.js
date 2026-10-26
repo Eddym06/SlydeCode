@@ -6,6 +6,7 @@ import {
   tickActivity,
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
+import { mountLiveDraft } from "./live-draft.js";
 import { hasBeenWelcomed, isPristineDeck, mountWelcome } from "./welcome.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
@@ -2068,6 +2069,12 @@ function boot(sessionToken) {
         getDeckId: () => activeDeckId,
       });
       document.getElementById("topbar-welcome")?.addEventListener("click", () => welcome?.open());
+      mountLiveDraft({
+        host: els.frameWrap,
+        t,
+        getTheme: () => (deck() ? deck().theme.id : "studio"),
+        getSize: () => canvasSize(deck() ? deck().aspect_ratio : "16:9"),
+      });
       welcome = mountWelcome({
         copilot,
         getSize: () => canvasSize("16:9"),

@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-27 09:00
+> Last updated: 2026-10-27 12:30
 
 ## Current Phase
 
@@ -278,6 +278,25 @@ old suite:
 - Live probe: `/s/{id}` 401 without a token, 200 with the sandbox token; the
   autosave writes into the active deck file (checked on disk).
 
+### First-run experience and live draft (2026-10-27)
+
+- **Welcome wizard** (`ui/static/welcome.js`): opens once for an untouched deck
+  (`localStorage` flag `slyde.welcomed`), reopenable from File menu and the
+  command palette. Three paths: describe an idea, template gallery, example.
+  The AI path connects a provider in the same step (`copilot.connect()` saves the
+  key, `onboarding-models.js` picks a writing model, the topic goes to the
+  copilot).
+- **Deck templates** (`deck-templates.js`): five bilingual, complete stories,
+  rendered through the Layout card's `renderLayout` and sent as one
+  `apply_template` command (core `apply_template`, one undoable step).
+  Figures are placeholders (`00%`), never invented data.
+- **Live draft** (`partial::draft_html` -> `ChatEvent::Progress.draft` ->
+  `live-draft.js`): the markup of the slide being written is painted in a
+  scripts-off, network-off (`sandbox=""` + CSP) frame over the canvas and fades
+  when the turn ends or goes quiet for 4.5 s.
+- E2E helper: `newPage(url, { welcomed })` marks the wizard as seen by default so
+  unrelated suites are not covered by it; `tests/ui/welcome.test.mjs` opts out.
+
 ## In Progress
 
 Nothing partially implemented on the branch.
@@ -357,6 +376,9 @@ Nothing partially implemented on the branch.
   provider/model that fails.
 
 ## Completed
+
+- [x] First-run wizard, five full deck templates, one-step AI connect and the
+      live slide draft while the copilot writes — 2026-10-27
 
 - [x] Fixed the first CI run: browser discovery now builds its candidate list
       per OS, so no platform leaves a dead `mut` (`unused_mut` under

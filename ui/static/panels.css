@@ -3052,3 +3052,50 @@
   .demo-line, .demo-cursor { animation: none; }
   .welcome-option, .welcome-template { transition: none; }
 }
+
+/* ---------- Live draft preview ---------- */
+.live-draft {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+  background: #17161a;
+  opacity: 0;
+  transition: opacity 220ms var(--ease-out);
+}
+.live-draft.is-on { opacity: 1; }
+.live-draft-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 0;
+  transform-origin: top left;
+}
+.live-draft-badge {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(20, 18, 28, 0.72);
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(6px);
+}
+.live-draft-badge::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: draft-pulse 1.2s ease-in-out infinite;
+}
+@keyframes draft-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
+@media (prefers-reduced-motion: reduce) {
+  .live-draft { transition: none; }
+  .live-draft-badge::before { animation: none; }
+}

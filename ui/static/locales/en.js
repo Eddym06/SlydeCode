@@ -495,4 +495,5 @@ export default {
   "welcome.slidesCount": "{n} slides",
   "welcome.prompt": "Create a complete presentation about: {topic}",
   "welcome.menu": "Start with a template or idea",
+  "copilot.draftBadge": "Writing…",
 };

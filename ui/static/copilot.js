@@ -735,6 +735,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       client.copilotCancel(requestId).catch(() => {});
     }
     if (controller) controller.abort();
+    document.dispatchEvent(new CustomEvent("slyde:draft-end"));
   }
 
   function send() {
@@ -1048,6 +1049,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         assistant.tools.push(row);
       }
       row.progress = { chars: event.chars, items: event.items };
+      if (event.draft) {
+        document.dispatchEvent(new CustomEvent("slyde:draft", { detail: { html: event.draft } }));
+      }
       assistant.writtenSlides = Math.max(assistant.writtenSlides || 0, Math.max(0, event.items - 1));
       syncAssistant(assistant);
       return;
@@ -1058,12 +1062,14 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       return;
     }
     if (event.type === "done") {
+      document.dispatchEvent(new CustomEvent("slyde:draft-end"));
       assistant.state = "done";
       syncAssistant(assistant);
       announce(t("copilot.announceDone"));
       return;
     }
     if (event.type === "error") {
+      document.dispatchEvent(new CustomEvent("slyde:draft-end"));
       assistant.state = "error";
       assistant.errorCode = event.code || "generic";
       assistant.errorMessage = event.message || "";

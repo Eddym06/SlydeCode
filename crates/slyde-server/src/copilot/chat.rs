@@ -644,10 +644,15 @@ mod tests {
             "usage must sum what the provider reported over both calls: {events:?}"
         );
         assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ChatEvent::Progress { items: 6, .. })),
-            "a six-slide tool call must report writing progress"
+            events.iter().any(|event| matches!(
+                event,
+                ChatEvent::Progress {
+                    items: 6,
+                    draft: Some(_),
+                    ..
+                }
+            )),
+            "a six-slide tool call must report writing progress with a live draft"
         );
         assert!(
             events

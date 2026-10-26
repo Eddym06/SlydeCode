@@ -75,3 +75,31 @@ test("the wizard does not return after it was dismissed, and the menu reopens it
   await page.press("Escape", { keyCode: 27 });
   await page.waitFor(`document.querySelector(".welcome") === null`);
 });
+
+test("the live draft shows the slide being written, locked down, and fades when the turn ends", async () => {
+  await page.evaluate(`document.dispatchEvent(new CustomEvent("slyde:draft", {
+    detail: { html: '<section style="padding:80px"><h1>Quarterly plan</h1><p>half writ' }
+  }))`);
+  await page.waitFor(`(() => {
+    const layer = document.querySelector(".live-draft");
+    const frame = layer && layer.querySelector("iframe");
+    return layer && !layer.hidden && frame && (frame.srcdoc || "").includes("Quarterly plan");
+  })()`);
+  const info = await page.evaluate(`(() => {
+    const layer = document.querySelector(".live-draft");
+    const frame = layer.querySelector("iframe");
+    return {
+      sandbox: frame.getAttribute("sandbox"),
+      hiddenFromAt: layer.getAttribute("aria-hidden"),
+      scale: frame.style.transform,
+      badge: layer.querySelector(".live-draft-badge").textContent,
+      covers: layer.getBoundingClientRect().width > 100,
+    };
+  })()`);
+  assert.equal(info.sandbox, "", "no capabilities are granted to the sketch");
+  assert.equal(info.hiddenFromAt, "true", "assistive tech keeps reading the real slide");
+  assert.match(info.scale, /scale\(/);
+  assert.ok(info.badge.length > 3 && info.covers);
+  await page.evaluate(`document.dispatchEvent(new CustomEvent("slyde:draft-end"))`);
+  await page.waitFor(`document.querySelector(".live-draft").hidden === true`);
+});

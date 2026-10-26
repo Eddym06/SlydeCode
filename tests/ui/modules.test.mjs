@@ -90,3 +90,15 @@ test("api.js exports the client factory without touching the DOM", async () => {
     assert.equal(typeof client[name], "function", `client.${name} exists`);
   }
 });
+
+test("the live draft document is inert and carries the deck theme", async () => {
+  const { buildDraftDocument, fitScale } = await import("../../ui/static/live-draft.js");
+  const doc = buildDraftDocument({ html: "<h1>Hi</h1>", themeId: "night", size: { w: 1280, h: 720 } });
+  assert.ok(doc.includes("Content-Security-Policy"), "network and scripts are blocked by policy");
+  assert.ok(doc.includes("default-src 'none'"));
+  assert.ok(doc.includes("#1E1B4B"), "uses the night theme background");
+  assert.ok(doc.includes("<h1>Hi</h1>"));
+  assert.ok(doc.includes("width:1280px"));
+  assert.equal(fitScale({ w: 1280, h: 720 }, { w: 640, h: 600 }), 0.5);
+  assert.equal(fitScale({ w: 1280, h: 720 }, { w: 0, h: 0 }), 1);
+});

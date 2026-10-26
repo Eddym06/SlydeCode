@@ -336,6 +336,7 @@ impl ProgressGate {
             name: name.to_string(),
             chars: arguments.len(),
             items: arguments.matches("\"html_code\"").count(),
+            draft: super::partial::draft_html(arguments),
         });
     }
 }

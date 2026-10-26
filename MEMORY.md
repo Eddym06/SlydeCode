@@ -293,3 +293,18 @@ MIT and the license is compatible with a commercial product.
   Transitions live on `Slide.transition` (additive, skipped when absent).
 - Network gotcha: this cloud environment blocks `api.deepseek.com` (proxy 403).
   Provider keys are never written to the repo or to test fixtures.
+
+## First run and live draft (2026-10-27)
+
+- The live draft is a *sketch*, not the slide: it renders model markup in
+  `<iframe sandbox="">` with a `default-src 'none'` CSP, so a half-written
+  `<script>` or remote URL cannot run or load. The real slide still goes through
+  the sandbox origin. Do not "upgrade" it to `allow-scripts` for fidelity.
+- `draft_html` cuts a trailing half-written tag (`<div cla`); without that the
+  preview flashes raw tag text on every chunk.
+- Templates carry `00%` placeholders on purpose; a template that ships plausible
+  fake metrics gets presented as real.
+- Tests that open the studio must not see the wizard: `cdp.newPage` pre-sets
+  `slyde.welcomed`. A new E2E suite that fails everywhere at once is usually
+  this overlay or a missing `SLYDE_BROWSER` in that shell.
+
