@@ -1844,6 +1844,16 @@ test("the reasoning drawer follows the stream, scrolls and expands", async () =>
       return true;
     })()`);
 
+    // The reasoning drawer starts collapsed (the work card summarizes it); a user
+    // who wants the raw text opens it.
+    await page.waitFor(`Boolean(document.querySelector(".thinking-drawer"))`);
+    assert.equal(
+      await page.evaluate(`document.querySelector(".thinking-drawer").open`),
+      false,
+      "reasoning is collapsed by default while the copilot works"
+    );
+    await page.evaluate(`document.querySelector(".thinking-drawer").open = true; true`);
+
     await page.waitFor(
       `(() => {
         const stream = document.querySelector(".thinking-stream");

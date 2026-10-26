@@ -346,3 +346,36 @@ test("the element list speaks plain language and hides tags and handles", async 
   );
   assert.ok(entries.every((entry) => !/^(li|br|style)$/i.test(entry.tag)));
 });
+
+test("the work card reports real phases, never invented progress", async () => {
+  const { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } = await import(
+    "../../ui/static/copilot-work.js"
+  );
+  assert.equal(expectedSlides("Make a 6 slide pitch"), 6);
+  assert.equal(expectedSlides("hazme 8 diapositivas sobre clima"), 8);
+  assert.equal(expectedSlides("make it better"), null);
+  assert.equal(expectedSlides("500 slides"), null, "absurd counts are ignored");
+  assert.equal(formatElapsed(83_000), "1:23");
+  assert.equal(formatElapsed(-5), "0:00");
+
+  assert.equal(workPhase({ text: "", thinking: "", tools: [] }).phase, "waiting");
+  assert.equal(workPhase({ text: "", thinking: "Let me plan the deck", tools: [] }).phase, "thinking");
+  const writing = workPhase({
+    text: "",
+    thinking: "x",
+    tools: [{ name: "build_deck", status: "writing", progress: { items: 3, chars: 4200 } }],
+  });
+  assert.deepEqual([writing.phase, writing.slide], ["writing", 3]);
+  assert.equal(workPhase({ text: "", tools: [{ name: "build_deck", status: "running" }] }).phase, "applying");
+  assert.equal(workPhase({ text: "Done!", tools: [] }).phase, "replying");
+
+  assert.equal(
+    lastThought("First I will outline the story. Then I pick a palette that feels calm and confident for the audience."),
+    "Then I pick a palette that feels calm and confident for the audience."
+  );
+  assert.ok(lastThought("a ".repeat(200) + "word").length <= 93);
+
+  assert.deepEqual(trackModel({ expected: null, written: 2, current: true }), { segments: 0, done: 2, current: false });
+  assert.deepEqual(trackModel({ expected: 6, written: 2, current: true }), { segments: 6, done: 2, current: true });
+  assert.equal(trackModel({ expected: 6, written: 6, current: true }).current, false);
+});

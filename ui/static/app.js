@@ -779,6 +779,10 @@ function boot(sessionToken) {
     },
   });
 
+  document.addEventListener("slyde:pending", (event) => {
+    storyboard.setPending(event.detail && event.detail.count);
+  });
+
   function renderStoryboard(d) {
     storyboard.render({
       slides: d.slides,

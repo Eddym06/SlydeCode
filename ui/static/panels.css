@@ -2036,3 +2036,234 @@
 .save-status {
   flex: 0 0 auto;
 }
+
+/* ---------- the work card: what the copilot is doing while you wait ---------- */
+.work-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px 13px;
+  border-radius: 16px;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(120deg, var(--brand), var(--accent), var(--brand)) border-box;
+  background-size: 100% 100%, 300% 100%;
+  border: 1.5px solid transparent;
+  box-shadow: 0 12px 30px -16px color-mix(in srgb, var(--brand) 55%, transparent);
+  animation: msg-in 380ms var(--ease-out) both, work-border 5s linear infinite;
+  overflow: hidden;
+}
+
+.work-card[hidden] {
+  display: none;
+}
+
+@keyframes work-border {
+  to { background-position: 0 0, 300% 0; }
+}
+
+.work-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.work-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--gradient-signature);
+}
+
+.work-orb::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 13px;
+  border: 1.5px solid var(--brand);
+  opacity: 0;
+  animation: live-ring 2s var(--ease-out) infinite;
+}
+
+.work-orb svg {
+  width: 15px;
+  height: 15px;
+}
+
+.work-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.work-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-subtle);
+}
+
+.is-swapping {
+  animation: swap-in 360ms var(--ease-out) both;
+}
+
+@keyframes swap-in {
+  from { opacity: 0; transform: translateY(5px); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+.work-track {
+  display: flex;
+  gap: 4px;
+  height: 6px;
+}
+
+.work-track[data-mode="bar"] {
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.work-bar {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--gradient-signature);
+  animation: work-slide 1.7s var(--ease-in-out) infinite;
+}
+
+@keyframes work-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(290%); }
+}
+
+.work-seg {
+  flex: 1;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  transition: background 360ms var(--ease-out), transform 360ms var(--spring);
+}
+
+.work-seg[data-state="done"] {
+  background: var(--gradient-signature);
+  transform: scaleY(1.25);
+}
+
+.work-seg[data-state="current"] {
+  background: linear-gradient(90deg, var(--brand), var(--accent), var(--brand));
+  background-size: 200% 100%;
+  animation: tool-sheen 1.2s linear infinite;
+}
+
+.work-line {
+  margin: 0;
+  min-height: 1.4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+.work-card[data-phase="thinking"] .work-line {
+  font-style: italic;
+}
+
+.work-hint {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-subtle);
+  animation: swap-in 500ms var(--ease-out) both;
+}
+
+.work-hint[hidden] {
+  display: none;
+}
+
+/* ---------- storyboard placeholders for slides still being written ---------- */
+.thumb-skeleton {
+  display: grid;
+  gap: 0;
+  border: 1px dashed color-mix(in srgb, var(--brand) 35%, var(--border));
+  border-radius: var(--r-card);
+  overflow: hidden;
+  background: var(--surface);
+  animation: thumb-in 460ms var(--spring) both;
+  animation-delay: calc(var(--i, 0) * 80ms);
+}
+
+.thumb-skeleton-media {
+  display: block;
+  width: 100%;
+  background: linear-gradient(100deg, var(--surface-sunken) 30%, var(--brand-soft) 50%, var(--surface-sunken) 70%);
+  background-size: 250% 100%;
+  animation: skeleton-sweep 1.6s linear infinite;
+}
+
+.thumb-skeleton-foot {
+  display: flex;
+  gap: 8px;
+  padding: 9px 12px;
+}
+
+.thumb-skeleton-foot span {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+
+.thumb-skeleton-foot span:first-child {
+  width: 18px;
+}
+
+.thumb-skeleton-foot span:last-child {
+  width: 46px;
+}
+
+@keyframes skeleton-sweep {
+  from { background-position: 150% 0; }
+  to { background-position: -100% 0; }
+}
+
+.storyboard[data-view="grid"] .thumb-skeleton-foot {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .work-card,
+  .work-bar,
+  .work-seg[data-state="current"],
+  .thumb-skeleton,
+  .thumb-skeleton-media,
+  .work-orb::after,
+  .is-swapping {
+    animation: none !important;
+  }
+}
+
+/* While the copilot works, the card is the one thing to look at. */
+#copilot-panel[data-busy="true"] .copilot-prompt-pills,
+#copilot-panel[data-busy="true"] .copilot-context-bar {
+  display: none;
+}
+
+.storyboard > .thumb,
+.storyboard > .thumb-skeleton {
+  flex-shrink: 0;
+}
