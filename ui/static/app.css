@@ -870,6 +870,12 @@ select.select:focus {
   gap: 8px;
 }
 
+.export-quality {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
 .export-status {
   margin-top: 8px;
   min-height: 38px;

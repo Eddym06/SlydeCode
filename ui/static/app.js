@@ -879,7 +879,7 @@ function boot(sessionToken) {
           toast(`${t("toast.error")} — ${error.message}`);
         }
       },
-      exportDeck: (format) => startExport(format),
+      exportDeck: (format, options) => startExport(format, options),
       removeSlide: async (slideId) => {
         const ok = await run("remove_slide", { slide_id: slideId }, { silent: true });
         if (ok) {
@@ -927,7 +927,7 @@ function boot(sessionToken) {
 
   /// Renders and packages the deck with headless Chrome. The HTTP call only
   /// resolves when the file is ready; progress events keep the label honest.
-  async function startExport(format) {
+  async function startExport(format, options = {}) {
     if (exportJob) return;
     const slides = deck();
     exportJob = {
@@ -938,7 +938,7 @@ function boot(sessionToken) {
     syncExportUi();
 
     try {
-      const { blob, filename } = await client.exportDeck(format);
+      const { blob, filename } = await client.exportDeck(format, options);
       const fallbackName =
         format === "pdf" ? "deck.pdf" : format === "pptx" ? "deck.pptx" : "deck.zip";
       saveBlob(blob, filename || fallbackName);

@@ -24,9 +24,11 @@ use slyde_export::{SlideTarget, export_pdf, export_png};
 use crate::state::{AppState, AuthQuery, ServerEvent, is_authorized, origin_allowed};
 use crate::{discover_browser, now_ms, sandbox, storage};
 
-/// Distinguishes export jobs that start in the same millisecond.
-/// PNGs are rendered at 2x so they stay sharp on a retina projector.
+/// PNGs are rendered at 2x by default so they stay sharp on a retina projector.
 const PNG_SCALE: u32 = 2;
+/// Smallest and largest device scale a caller may ask for (1x is 1280px wide).
+const PNG_SCALE_RANGE: std::ops::RangeInclusive<u32> = 1..=3;
+/// Distinguishes export jobs that start in the same millisecond.
 static EXPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Default, Deserialize)]
@@ -35,6 +37,20 @@ pub struct ExportQuery {
     pub t: Option<String>,
     #[serde(default)]
     pub format: Option<String>,
+    /// Device scale for `format=png` (1–3). Ignored by every other format.
+    #[serde(default)]
+    pub scale: Option<u32>,
+}
+
+/// Scale a PNG export renders at. Only the PNG ZIP honours a request: a PPTX
+/// embeds the pictures at a fixed size, so it always uses the sharp default.
+fn resolve_png_scale(format: ExportFormat, requested: Option<u32>) -> u32 {
+    match (format, requested) {
+        (ExportFormat::Png, Some(scale)) => {
+            scale.clamp(*PNG_SCALE_RANGE.start(), *PNG_SCALE_RANGE.end())
+        }
+        _ => PNG_SCALE,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +129,8 @@ pub async fn api_export(
         );
     };
 
+    let png_scale = resolve_png_scale(format, query.scale);
+
     if format == ExportFormat::Html {
         let (deck_copy, deck_title) = {
             let core = state.core.read().await;
@@ -122,22 +140,12 @@ pub async fn api_export(
             )
         };
         let html_string = sandbox::render_standalone_presentation(&deck_copy);
-        let filename = format!("{}.html", storage::file_stem_for(&deck_title));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        );
-        headers.insert(
-            header::CONTENT_DISPOSITION,
-            HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).unwrap(),
-        );
         let _ = state.events.send(ServerEvent::ExportProgress {
             format: "html".to_string(),
             completed: 1,
             total: 1,
         });
-        return (StatusCode::OK, headers, html_string.into_bytes()).into_response();
+        return attachment(&deck_title, format, html_string.into_bytes());
     }
 
     // Snapshot the deck, then drop the lock: an export must never block the
@@ -234,7 +242,7 @@ pub async fn api_export(
                     ),
                 })
                 .collect();
-            // One Chrome session for the whole deck, at 2x. If the DevTools
+            // One Chrome session for the whole deck. If the DevTools
             // handshake fails on an unusual Chrome build, fall back to the
             // sequential CLI path instead of failing the export.
             match slyde_export::export_png_batch(
@@ -242,7 +250,7 @@ pub async fn api_export(
                 &targets,
                 aspect_ratio,
                 &dir,
-                PNG_SCALE,
+                png_scale,
                 Some(&progress_tx),
             )
             .await
@@ -489,6 +497,51 @@ mod tests {
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("slyde-offline-slide"));
         assert!(html.contains("slyde-laser"));
+    }
+
+    #[tokio::test]
+    async fn html_export_names_the_file_after_an_accented_title() {
+        use tower::ServiceExt;
+        let state = test_state();
+        state
+            .core
+            .write()
+            .await
+            .set_title("Presentación ñandú ✓")
+            .unwrap();
+        let app = crate::routes::app_router(state);
+        let res = app
+            .oneshot(
+                axum::http::Request::post("/api/export?t=tok_test&format=html")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let disposition = res
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(disposition.starts_with("attachment; filename=\"deck.html\""));
+        assert!(disposition.contains("filename*=UTF-8''"));
+        assert!(
+            disposition.is_ascii(),
+            "header must stay ASCII: {disposition}"
+        );
+    }
+
+    #[test]
+    fn png_scale_is_clamped_and_only_applies_to_png() {
+        assert_eq!(resolve_png_scale(ExportFormat::Png, None), 2);
+        assert_eq!(resolve_png_scale(ExportFormat::Png, Some(1)), 1);
+        assert_eq!(resolve_png_scale(ExportFormat::Png, Some(3)), 3);
+        assert_eq!(resolve_png_scale(ExportFormat::Png, Some(0)), 1);
+        assert_eq!(resolve_png_scale(ExportFormat::Png, Some(40)), 3);
+        assert_eq!(resolve_png_scale(ExportFormat::Pptx, Some(1)), 2);
+        assert_eq!(resolve_png_scale(ExportFormat::Pdf, Some(3)), 2);
     }
 
     #[test]

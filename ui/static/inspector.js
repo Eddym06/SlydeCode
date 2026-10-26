@@ -38,6 +38,29 @@ export const ANIMATION_KINDS = [
 export const DEFAULT_EASING = "cubic-bezier(.16,1,.3,1)";
 const NOTES_DEBOUNCE_MS = 450;
 
+const PNG_SCALE_KEY = "slyde.export.pngScale";
+const PNG_SCALES = [1, 2];
+const DEFAULT_PNG_SCALE = 2;
+
+/** The PNG quality the user last picked; 2x (sharp on a retina projector) by default. */
+export function readPngScale() {
+  try {
+    const stored = Number(localStorage.getItem(PNG_SCALE_KEY));
+    return PNG_SCALES.includes(stored) ? stored : DEFAULT_PNG_SCALE;
+  } catch {
+    return DEFAULT_PNG_SCALE;
+  }
+}
+
+function writePngScale(scale) {
+  if (!PNG_SCALES.includes(scale)) return;
+  try {
+    localStorage.setItem(PNG_SCALE_KEY, String(scale));
+  } catch {
+    // Private windows can refuse storage; the choice then lasts until reload.
+  }
+}
+
 /**
  * @param {object} options
  * @param {HTMLElement} options.root  the inspector container
@@ -236,6 +259,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
           <button type="button" class="file-btn" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
           <button type="button" class="file-btn" id="export-html">${escapeHtml(t("export.html"))}</button>
         </div>
+        <label class="export-quality">
+          <span class="hint">${escapeHtml(t("export.quality"))}</span>
+          <select class="select" id="export-scale">
+            <option value="1"${readPngScale() === 1 ? " selected" : ""}>${escapeHtml(t("export.quality.standard"))}</option>
+            <option value="2"${readPngScale() === 2 ? " selected" : ""}>${escapeHtml(t("export.quality.high"))}</option>
+          </select>
+        </label>
         <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
       </section>`;
   }
@@ -341,7 +371,15 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       ["export-html", "html"],
     ]) {
       const button = root.querySelector(`#${id}`);
-      if (button) button.addEventListener("click", () => actions.exportDeck(format));
+      if (!button) continue;
+      button.addEventListener("click", () =>
+        actions.exportDeck(format, format === "png" ? { scale: readPngScale() } : {})
+      );
+    }
+
+    const scaleSelect = root.querySelector("#export-scale");
+    if (scaleSelect) {
+      scaleSelect.addEventListener("change", () => writePngScale(Number(scaleSelect.value)));
     }
 
     actions.applyI18n(root);

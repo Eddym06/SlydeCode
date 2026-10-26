@@ -2336,3 +2336,26 @@ test("moves and resizes any block with the gizmo, and a plain click never unflow
   assert.match(code, /left:\s*-?\d+px/, "left was committed");
   assert.match(code, /width:\s*\d+px/, "width was committed");
 });
+
+/** Width of the first PNG found inside a (store-only) ZIP body. */
+function firstPngWidth(zip) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const at = zip.indexOf(signature);
+  assert.ok(at >= 0, "the ZIP holds a PNG");
+  return zip.readUInt32BE(at + 16);
+}
+
+test("the PNG export honours the requested quality and defaults to 2x", async () => {
+  const exportPng = async (query) => {
+    const response = await fetch(new URL(`/api/export?format=png${query}`, appUrl), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(response.status, 200, `export${query} answered ${response.status}`);
+    return firstPngWidth(Buffer.from(await response.arrayBuffer()));
+  };
+
+  assert.equal(await exportPng("&scale=1"), 1280, "standard quality is the slide size");
+  assert.equal(await exportPng(""), 2560, "the default stays sharp for large screens");
+  assert.equal(await exportPng("&scale=9"), 3840, "an absurd request is clamped to 3x");
+});

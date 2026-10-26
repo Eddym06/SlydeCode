@@ -16,7 +16,7 @@ import {
   progressPercent,
 } from "../../ui/static/presenter-core.js";
 import { formatClock, paceState, readingSeconds } from "../../ui/static/teleprompter.js";
-import { ANIMATION_KINDS, THEME_CHOICES } from "../../ui/static/inspector.js";
+import { ANIMATION_KINDS, THEME_CHOICES, readPngScale } from "../../ui/static/inspector.js";
 import { canvasSize, placementFor } from "../../ui/static/canvas.js";
 import {
   idleActivity,
@@ -188,6 +188,27 @@ test("progress is a percentage of the deck, never out of range", () => {
   assert.equal(progressPercent(9, 4), 100, "clamped");
   assert.equal(progressPercent(0, 0), 0);
   assert.equal(progressPercent(0, undefined), 0);
+});
+
+test("the PNG quality defaults to 2x and survives a missing or hostile store", () => {
+  const original = globalThis.localStorage;
+  try {
+    // Node has no localStorage: the accessor must not throw.
+    assert.equal(readPngScale(), 2);
+    globalThis.localStorage = { getItem: () => "1" };
+    assert.equal(readPngScale(), 1);
+    globalThis.localStorage = { getItem: () => "7" };
+    assert.equal(readPngScale(), 2, "values outside the offered choices are ignored");
+    globalThis.localStorage = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    assert.equal(readPngScale(), 2);
+  } finally {
+    if (original === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = original;
+  }
 });
 
 test("the inspector offers exactly the contract the backend accepts", () => {

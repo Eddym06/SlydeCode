@@ -236,8 +236,10 @@ export function createClient(token) {
      * Renders the deck with headless Chrome and returns the finished file.
      * Progress arrives over the WebSocket as `export_progress` events.
      */
-    async exportDeck(format) {
-      const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`, {
+    async exportDeck(format, { scale } = {}) {
+      const params = new URLSearchParams({ format });
+      if (format === "png" && Number.isInteger(scale)) params.set("scale", String(scale));
+      const response = await fetch(`/api/export?${params}`, {
         method: "POST",
         headers: authHeaders,
       });
