@@ -293,6 +293,40 @@ function boot(sessionToken) {
         run: () => $("theme-toggle").click(),
       },
       {
+        id: "view.shortcuts",
+        group: t("palette.group.view"),
+        label: t("shortcuts.title"),
+        hint: "?",
+        run: () => $("view-shortcuts").click(),
+      },
+      {
+        id: "view.storyboard",
+        group: t("palette.group.view"),
+        label: t("storyboard.viewGrid") + " / " + t("storyboard.viewList"),
+        run: () => $("storyboard-view").click(),
+      },
+      {
+        id: "zoom.in",
+        group: t("palette.group.view"),
+        label: t("zoom.in"),
+        hint: "mod+=",
+        run: () => setZoom(1),
+      },
+      {
+        id: "zoom.out",
+        group: t("palette.group.view"),
+        label: t("zoom.out"),
+        hint: "mod+-",
+        run: () => setZoom(-1),
+      },
+      {
+        id: "zoom.fit",
+        group: t("palette.group.view"),
+        label: t("zoom.fit"),
+        hint: "mod+0",
+        run: () => setZoom(0),
+      },
+      {
         id: "lang.en",
         group: t("palette.group.view"),
         label: "English",
@@ -1124,6 +1158,12 @@ function boot(sessionToken) {
     const typing = tag === "input" || tag === "textarea" || tag === "select";
     const mod = event.metaKey || event.ctrlKey;
 
+    if (mod && (event.key === "=" || event.key === "+" || event.key === "-" || event.key === "0")) {
+      // The browser's own page zoom would scale the whole studio; zoom the slide.
+      event.preventDefault();
+      setZoom(event.key === "0" ? 0 : event.key === "-" ? -1 : 1);
+      return;
+    }
     if (mod && event.key.toLowerCase() === "z" && !typing) {
       event.preventDefault();
       run(event.shiftKey ? "redo" : "undo");

@@ -2199,18 +2199,15 @@ test("meets the accessibility baseline: names, focus ring and AA contrast", asyn
     return {
       className: el.className,
       isThumb: el.classList.contains("thumb"),
+      inRail: Boolean(el.closest(".rail")),
       focusVisible: el.matches(":focus-visible"),
       outlineWidth: ring.outlineWidth,
       outlineStyle: ring.outlineStyle
     };
   })()`);
-  // Tab leaves the top bar and lands inside the storyboard: either the selected
-  // thumb itself or one of its action buttons.
-  assert.match(
-    focus.className,
-    /thumb/,
-    `Tab lands inside the storyboard: ${JSON.stringify(focus)}`
-  );
+  // Tab leaves the top bar and lands inside the storyboard column: the grid/list
+  // toggle in its header comes first, then the selected thumb.
+  assert.ok(focus.inRail, `Tab lands inside the storyboard: ${JSON.stringify(focus)}`);
   assert.equal(focus.focusVisible, true);
   assert.notEqual(focus.outlineStyle, "none");
   assert.notEqual(focus.outlineWidth, "0px");

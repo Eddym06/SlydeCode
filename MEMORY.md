@@ -265,3 +265,16 @@ MIT and the license is compatible with a commercial product.
   history because the system prompt is rebuilt from the live deck each round.
 - Gotcha: sandboxed slide iframes have an opaque origin, so any asset they load
   from the sandbox port needs CORS (`public_static` in `slyde-server/src/lib.rs`).
+
+## PowerPoint text extraction (2026-10-26)
+- Decision: keep the Chrome-rendered picture as the visual source of truth and add
+  editable text boxes on top, instead of translating HTML/CSS to shapes. The text
+  is made transparent before the screenshot so nothing is drawn twice. Code, math,
+  SVG and diagrams are deliberately left in the picture.
+- Gotcha: CSS `line-height` is a ratio of the font size, PowerPoint's 100% is the
+  font's own spacing (~1.2x). Without that conversion titles overlap their
+  subtitles. Gotcha: slide pixels come from the stage's transform scale, not from
+  computed font sizes.
+- Copilot undo is snapshot based (not history based) because coalescing and
+  history trimming make "N undos" unreliable; it is only valid while the deck
+  revision equals the one the turn ended on.

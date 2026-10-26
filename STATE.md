@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-26 16:00
+> Last updated: 2026-10-26 20:00
 
 ## Current Phase
 
@@ -66,6 +66,32 @@ old suite:
   and an elevated composer with a morphing send/stop button. Styles live in
   `ui/static/panels.css` (loaded after `app.css`); all ids/classes the scripts
   and E2E rely on are unchanged. Reduced-motion is honored.
+- **Backlog items 2-12 delivered.**
+  - Copilot: real token usage from the providers (OpenAI-compatible
+    `stream_options.include_usage`, Anthropic `message_start`/`message_delta`),
+    with a size estimate when a provider reports none; live write progress
+    (`progress` events with the slide count); one-step **Undo AI changes**
+    (`POST /api/copilot/revert`, valid only while the deck is exactly as the
+    turn left it); ArrowUp recall of earlier prompts.
+  - Shell: File and View menus (keyboard navigable, `menus.js`), zoom shortcuts
+    (Ctrl/Cmd +/-/0), palette entries for the new actions.
+  - Storyboard: Ctrl/Shift multi-select with a bulk bar (one undoable
+    `remove_slides`), Delete/Ctrl+D/Alt+Arrows, grid view, entrance animation.
+  - Layout picker previews wear the active theme (`layout-previews.js`); theme
+    swatches use the real theme colors.
+  - Source editor (`code-editor.js`): line numbers, HTML/CSS highlighting,
+    debounced `set_slide_code`, survives re-renders and keeps the caret.
+  - Accessibility: `focus-trap.js` on the library, palette, model sheet and
+    shortcut sheet; drawer focus handling; menu keyboard pattern.
+  - Library covers: `GET /d/{deck}` on the sandbox renders the first slide of any
+    deck (no browser launched); the sheet keeps one iframe per deck revision.
+  - **PowerPoint with editable text**: Chrome reads every text block (box, runs,
+    color, size, alignment, line spacing) over CDP, hides it and screenshots the
+    rest; `slyde-pptx` writes real text boxes over that picture. Code, math and
+    diagrams stay in the picture. Verified with python-pptx and LibreOffice.
+  - Tests: Rust 56 core / 138 server / 16 pptx / export extraction test against
+    real Chrome; UI `panels.test.mjs` (8 flows) plus component tests for the
+    highlighter, focus trap and layout previews.
 - E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
   the PDF export test fails on the untouched baseline in this container.
 
@@ -240,7 +266,8 @@ Nothing partially implemented on the branch.
 - A DOM component runner (the pure modules are covered; the DOM wiring is only
   covered end-to-end).
 - Deck thumbnails in the library (rows show title, slide count, age and theme).
-- PPTX exports pictures, not editable text shapes.
+- PPTX text uses the deck font name; PowerPoint substitutes it when it is not installed. Gradient text becomes the accent color.
+- Cost estimates (price per token) are not shown: prices change per model.
 
 ## Known Issues / Bugs
 

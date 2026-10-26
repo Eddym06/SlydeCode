@@ -768,7 +768,8 @@
   height: 46px;
   padding: 8px;
   border-radius: 8px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--sw-a) 24%, #15141a), #15141a);
+  background: var(--sw-bg);
+  box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.28);
   overflow: hidden;
 }
 
@@ -776,12 +777,12 @@
   height: 4px;
   width: 70%;
   border-radius: 3px;
-  background: var(--sw-a);
+  background: var(--sw-fg);
 }
 
 .swatch-line.short {
   width: 42%;
-  background: color-mix(in srgb, #fff 38%, transparent);
+  background: var(--sw-a);
 }
 
 .swatch-dots {
@@ -796,7 +797,7 @@
   height: 11px;
   margin-left: -3px;
   border-radius: 50%;
-  border: 1.5px solid #15141a;
+  border: 1.5px solid var(--sw-bg);
 }
 
 .swatch-name {
@@ -1983,4 +1984,30 @@
 .deck-row:hover .deck-cover {
   transform: scale(1.04) rotate(-1deg);
   box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-2);
+}
+
+/* Export tiles: the file type is a decorative badge, the label stays real text. */
+.tile-badge {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.tile-badge::before {
+  content: attr(data-badge);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--gradient-signature);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bulk-count {
+  white-space: nowrap;
+}
+
+.bulk-bar {
+  flex-wrap: wrap;
 }

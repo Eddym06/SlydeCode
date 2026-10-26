@@ -10,6 +10,7 @@
 // suite. What changed is who owns the markup and the event wiring.
 
 import { createCodeEditor } from "./code-editor.js";
+import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
 export const THEME_CHOICES = [
@@ -89,9 +90,9 @@ export function createInspector({ root, t, escapeHtml, actions }) {
   }
 
   /** One titled card. `--i` staggers the entrance when the view changes. */
-  function card(index, iconName, title, body, { id = "", extra = "" } = {}) {
+  function card(index, iconName, title, body, { id = "", extra = "", attrs = "" } = {}) {
     return `
-      <section class="card"${id ? ` id="${id}"` : ""} style="--i:${index}">
+      <section class="card"${id ? ` id="${id}"` : ""}${attrs ? ` ${attrs}` : ""} style="--i:${index}">
         <header class="card-head">
           <span class="card-icon">${icon(iconName, 15)}</span>
           <h3 class="card-title">${escapeHtml(title)}</h3>
@@ -241,7 +242,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
           <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
             deck.theme.id === choice.id
           }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
-            <span class="swatch-preview" style="--sw-a:${choice.dots[0]};--sw-b:${choice.dots[1]}">
+            <span class="swatch-preview" style="--sw-bg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).bg};--sw-fg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).fg};--sw-a:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).accent}">
               <span class="swatch-line"></span><span class="swatch-line short"></span>
               <span class="swatch-dots">
                 ${choice.dots
@@ -305,12 +306,12 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         "export",
         t("export.section"),
         `<div class="tile-row tile-row-3">
-           <button type="button" class="tile-btn" id="export-pdf"><b>PDF</b><span>${escapeHtml(t("export.sub.pdf"))}</span></button>
-           <button type="button" class="tile-btn" id="export-png"><b>PNG</b><span>${escapeHtml(t("export.sub.png"))}</span></button>
-           <button type="button" class="tile-btn" id="export-pptx"><b>PPTX</b><span>${escapeHtml(t("export.sub.pptx"))}</span></button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".pdf" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".zip" id="export-png">${escapeHtml(t("export.png"))}</button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".pptx" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
          </div>
          <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>`,
-        { id: "export-section" }
+        { id: "export-section", attrs: 'aria-busy="false"' }
       ),
     ].join("");
   }

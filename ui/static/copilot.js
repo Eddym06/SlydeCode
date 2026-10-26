@@ -757,6 +757,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       return;
     }
 
+    recallIndex = -1;
     const attachments = pending;
     pending = [];
     els.input.value = "";
@@ -1092,7 +1093,28 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     autosize();
     updateSendEnabled();
   });
+  // ArrowUp in an empty composer (or while browsing) recalls earlier prompts, like
+  // a shell: a quick way to re-run or tweak the last request.
+  let recallIndex = -1;
   els.input.addEventListener("keydown", (event) => {
+    if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.isComposing) {
+      const sent = messages.filter((message) => message.role === "user" && message.text).map((message) => message.text);
+      const browsing = recallIndex >= 0;
+      if (!sent.length || (!browsing && els.input.value.trim())) return;
+      const caretAtEdge =
+        event.key === "ArrowUp" ? els.input.selectionStart === 0 : els.input.selectionEnd === els.input.value.length;
+      if (!caretAtEdge && !browsing) return;
+      event.preventDefault();
+      recallIndex =
+        event.key === "ArrowUp"
+          ? Math.min(recallIndex + 1, sent.length - 1)
+          : recallIndex - 1;
+      els.input.value = recallIndex < 0 ? "" : sent[sent.length - 1 - recallIndex];
+      autosize();
+      updateSendEnabled();
+      return;
+    }
+    if (event.key.length === 1) recallIndex = -1;
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
     if (streaming) return;
     event.preventDefault();
