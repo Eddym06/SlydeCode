@@ -408,6 +408,7 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
   }
 
   window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
     var data = event.data;
     if (!data || data.__slyde !== true) return;
     if (data.type === 'animate') play(data.step);
@@ -938,11 +939,22 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
     window.addEventListener('resize', paint);
     window.addEventListener('scroll', paint, true);
 
+    // Looks a block up by comparing the attribute instead of splicing the id
+    // into a selector, so a hostile id can never change what the query means.
+    function findById(id) {
+      var all = stage.querySelectorAll('[data-slyde-id]');
+      for (var i = 0; i < all.length; i += 1) {
+        if (all[i].getAttribute('data-slyde-id') === id) return all[i];
+      }
+      return null;
+    }
+
     window.addEventListener('message', function (event) {
+      if (event.source !== window.parent) return;
       var data = event.data;
       if (!data || data.__slyde !== true) return;
       if (data.type === 'select-by-id') {
-        select(data.id ? stage.querySelector('[data-slyde-id="' + data.id + '"]') : null);
+        select(typeof data.id === 'string' && data.id ? findById(data.id) : null);
       } else if (data.type === 'clear-selection') {
         select(null);
       }
@@ -1328,6 +1340,16 @@ mod tests {
         assert!(html.contains("font-src 'self' data:"));
         assert!(html.contains("@font-face"));
         assert!(html.contains("/fonts/Geist-Variable.woff2"));
+    }
+
+    #[test]
+    fn runtime_only_trusts_its_parent_and_never_splices_ids_into_selectors() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let html = render_document(&deck, &slide, false, true);
+        assert_eq!(html.matches("event.source !== window.parent").count(), 2);
+        assert!(html.contains("function findById"));
+        assert!(!html.contains("'[data-slyde-id=\"' + data.id"));
     }
 
     #[test]
