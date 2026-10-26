@@ -278,3 +278,18 @@ MIT and the license is compatible with a commercial product.
 - Copilot undo is snapshot based (not history based) because coalescing and
   history trimming make "N undos" unreliable; it is only valid while the deck
   revision equals the one the turn ended on.
+
+## Copilot latency and layouts (2026-10-27)
+- Slides are applied during streaming: an incremental scanner reads finished
+  objects out of the `slides` array of a streaming `build_deck`/`write_slides`
+  call; the final call skips what was applied (`Applied` prefix). It only works
+  if the model writes `title`, `theme`, `aspect_ratio` before `slides`, so the
+  prompt says so. serde_json sorts keys: never build mock tool arguments with
+  `json!` when testing this.
+- A layout stores the slide's full content in `data-layout-content` plus a
+  signature of the visible text. Unchanged text restores everything on the next
+  switch; edited text wins and the hidden fields are filled from memory.
+- Templates: `Custom` is the default; `TemplateType::infer` guesses from markup.
+  Transitions live on `Slide.transition` (additive, skipped when absent).
+- Network gotcha: this cloud environment blocks `api.deepseek.com` (proxy 403).
+  Provider keys are never written to the repo or to test fixtures.

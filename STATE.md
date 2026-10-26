@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-26 20:00
+> Last updated: 2026-10-27 09:00
 
 ## Current Phase
 
@@ -92,6 +92,34 @@ old suite:
   - Tests: Rust 56 core / 138 server / 16 pptx / export extraction test against
     real Chrome; UI `panels.test.mjs` (8 flows) plus component tests for the
     highlighter, focus trap and layout previews.
+- **UI review round (2026-10-27).**
+  - Slides written without a template are labeled from their markup
+    (`TemplateType::infer`, new `Custom` variant) instead of "Code"; the template
+    is optional in the copilot and MCP tools.
+  - The element list says "Title", "Paragraph", "List · 3 points"; tags and
+    handles only exist in Developer mode. The canvas toolbar names the block the
+    same way. The deck title keeps its room in the top bar.
+  - **Copilot waiting UX:** a work card with the real phase (waiting, thinking,
+    "writing slide N", applying), an elapsed timer, the model's latest line of
+    thought, a segmented track when the user named a slide count, and shimmering
+    storyboard placeholders. Reasoning is coalesced server-side (120 ms), the
+    drawer starts collapsed, and **slides are applied while the model is still
+    streaming** (`copilot/partial.rs`; `build_deck` must list title/theme/ratio
+    before slides, which the prompt asks for).
+  - **Canvas:** a formatting toolbar (bold, italic, size, color, align, bullets),
+    multi-select (Shift/Ctrl-click) with align/distribute (one undo step), any
+    block can be dragged once selected, arrow-key nudge for every block, and a
+    keyboard model for the canvas region (Enter, Tab, arrows, Escape) with
+    screen-reader announcements.
+  - **Content tools:** elements library (shapes, icons, charts, tables), slide
+    layouts that keep the slide's words (and remember what a layout hid) with
+    "use on every slide", slide transitions (none, fade, slide, push, zoom, flip)
+    played by both presenters, and named versions (automatic checkpoint before
+    every copilot turn that changes the deck; restore is undoable).
+  - Not done: grouping blocks (needs a DOM-level model of the slide code) and a
+    live render of the half-written slide. DeepSeek could not be reached from this
+    environment (network policy), so the copilot was verified against a scripted
+    provider only.
 - E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
   the PDF export test fails on the untouched baseline in this container.
 

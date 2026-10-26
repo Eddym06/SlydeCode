@@ -834,7 +834,7 @@ mod tests {
         drop(tx);
         let mut events = 0;
         let mut received = String::new();
-        while let Some(event) = rx.try_recv().ok() {
+        while let Ok(event) = rx.try_recv() {
             if let ChatEvent::Thinking { text } = event {
                 events += 1;
                 received.push_str(&text);

@@ -195,7 +195,7 @@ export function createCanvas({ frame, t, actions }) {
         </div>`
       : "";
     return `
-      <span class="element-hud-tag">${escapeAttr(label)}</span>
+      <span class="element-hud-tag" id="element-hud-tag">${escapeAttr(label)}</span>
       <span class="element-hud-sep" aria-hidden="true"></span>
       ${textTools}
       ${text ? '<span class="element-hud-sep" aria-hidden="true"></span>' : ""}
@@ -207,7 +207,7 @@ export function createCanvas({ frame, t, actions }) {
 
   function multiMarkup() {
     return `
-      <span class="element-hud-tag">${escapeAttr(t("elementHud.selected", { n: many.length }))}</span>
+      <span class="element-hud-tag" id="element-hud-tag">${escapeAttr(t("elementHud.selected", { n: many.length }))}</span>
       <span class="element-hud-sep" aria-hidden="true"></span>
       ${btn("arrange-left", t("elementHud.arrangeLeft"), icon("aLeft"))}
       ${btn("arrange-center", t("elementHud.arrangeCenter"), icon("aCenter"))}

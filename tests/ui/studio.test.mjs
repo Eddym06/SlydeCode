@@ -644,7 +644,7 @@ async function selectBlockOnStage(t, page, slideId, { pointerAttempts = 3 } = {}
           : null
       };
     })()`);
-  const selected = (value) => Boolean(value) && value.hud && /^#\S+$/.test(value.tag);
+  const selected = (value) => Boolean(value) && value.hud && value.tag.length > 0 && !value.tag.startsWith("#");
 
   let last = null;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -1937,7 +1937,7 @@ test("selects a block on the canvas and lists the slide structure", async (t) =>
   await waitForStageReady(addedId);
 
   const { tag: hudTag } = await selectBlockOnStage(t, page, addedId);
-  assert.match(hudTag, /^#\S+$/, "the HUD names the selected block");
+  assert.ok(hudTag.length > 0 && !hudTag.startsWith("#"), "the HUD names the block in plain words");
 
   const selection = await page.evaluate(`({
     hud: !document.getElementById("element-hud").hidden,
@@ -2047,7 +2047,7 @@ test("editing a block only touches the slide that owns it", async (t) => {
     })()`);
 
     const { tag: hudTag } = await selectBlockOnStage(t, page, secondId);
-    assert.match(hudTag, /^#\S+$/, "the stage selected the block on the second slide");
+    assert.ok(hudTag.length > 0 && !hudTag.startsWith("#"), "the stage selected the block on the second slide");
 
     await page.evaluate(
       `document.querySelector('[data-element-action="align-left"]').click(); true`
