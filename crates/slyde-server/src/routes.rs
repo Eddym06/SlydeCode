@@ -84,6 +84,15 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::copilot::routes::api_revert),
         )
         .route(
+            "/api/versions",
+            get(crate::version_api::api_list).post(crate::version_api::api_save),
+        )
+        .route(
+            "/api/versions/restore",
+            post(crate::version_api::api_restore),
+        )
+        .route("/api/versions/delete", post(crate::version_api::api_delete))
+        .route(
             "/api/copilot/thread",
             get(crate::copilot::routes::api_thread).post(crate::copilot::routes::api_save_thread),
         )
@@ -269,6 +278,57 @@ async fn apply_command(
         UiCommand::RemoveSlides { slide_ids } => core.remove_slides(&slide_ids).map(|_| None),
         UiCommand::SetSlideCode { slide_id, code } => {
             core.set_slide_code(&slide_id, code).map(|_| None)
+        }
+        UiCommand::InsertBlock {
+            slide_id,
+            html,
+            x,
+            y,
+            w,
+            h,
+        } => core
+            .insert_block(&slide_id, &html, slyde_core::ImageRect { x, y, w, h })
+            .map(|_| None),
+        UiCommand::SetGeometries { slide_id, items } => {
+            let items: Vec<(String, slyde_core::ImageRect)> = items
+                .into_iter()
+                .map(|item| {
+                    (
+                        item.element_id,
+                        slyde_core::ImageRect {
+                            x: item.x,
+                            y: item.y,
+                            w: item.w,
+                            h: item.h,
+                        },
+                    )
+                })
+                .collect();
+            core.set_geometries(&slide_id, &items).map(|_| None)
+        }
+        UiCommand::SetSlidesCode { items } => {
+            let items: Vec<(String, String)> = items
+                .into_iter()
+                .map(|item| (item.slide_id, item.code))
+                .collect();
+            core.set_slides_code(&items).map(|_| None)
+        }
+        UiCommand::SetTransition {
+            slide_ids,
+            kind,
+            duration_ms,
+        } => {
+            let Some(kind) = slyde_core::TransitionKind::parse(&kind) else {
+                return Err(slyde_core::CoreError::InvalidBlock(format!(
+                    "unknown transition: {kind}"
+                )));
+            };
+            let transition = slyde_core::Transition {
+                kind,
+                duration_ms: duration_ms.unwrap_or(450),
+            };
+            core.set_transition(slide_ids.as_deref(), Some(transition))
+                .map(|_| None)
         }
         UiCommand::Undo => core.undo().map(|_| None),
         UiCommand::Redo => core.redo().map(|_| None),

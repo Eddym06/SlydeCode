@@ -425,6 +425,65 @@ impl SlideElement {
     }
 }
 
+/// How the presenter moves from the previous slide to this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    /// Cut: the slide simply appears.
+    #[default]
+    None,
+    Fade,
+    Slide,
+    Push,
+    Zoom,
+    Flip,
+}
+
+impl TransitionKind {
+    pub const ALL: [TransitionKind; 6] = [
+        TransitionKind::None,
+        TransitionKind::Fade,
+        TransitionKind::Slide,
+        TransitionKind::Push,
+        TransitionKind::Zoom,
+        TransitionKind::Flip,
+    ];
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.id() == raw.trim().to_ascii_lowercase())
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Fade => "fade",
+            Self::Slide => "slide",
+            Self::Push => "push",
+            Self::Zoom => "zoom",
+            Self::Flip => "flip",
+        }
+    }
+}
+
+/// Transition into a slide, with its duration in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transition {
+    pub kind: TransitionKind,
+    #[serde(default = "Transition::default_duration")]
+    pub duration_ms: u32,
+}
+
+impl Transition {
+    pub const MIN_DURATION_MS: u32 = 120;
+    pub const MAX_DURATION_MS: u32 = 2_000;
+
+    fn default_duration() -> u32 {
+        450
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Slide {
     pub id: SlideId,
@@ -440,6 +499,9 @@ pub struct Slide {
     pub generated_by: Author,
     #[serde(default)]
     pub elements: Vec<SlideElement>,
+    /// Transition into this slide; `None` means a plain cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<Transition>,
 }
 
 impl Slide {
@@ -452,6 +514,7 @@ impl Slide {
             notes: None,
             generated_by: Author::default(),
             elements: Vec::new(),
+            transition: None,
         }
     }
 

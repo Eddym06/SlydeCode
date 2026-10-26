@@ -74,6 +74,7 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
 
     let before = state.view().await;
     state.copilot.begin_snapshot(before.presentation.clone());
+    let request_messages = request.messages.clone();
     let result = run_inner(&state, request, &tx, cancel).await;
     let after = state.view().await;
     let reversible = state
@@ -81,6 +82,15 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
         .finish_snapshot(before.revision, after.revision);
     if reversible {
         let _ = tx.send(ChatEvent::Reversible);
+        // Keep the deck as it was before the copilot touched it: a checkpoint
+        // that outlives the session, unlike the single in-memory undo.
+        let label = last_user_text(&request_messages);
+        let _ = state.versions.save(
+            &state.deck_key(),
+            &format!("Before copilot: {label}"),
+            true,
+            &before.presentation,
+        );
     }
     if let Some(id) = &request_id {
         state.copilot.end_turn(id);
@@ -308,6 +318,22 @@ async fn run_inner(
     Err(CopilotError::ToolLimit(format!(
         "the copilot reached its limit of {MAX_TOOL_ROUNDS} steps and stopped; the changes it already made are saved"
     )))
+}
+
+/// The user's latest message, shortened for a version name.
+fn last_user_text(messages: &[ChatMessageInput]) -> String {
+    let text = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.text.trim())
+        .unwrap_or("");
+    let short: String = text.chars().take(48).collect();
+    if text.chars().count() > 48 {
+        format!("{short}…")
+    } else {
+        short
+    }
 }
 
 /// Strings longer than this inside an already-executed tool call are replaced

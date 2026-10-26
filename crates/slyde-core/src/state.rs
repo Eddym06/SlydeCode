@@ -7,7 +7,7 @@
 use crate::error::CoreError;
 use crate::model::{
     AnimationStep, AspectRatio, ImageRect, Presentation, Slide, SlideId, StateView, TemplateType,
-    Theme, now_ms,
+    Theme, Transition, TransitionKind, now_ms,
 };
 
 pub const DEFAULT_MAX_HISTORY: usize = 100;
@@ -398,37 +398,126 @@ impl PresentationState {
         element_id: &str,
         rect: ImageRect,
     ) -> Result<(), CoreError> {
-        rect.validate()?;
+        self.set_geometries(slide_id, &[(element_id.to_string(), rect)])
+    }
 
+    /// Moves and/or resizes several elements of one slide as a single undo step
+    /// (align, distribute, nudge a selection).
+    pub fn set_geometries(
+        &mut self,
+        slide_id: &str,
+        items: &[(String, ImageRect)],
+    ) -> Result<(), CoreError> {
+        for (_, rect) in items {
+            rect.validate()?;
+        }
         let mut next = self.presentation().clone();
         let slide = next
             .slides
             .iter_mut()
             .find(|slide| slide.id == slide_id)
             .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
-
-        let span = find_element_span(&slide.code, element_id).ok_or_else(|| {
-            CoreError::ElementNotFound {
-                element_id: element_id.to_string(),
-            }
-        })?;
-
-        let props: [(&str, String); 5] = [
-            ("position", "absolute".to_string()),
-            ("left", css_px(rect.x)),
-            ("top", css_px(rect.y)),
-            ("width", css_px(rect.w)),
-            ("height", css_px(rect.h)),
-        ];
-        let new_open = apply_style_properties(&slide.code[span.open.clone()], &props);
-
-        let mut out = String::with_capacity(slide.code.len() + new_open.len());
-        out.push_str(&slide.code[..span.open.start]);
-        out.push_str(&new_open);
-        out.push_str(&slide.code[span.open.end..]);
-        slide.code = out;
-
+        for (element_id, rect) in items {
+            apply_geometry(&mut slide.code, element_id, *rect)?;
+        }
         self.commit("set_geometry", next);
+        Ok(())
+    }
+
+    /// Appends a ready-made block (a shape, an icon, a table…) above the slide
+    /// content at a fixed position, like a pasted picture.
+    pub fn insert_block(
+        &mut self,
+        slide_id: &str,
+        html: &str,
+        rect: ImageRect,
+    ) -> Result<String, CoreError> {
+        rect.validate()?;
+        validate_block_html(html)?;
+        let mut next = self.presentation().clone();
+        let slide = next
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+            .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
+        let id = unique_element_id(&slide.code, "block");
+        let wrapper = format!(
+            r#"<div data-id="{id}" class="slyde-block" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}">{html}</div>"#,
+            x = css_px(rect.x),
+            y = css_px(rect.y),
+            w = css_px(rect.w),
+            h = css_px(rect.h),
+        );
+        slide.code.push('\n');
+        slide
+            .code
+            .push_str(&crate::html::ensure_element_ids(&wrapper));
+        if slide.code.len() > self.limits.max_code_bytes {
+            return Err(CoreError::CodeTooLarge {
+                actual: slide.code.len(),
+                max: self.limits.max_code_bytes,
+            });
+        }
+        self.commit("insert_block", next);
+        Ok(id)
+    }
+
+    /// Replaces the source of several slides as one undo step (apply a layout to
+    /// the whole deck).
+    pub fn set_slides_code(&mut self, items: &[(String, String)]) -> Result<(), CoreError> {
+        let mut next = self.presentation().clone();
+        for (slide_id, code) in items {
+            if code.trim().is_empty() {
+                return Err(CoreError::EmptySlideCode);
+            }
+            if code.len() > self.limits.max_code_bytes {
+                return Err(CoreError::CodeTooLarge {
+                    actual: code.len(),
+                    max: self.limits.max_code_bytes,
+                });
+            }
+            let slide = next
+                .slides
+                .iter_mut()
+                .find(|slide| &slide.id == slide_id)
+                .ok_or_else(|| CoreError::SlideNotFound(slide_id.clone()))?;
+            slide.code = crate::html::ensure_element_ids(code);
+        }
+        self.commit("slides_code", next);
+        Ok(())
+    }
+
+    /// Sets the transition into one slide, or into every slide when `slide_ids`
+    /// is `None`. `None` as the transition clears it (a cut).
+    pub fn set_transition(
+        &mut self,
+        slide_ids: Option<&[String]>,
+        transition: Option<Transition>,
+    ) -> Result<(), CoreError> {
+        let transition = match transition {
+            Some(value) if value.kind == TransitionKind::None => None,
+            Some(mut value) => {
+                value.duration_ms = value
+                    .duration_ms
+                    .clamp(Transition::MIN_DURATION_MS, Transition::MAX_DURATION_MS);
+                Some(value)
+            }
+            None => None,
+        };
+        let mut next = self.presentation().clone();
+        if let Some(ids) = slide_ids {
+            for id in ids {
+                if next.slide_index(id).is_none() {
+                    return Err(CoreError::SlideNotFound(id.clone()));
+                }
+            }
+        }
+        for slide in &mut next.slides {
+            if slide_ids.is_none_or(|ids| ids.contains(&slide.id)) {
+                slide.transition = transition;
+            }
+        }
+        self.commit("set_transition", next);
         Ok(())
     }
 
@@ -986,6 +1075,47 @@ fn unique_element_id(code: &str, prefix: &str) -> String {
         }
     }
     format!("{prefix}-{}-{}", std::process::id(), code.len())
+}
+
+/// Rewrites the geometry declarations of one element inside `code`.
+fn apply_geometry(code: &mut String, element_id: &str, rect: ImageRect) -> Result<(), CoreError> {
+    let span = find_element_span(code, element_id).ok_or_else(|| CoreError::ElementNotFound {
+        element_id: element_id.to_string(),
+    })?;
+    let props: [(&str, String); 5] = [
+        ("position", "absolute".to_string()),
+        ("left", css_px(rect.x)),
+        ("top", css_px(rect.y)),
+        ("width", css_px(rect.w)),
+        ("height", css_px(rect.h)),
+    ];
+    let new_open = apply_style_properties(&code[span.open.clone()], &props);
+    let mut out = String::with_capacity(code.len() + new_open.len());
+    out.push_str(&code[..span.open.start]);
+    out.push_str(&new_open);
+    out.push_str(&code[span.open.end..]);
+    *code = out;
+    Ok(())
+}
+
+/// Blocks from the elements library are plain markup: no script, no event
+/// handlers and no `javascript:` URLs, whatever sends them.
+fn validate_block_html(html: &str) -> Result<(), CoreError> {
+    if html.trim().is_empty() {
+        return Err(CoreError::EmptySlideCode);
+    }
+    let lower = html.to_ascii_lowercase();
+    let has_handler = lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
+        .any(|word| {
+            word.len() > 2 && word.starts_with("on") && lower.contains(&format!("{word}="))
+        });
+    if lower.contains("<script") || lower.contains("javascript:") || has_handler {
+        return Err(CoreError::InvalidBlock(
+            "blocks cannot contain scripts or event handlers".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Escapes a value for a double-quoted HTML attribute.
@@ -2027,5 +2157,103 @@ mod tests {
         state.undo().unwrap();
         assert_eq!(state.presentation().slides.len(), 3);
         assert!(state.remove_slides(&["nope".into()]).is_err());
+    }
+
+    #[test]
+    fn blocks_geometries_transitions_and_batch_code_are_single_undo_steps() {
+        let mut s = PresentationState::new("A", Theme::studio(), AspectRatio::R16x9);
+        let mut ids = Vec::new();
+        for n in 0..2 {
+            ids.push(
+                s.upsert_slide(
+                    n,
+                    None,
+                    format!("<h1>{n}</h1><p>x</p>"),
+                    TemplateType::default(),
+                    vec![],
+                )
+                .unwrap()
+                .slide_id,
+            );
+        }
+        let rect = ImageRect {
+            x: 10.0,
+            y: 20.0,
+            w: 100.0,
+            h: 60.0,
+        };
+
+        let block = s
+            .insert_block(
+                &ids[0],
+                "<svg viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>",
+                rect,
+            )
+            .unwrap();
+        assert!(
+            s.presentation().slides[0]
+                .code
+                .contains(&format!("data-id=\"{block}\""))
+        );
+        assert!(matches!(
+            s.insert_block(&ids[0], "<img src=x onerror=alert(1)>", rect),
+            Err(CoreError::InvalidBlock(_))
+        ));
+        assert!(matches!(
+            s.insert_block(&ids[0], "<script>1</script>", rect),
+            Err(CoreError::InvalidBlock(_))
+        ));
+
+        let before = s.history_labels().len();
+        s.set_geometries(
+            &ids[0],
+            &[(
+                block.clone(),
+                ImageRect {
+                    x: 1.0,
+                    y: 2.0,
+                    w: 30.0,
+                    h: 40.0,
+                },
+            )],
+        )
+        .unwrap();
+        assert_eq!(s.history_labels().len(), before + 1);
+        assert!(s.presentation().slides[0].code.contains("left: 1px"));
+
+        s.set_transition(
+            None,
+            Some(Transition {
+                kind: TransitionKind::Zoom,
+                duration_ms: 99_999,
+            }),
+        )
+        .unwrap();
+        for slide in &s.presentation().slides {
+            let t = slide.transition.unwrap();
+            assert_eq!(t.kind, TransitionKind::Zoom);
+            assert_eq!(
+                t.duration_ms,
+                Transition::MAX_DURATION_MS,
+                "duration is clamped"
+            );
+        }
+        s.set_transition(Some(&[ids[1].clone()]), None).unwrap();
+        assert!(s.presentation().slides[1].transition.is_none());
+        assert!(s.presentation().slides[0].transition.is_some());
+        assert!(s.set_transition(Some(&["nope".into()]), None).is_err());
+
+        s.set_slides_code(&[
+            (ids[0].clone(), "<h1>A</h1>".into()),
+            (ids[1].clone(), "<h1>B</h1>".into()),
+        ])
+        .unwrap();
+        assert!(s.presentation().slides[1].code.contains("B"));
+        assert!(s.set_slides_code(&[(ids[0].clone(), "  ".into())]).is_err());
+        s.undo().unwrap();
+        assert!(
+            s.presentation().slides[1].code.contains("1</h1>"),
+            "one undo restores both slides"
+        );
     }
 }

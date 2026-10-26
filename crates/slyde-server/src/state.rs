@@ -39,6 +39,8 @@ pub struct AppState {
     /// the only shared mutable domain state; the copilot mutates it through
     /// `agent::run`, never directly.
     pub copilot: Arc<CopilotState>,
+    /// Named and automatic checkpoints of the deck.
+    pub versions: crate::versions::Versions,
 }
 
 /// The on-disk half of the server: which decks exist, where autosave writes and
@@ -132,7 +134,15 @@ impl AppState {
             assets,
         } = persistence;
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let versions = match library
+            .as_ref()
+            .and_then(|lib| lib.root().parent().map(|p| p.join("versions")))
+        {
+            Some(dir) => crate::versions::Versions::persistent(dir),
+            None => crate::versions::Versions::in_memory(),
+        };
         Arc::new(Self {
+            versions,
             core: RwLock::new(core),
             events,
             token,
@@ -145,6 +155,15 @@ impl AppState {
             copilot,
             assets,
         })
+    }
+
+    /// The key versions are stored under: the active library deck, or a fixed
+    /// name for a server without a library.
+    pub fn deck_key(&self) -> String {
+        self.library
+            .as_ref()
+            .and_then(|library| library.active())
+            .unwrap_or_else(|| "session".to_string())
     }
 
     pub async fn view(&self) -> StateView {
@@ -313,6 +332,32 @@ pub enum UiCommand {
         w: f32,
         h: f32,
     },
+    /// Inserts a ready-made block (shape, icon, chart, table) from the library.
+    InsertBlock {
+        slide_id: String,
+        html: String,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    },
+    /// Moves/resizes several elements of one slide at once (align, distribute).
+    SetGeometries {
+        slide_id: String,
+        items: Vec<GeometryItem>,
+    },
+    /// Replaces the source of several slides in one step (apply a layout).
+    SetSlidesCode {
+        items: Vec<SlideCodeItem>,
+    },
+    /// Sets the transition into one, several or (without ids) every slide.
+    SetTransition {
+        #[serde(default)]
+        slide_ids: Option<Vec<String>>,
+        kind: String,
+        #[serde(default)]
+        duration_ms: Option<u32>,
+    },
     /// Moves/resizes an element; the canvas sends the final geometry.
     SetGeometry {
         slide_id: String,
@@ -322,6 +367,21 @@ pub enum UiCommand {
         w: f32,
         h: f32,
     },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GeometryItem {
+    pub element_id: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SlideCodeItem {
+    pub slide_id: String,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
