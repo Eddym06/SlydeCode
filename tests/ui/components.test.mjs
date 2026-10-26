@@ -379,3 +379,23 @@ test("the work card reports real phases, never invented progress", async () => {
   assert.deepEqual(trackModel({ expected: 6, written: 2, current: true }), { segments: 6, done: 2, current: true });
   assert.equal(trackModel({ expected: 6, written: 6, current: true }).current, false);
 });
+
+test("transitions have keyframes for every kind, mirror by direction and cut cleanly", async () => {
+  const { keyframesFor, transitionOf, TRANSITION_KINDS } = await import("../../ui/static/transitions.js");
+  assert.equal(keyframesFor("none"), null);
+  assert.equal(keyframesFor("unknown"), null);
+  for (const kind of TRANSITION_KINDS.filter((kind) => kind !== "none")) {
+    const frames = keyframesFor(kind, 1);
+    assert.ok(frames.leave.length === 2 && frames.enter.length === 2, `${kind} has two halves`);
+  }
+  const forward = keyframesFor("push", 1);
+  const back = keyframesFor("push", -1);
+  assert.equal(forward.enter[0].transform, "translateX(100%)");
+  assert.equal(back.enter[0].transform, "translateX(-100%)", "going back mirrors the motion");
+
+  assert.equal(transitionOf({}), null);
+  assert.equal(transitionOf({ transition: { kind: "none", duration_ms: 400 } }), null);
+  assert.deepEqual(transitionOf({ transition: { kind: "fade", duration_ms: 50 } }), { kind: "fade", duration: 120 });
+  assert.equal(transitionOf({ transition: { kind: "zoom", duration_ms: 99999 } }).duration, 2000);
+  assert.equal(transitionOf({ transition: { kind: "spin", duration_ms: 400 } }), null);
+});

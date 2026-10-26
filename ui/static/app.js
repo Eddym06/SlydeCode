@@ -11,6 +11,8 @@ import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { mountMenus } from "./menus.js";
+import { createTransitioner, transitionOf } from "./transitions.js";
+import { createVersionsCard } from "./versions-card.js";
 import { mountShortcuts } from "./shortcuts.js";
 import { layoutPreview } from "./layout-previews.js";
 import { createStoryboard } from "./storyboard.js";
@@ -761,6 +763,15 @@ function boot(sessionToken) {
   }
 
   /// The storyboard is its own module; the shell only hands it the slides.
+  const versionsCard = createVersionsCard({
+    client,
+    t,
+    escapeHtml,
+    notify: toast,
+    lang,
+    applyI18n,
+  });
+
   const storyboard = createStoryboard({
     root: els.storyboard,
     bulkBar: $("bulk-bar"),
@@ -902,6 +913,7 @@ function boot(sessionToken) {
     escapeHtml,
     actions: {
       command: run,
+      mountVersions: (host) => versionsCard.mount(host),
       selectElement: selectElementById,
       pickImage: (file) => canvas.insertFile(file),
       saveDeck: () => {
@@ -1500,17 +1512,37 @@ function boot(sessionToken) {
 
     const key = `${s.id}:${s.code.length}:${s.animation.length}`;
     if (key !== presentSlideKey) {
+      const movedSlides = presentSlideKey !== "" && presentSlideKey.split(":")[0] !== s.id;
+      const direction = presentIndex < presentPrevIndex ? -1 : 1;
       presentSlideKey = key;
+      presentPrevIndex = presentIndex;
       presentReveal.reload();
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
-        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
+        const target = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
+        const swap = () => {
+          presentEls.frame.src = target;
+        };
+        // A transition only plays when the audience moves to another slide, not
+        // when the same slide is rebuilt after an edit.
+        if (movedSlides) presentTransitioner().go(swap, transitionOf(s), direction);
+        else swap();
       }
     }
 
     fitPresentFrame();
     renderPresentSpeakerConsole();
     showPresentHud();
+  }
+
+  let presentPrevIndex = 0;
+  let transitioner = null;
+  function presentTransitioner() {
+    if (!transitioner || transitioner.frame !== presentEls.frame) {
+      transitioner = createTransitioner(presentEls.frame);
+      transitioner.frame = presentEls.frame;
+    }
+    return transitioner;
   }
 
   function postPresentStep(step) {

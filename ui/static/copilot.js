@@ -1053,6 +1053,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
     if (event.type === "reversible") {
       assistant.reversible = true;
+      document.dispatchEvent(new CustomEvent("slyde:versions-changed"));
       return;
     }
     if (event.type === "done") {

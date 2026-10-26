@@ -110,6 +110,38 @@ export function createClient(token) {
       });
     },
 
+    // ---------- named versions ----------
+
+    async versions() {
+      return (await json(`/api/versions`)).versions || [];
+    },
+
+    async saveVersion(name) {
+      const payload = await json(`/api/versions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      return payload.versions || [];
+    },
+
+    restoreVersion(id) {
+      return json(`/api/versions/restore`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    },
+
+    async deleteVersion(id) {
+      const payload = await json(`/api/versions/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      return payload.versions || [];
+    },
+
     /** Undoes everything the copilot did in its last turn, in one step. */
     copilotRevert() {
       return json(`/api/copilot/revert`, { method: "POST" });

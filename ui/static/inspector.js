@@ -11,6 +11,7 @@
 
 import { createCodeEditor } from "./code-editor.js";
 import { describeStructure, labelFor } from "./element-labels.js";
+import { TRANSITION_KINDS, DEFAULT_TRANSITION_MS } from "./transitions.js";
 import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
@@ -84,6 +85,8 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    transition: '<rect x="3" y="5" width="10" height="14" rx="2"/><rect x="11" y="5" width="10" height="14" rx="2" opacity=".55"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
   };
 
   function icon(name, size = 16) {
@@ -304,6 +307,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       ),
       card(
         3,
+        "history",
+        t("versions.title"),
+        `<div id="versions-host" class="versions-host"></div>`,
+        { id: "versions-card" }
+      ),
+      card(
+        4,
         "export",
         t("export.section"),
         `<div class="tile-row tile-row-3">
@@ -315,6 +325,25 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         { id: "export-section", attrs: 'aria-busy="false"' }
       ),
     ].join("");
+  }
+
+  function transitionMarkup(slide) {
+    const current = (slide.transition && slide.transition.kind) || "none";
+    const duration = (slide.transition && slide.transition.duration_ms) || DEFAULT_TRANSITION_MS;
+    const chips = TRANSITION_KINDS.map(
+      (kind) => `<button type="button" class="transition-chip" data-transition="${kind}" role="radio"
+        aria-checked="${kind === current}"><span class="transition-demo" data-kind="${kind}" aria-hidden="true"><i></i><i></i></span>
+        <span>${escapeHtml(t(`transition.${kind}`))}</span></button>`
+    ).join("");
+    return `
+      <div class="transition-grid" role="radiogroup" aria-label="${escapeHtml(t("transition.title"))}">${chips}</div>
+      <label class="transition-duration${current === "none" ? " is-off" : ""}">
+        <span>${escapeHtml(t("transition.duration"))}</span>
+        <input type="range" id="transition-duration" min="150" max="1500" step="50" value="${duration}"
+               ${current === "none" ? "disabled" : ""} aria-label="${escapeHtml(t("transition.duration"))}">
+        <output id="transition-output">${duration} ms</output>
+      </label>
+      <button type="button" class="tile-btn tile-wide" id="transition-all">${escapeHtml(t("transition.applyAll"))}</button>`;
   }
 
   function slideMarkup(slide, { selectedElement, structureNodes }) {
@@ -365,10 +394,11 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         renderAnimationEditor(slide),
         { extra: steps ? `<span class="card-count">${steps}</span>` : "" }
       ),
-      card(3, "elements", t("tree.title"), tree, {
+      card(3, "transition", t("transition.title"), transitionMarkup(slide)),
+      card(4, "elements", t("tree.title"), tree, {
         extra: described.length ? `<span class="card-count">${described.length}</span>` : "",
       }),
-      `<details class="dev card" style="--i:4"${devOpen ? " open" : ""}>
+      `<details class="dev card" style="--i:5"${devOpen ? " open" : ""}>
         <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
         <p class="hint dev-meta"><span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span></p>
@@ -435,6 +465,30 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     actions.applyI18n(root);
   }
 
+  function bindTransition(slide) {
+    const grid = root.querySelector(".transition-grid");
+    if (!grid) return;
+    const range = root.querySelector("#transition-duration");
+    const output = root.querySelector("#transition-output");
+    const kindNow = () =>
+      (grid.querySelector('[aria-checked="true"]') || { dataset: { transition: "none" } }).dataset.transition;
+    const send = (kind, all) =>
+      actions.command("set_transition", {
+        slide_ids: all ? null : [slide.id],
+        kind,
+        duration_ms: Number(range.value),
+      });
+    grid.addEventListener("click", (event) => {
+      const chip = event.target.closest("[data-transition]");
+      if (chip) send(chip.dataset.transition, false);
+    });
+    range.addEventListener("input", () => {
+      output.textContent = `${range.value} ms`;
+    });
+    range.addEventListener("change", () => send(kindNow(), false));
+    root.querySelector("#transition-all").addEventListener("click", () => send(kindNow(), true));
+  }
+
   function mountCodeEditor(slide, editorState) {
     const host = root.querySelector("#code-editor-host");
     const details = root.querySelector("details.dev");
@@ -490,6 +544,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       root.classList.toggle("is-entering", entering);
       actions.onEmptyDeck();
       bindDeckControls();
+      mountVersions();
       return;
     }
 
@@ -509,6 +564,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     root.classList.toggle("is-entering", entering);
     actions.onSubtabs(showSlide);
     bindDeckControls();
+    mountVersions();
 
     root.querySelectorAll("[data-tree-id]").forEach((button) => {
       button.addEventListener("click", () => actions.selectElement(button.dataset.treeId));
@@ -548,6 +604,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     bindAnimationEditor(currentSlide);
+    bindTransition(currentSlide);
     mountCodeEditor(currentSlide, editorState);
 
     const remove = root.querySelector("#delete-slide");
@@ -567,6 +624,12 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       }
     }
     actions.applyI18n(root);
+  }
+
+  /// The versions list owns its container; the panel only points it at the new one.
+  function mountVersions() {
+    const host = root.querySelector("#versions-host");
+    if (host && actions.mountVersions) actions.mountVersions(host);
   }
 
   return {
