@@ -684,6 +684,7 @@ function boot(sessionToken) {
 
     if (document.activeElement !== els.title) {
       els.title.value = d.title;
+      els.title.title = d.title;
       els.title.placeholder = t("deck.untitled");
     }
 

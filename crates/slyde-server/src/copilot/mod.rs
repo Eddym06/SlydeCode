@@ -10,6 +10,7 @@ pub mod chat;
 pub mod config;
 pub mod error;
 pub mod models;
+pub mod partial;
 pub mod prompt;
 pub mod routes;
 pub mod tools;

@@ -56,6 +56,12 @@ const SHAPES = {
     <rect x="13" y="26" width="18" height="1.8" rx=".9" fill="${c.fg}" opacity=".7"/>`,
 };
 
+SHAPES.custom = (c) => `
+    <rect x="6" y="6" width="24" height="3.4" rx="1.2" fill="${c.fg}"/>
+    <rect x="6" y="14" width="22" height="20" rx="2.5" fill="${c.accent}" opacity=".85"/>
+    <rect x="34" y="14" width="24" height="9" rx="2.5" fill="${c.fg}" opacity=".55"/>
+    <rect x="34" y="26" width="24" height="8" rx="2.5" fill="${c.fg}" opacity=".3"/>`;
+
 export function layoutPreview(layout, themeId = "studio") {
   const colors = THEME_COLORS[themeId] || THEME_COLORS.studio;
   const shapes = (SHAPES[layout] || SHAPES.hero)(colors);

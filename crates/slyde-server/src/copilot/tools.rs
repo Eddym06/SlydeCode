@@ -40,7 +40,7 @@ fn slide_item_schema() -> Value {
         "properties": {
             "slide_id": { "type": "string", "description": "Existing slide id to replace; omit to append a new slide." },
             "html_code": { "type": "string", "description": "Inner HTML and an optional <style> block. No document wrapper." },
-            "template": { "type": "string", "enum": ["hero", "bullet", "diagram", "chart", "image_layout", "code"] },
+            "template": { "type": "string", "enum": ["hero", "bullet", "diagram", "chart", "image_layout", "code", "custom"], "description": "Optional: inferred from the markup when omitted." },
             "notes": { "type": "string", "description": "Speaker notes, written as spoken language." },
             "animation": {
                 "type": "array",
@@ -59,7 +59,7 @@ fn slide_item_schema() -> Value {
                 }
             }
         },
-        "required": ["html_code", "template"],
+        "required": ["html_code"],
         "additionalProperties": false
     })
 }
@@ -140,7 +140,7 @@ pub fn definitions() -> Vec<ToolDef> {
                         "index": { "type": "integer", "minimum": 0, "description": "Insertion position. Required only when inserting; ignored when slide_id matches an existing slide." },
                         "slide_id": { "type": "string", "description": "Existing slide id when replacing; omit to insert." },
                         "html_code": { "type": "string", "description": "Inner HTML and an optional <style> block. No document wrapper." },
-                        "template": { "type": "string", "enum": ["hero", "bullet", "diagram", "chart", "image_layout", "code"] },
+                        "template": { "type": "string", "enum": ["hero", "bullet", "diagram", "chart", "image_layout", "code", "custom"], "description": "Optional: inferred from the markup when omitted." },
                         "animation": {
                             "type": "array",
                             "maxItems": 3,
@@ -158,7 +158,7 @@ pub fn definitions() -> Vec<ToolDef> {
                             }
                         }
                     },
-                    "required": ["html_code", "template"],
+                    "required": ["html_code"],
                     "additionalProperties": false
                 })
             },
@@ -295,17 +295,77 @@ pub struct ToolOutcome {
     pub slide_index: Option<usize>,
 }
 
+/// Slides of a batch call that were already applied while it was streaming.
+#[derive(Debug, Default, Clone)]
+pub struct Applied {
+    /// The deck was created from the call's header.
+    pub created: bool,
+    /// `(slide_id, index)` of every slide written so far, in call order.
+    pub slides: Vec<(String, usize)>,
+}
+
+/// Applies the slides a streaming batch call has finished so far. Returns what
+/// was written so the call can skip it when it ends.
+pub async fn apply_partial(
+    state: &AppState,
+    tool: &str,
+    header: Option<&Value>,
+    slides: &[Value],
+    applied: &mut Applied,
+) {
+    if tool == BUILD_DECK && !applied.created {
+        // Without a title the call cannot be applied early: it runs at the end.
+        let Some(header) = header.filter(|header| header.get("title").is_some()) else {
+            return;
+        };
+        let create = json!({
+            "action": CREATE_PRESENTATION,
+            "title": header.get("title"),
+            "theme": header.get("theme"),
+            "aspect_ratio": header.get("aspect_ratio"),
+        });
+        let Ok(command) = serde_json::from_value::<AgentCommand>(create) else {
+            return;
+        };
+        if crate::agent::run(state, command).await.is_err() {
+            return;
+        }
+        applied.created = true;
+    }
+    if tool == BUILD_DECK && !applied.created {
+        return;
+    }
+    for item in slides {
+        match write_one(state, item).await {
+            Ok(written) => applied.slides.push(written),
+            // A slide that cannot be written is left for the final call to
+            // report; stop so the order of the rest is not disturbed.
+            Err(_) => return,
+        }
+    }
+}
+
 pub async fn execute(
     state: &AppState,
     name: &str,
     arguments: Value,
 ) -> Result<ToolOutcome, String> {
+    execute_with(state, name, arguments, None).await
+}
+
+/// Like [`execute`], but a batch call skips what `applied` already wrote.
+pub async fn execute_with(
+    state: &AppState,
+    name: &str,
+    arguments: Value,
+    applied: Option<&Applied>,
+) -> Result<ToolOutcome, String> {
     match name {
         READ_DECK => read_deck(state).await,
         READ_SLIDE => read_slide(state, &arguments).await,
         GET_SELECTED_ELEMENT => get_selected_element(state, &arguments).await,
-        BUILD_DECK => build_deck(state, arguments).await,
-        WRITE_SLIDES => write_slides(state, &arguments).await,
+        BUILD_DECK => build_deck(state, arguments, applied).await,
+        WRITE_SLIDES => write_slides(state, &arguments, applied).await,
         CREATE_PRESENTATION | UPSERT_SLIDE | REMOVE_SLIDE | MOVE_SLIDE | TRIGGER_ANIMATION
         | SET_NOTES | MUTATE_ELEMENT => mutate(state, name, arguments).await,
         _ => Err(format!("unknown tool: {name}")),
@@ -314,7 +374,11 @@ pub async fn execute(
 
 /// Creates the deck, then writes every slide through the same command path the
 /// single-slide tools use, so events, validation and persistence are identical.
-async fn build_deck(state: &AppState, arguments: Value) -> Result<ToolOutcome, String> {
+async fn build_deck(
+    state: &AppState,
+    arguments: Value,
+    applied: Option<&Applied>,
+) -> Result<ToolOutcome, String> {
     let title = arguments
         .get("title")
         .and_then(Value::as_str)
@@ -325,25 +389,33 @@ async fn build_deck(state: &AppState, arguments: Value) -> Result<ToolOutcome, S
     if !slides.as_array().is_some_and(|list| !list.is_empty()) {
         return Err("slides must be a non-empty array".to_string());
     }
-    let create = json!({
-        "action": CREATE_PRESENTATION,
-        "title": title,
-        "theme": arguments.get("theme"),
-        "aspect_ratio": arguments.get("aspect_ratio"),
-    });
-    let command: AgentCommand =
-        serde_json::from_value(create).map_err(|error| format!("invalid arguments: {error}"))?;
-    crate::agent::run(state, command)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut outcome = write_slides(state, &json!({ "slides": slides })).await?;
+    // The deck may already exist: its header and first slides were applied while
+    // the model was still writing.
+    if !applied.is_some_and(|applied| applied.created) {
+        let create = json!({
+            "action": CREATE_PRESENTATION,
+            "title": title,
+            "theme": arguments.get("theme"),
+            "aspect_ratio": arguments.get("aspect_ratio"),
+        });
+        let command: AgentCommand = serde_json::from_value(create)
+            .map_err(|error| format!("invalid arguments: {error}"))?;
+        crate::agent::run(state, command)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let mut outcome = write_slides(state, &json!({ "slides": slides }), applied).await?;
     if let Some(object) = outcome.result.as_object_mut() {
         object.insert("created".into(), Value::Bool(true));
     }
     Ok(outcome)
 }
 
-async fn write_slides(state: &AppState, arguments: &Value) -> Result<ToolOutcome, String> {
+async fn write_slides(
+    state: &AppState,
+    arguments: &Value,
+    applied: Option<&Applied>,
+) -> Result<ToolOutcome, String> {
     let items = arguments
         .get("slides")
         .and_then(Value::as_array)
@@ -356,8 +428,15 @@ async fn write_slides(state: &AppState, arguments: &Value) -> Result<ToolOutcome
     }
     let mut written = Vec::with_capacity(items.len());
     let mut last = (None, None);
+    let already = applied
+        .map(|applied| applied.slides.as_slice())
+        .unwrap_or(&[]);
     for (position, item) in items.iter().enumerate() {
-        let attempt = write_one(state, item).await;
+        // Slides applied during streaming are not written twice.
+        let attempt = match already.get(position) {
+            Some((slide_id, index)) => Ok((slide_id.clone(), *index)),
+            None => write_one(state, item).await,
+        };
         match attempt {
             Ok((slide_id, index)) => {
                 written.push(json!({ "ok": true, "slide_id": slide_id, "index": index }));
@@ -388,7 +467,7 @@ async fn write_slides(state: &AppState, arguments: &Value) -> Result<ToolOutcome
 /// One batch item. A missing or out-of-range position appends instead of
 /// failing: the model often guesses an index, and a rejected guess costs a whole
 /// extra round trip.
-async fn write_one(state: &AppState, item: &Value) -> Result<(String, usize), String> {
+pub(crate) async fn write_one(state: &AppState, item: &Value) -> Result<(String, usize), String> {
     let object = item
         .as_object()
         .ok_or_else(|| "each slide must be an object".to_string())?;

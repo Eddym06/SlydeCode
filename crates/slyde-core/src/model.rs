@@ -93,13 +93,40 @@ impl ImageRect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateType {
+    /// A slide whose layout is not one of the named ones. It is the default for
+    /// slides written without a template, so nothing is mislabeled as "code".
     #[default]
+    Custom,
     Code,
     Diagram,
     Bullet,
     Hero,
     ImageLayout,
     Chart,
+}
+
+impl TemplateType {
+    /// Best guess at a slide's layout from its markup, for slides written without
+    /// one. Cheap string checks on purpose: a wrong guess only changes a label.
+    pub fn infer(code: &str) -> Self {
+        let lower = code.to_ascii_lowercase();
+        let count = |needle: &str| lower.matches(needle).count();
+        if lower.contains("slyde-code") || lower.contains("<pre") {
+            Self::Code
+        } else if lower.contains("slyde-diagram") || lower.contains("class=\"mermaid") {
+            Self::Diagram
+        } else if lower.contains("<img") || lower.contains("/assets/") {
+            Self::ImageLayout
+        } else if lower.contains("<canvas") || lower.contains("chart") {
+            Self::Chart
+        } else if count("<li") >= 2 {
+            Self::Bullet
+        } else if count("<h1") == 1 && count("<p") <= 2 && count("<li") == 0 {
+            Self::Hero
+        } else {
+            Self::Custom
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,5 +607,23 @@ mod tests {
             None,
             "resolve must not invent themes outside THEME_IDS"
         );
+    }
+
+    #[test]
+    fn templates_are_inferred_from_markup_and_default_to_custom() {
+        use super::TemplateType as T;
+        assert_eq!(T::infer("<ul><li>a</li><li>b</li></ul>"), T::Bullet);
+        assert_eq!(
+            T::infer("<pre class=\"slyde-code\"><code>x</code></pre>"),
+            T::Code
+        );
+        assert_eq!(
+            T::infer("<div class=\"slyde-diagram\">graph TD;</div>"),
+            T::Diagram
+        );
+        assert_eq!(T::infer("<img src=\"/assets/a.png\">"), T::ImageLayout);
+        assert_eq!(T::infer("<h1>Title</h1><p>Sub</p>"), T::Hero);
+        assert_eq!(T::infer("<div><p>a</p><p>b</p><p>c</p></div>"), T::Custom);
+        assert_eq!(T::default(), T::Custom);
     }
 }

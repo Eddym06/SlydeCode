@@ -10,6 +10,7 @@
 // suite. What changed is who owns the markup and the event wiring.
 
 import { createCodeEditor } from "./code-editor.js";
+import { describeStructure, labelFor } from "./element-labels.js";
 import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
@@ -317,16 +318,16 @@ export function createInspector({ root, t, escapeHtml, actions }) {
   }
 
   function slideMarkup(slide, { selectedElement, structureNodes }) {
-    const tree = structureNodes.length
-      ? `<ul class="element-tree">${structureNodes
+    const described = describeStructure(structureNodes);
+    const tree = described.length
+      ? `<ul class="element-tree">${described
           .map(
-            (node) => `<li>
+            (entry) => `<li>
                     <button type="button" class="element-tree-item${
-                      selectedElement && selectedElement.id === node.id ? " is-selected" : ""
-                    }" data-tree-id="${escapeHtml(node.id)}">
-                      <span class="element-tree-tag">${escapeHtml(node.tag)}</span>
-                      <span class="element-tree-id">#${escapeHtml(node.id)}</span>
-                      ${node.text ? `<span class="element-tree-text">${escapeHtml(node.text)}</span>` : ""}
+                      selectedElement && selectedElement.id === entry.id ? " is-selected" : ""
+                    }" data-tree-id="${escapeHtml(entry.id)}">
+                      <span class="element-tree-tag">${escapeHtml(labelFor(entry, t))}</span>
+                      ${entry.text ? `<span class="element-tree-text">${escapeHtml(entry.text)}</span>` : ""}
                     </button>
                   </li>`
           )
@@ -341,7 +342,6 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         t("inspector.slide"),
         `<div class="slide-identity">
            <span class="layout-badge">${escapeHtml(t(`template.${slide.template}`))}</span>
-           <span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span>
          </div>
          <div class="slide-quick-actions">
            <button type="button" class="tile-btn" id="inspector-insert-image">${icon("image", 16)}<span>${escapeHtml(t("inspector.insertImage"))}</span></button>
@@ -366,11 +366,12 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         { extra: steps ? `<span class="card-count">${steps}</span>` : "" }
       ),
       card(3, "elements", t("tree.title"), tree, {
-        extra: structureNodes.length ? `<span class="card-count">${structureNodes.length}</span>` : "",
+        extra: described.length ? `<span class="card-count">${described.length}</span>` : "",
       }),
       `<details class="dev card" style="--i:4"${devOpen ? " open" : ""}>
         <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
+        <p class="hint dev-meta"><span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span></p>
         <div id="code-editor-host"></div>
       </details>`,
     ].join("");

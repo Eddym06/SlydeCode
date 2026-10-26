@@ -324,3 +324,25 @@ test("every theme has colors for the layout previews and every layout has a shap
   }
   assert.ok(layoutPreview("hero", "no-such-theme").includes(THEME_COLORS.studio.bg), "unknown theme falls back");
 });
+
+test("the element list speaks plain language and hides tags and handles", async () => {
+  const { describeStructure, labelFor } = await import("../../ui/static/element-labels.js");
+  const nodes = [
+    { id: "a", tag: "DIV", text: "wrapper text" },
+    { id: "b", tag: "H1", text: "Welcome" },
+    { id: "c", tag: "UL", text: "" },
+    { id: "d", tag: "LI", text: "one" },
+    { id: "e", tag: "LI", text: "two" },
+    { id: "f", tag: "LI", text: "three" },
+    { id: "g", tag: "P", text: "Closing line" },
+    { id: "h", tag: "STYLE", text: ".x{}" },
+    { id: "i", tag: "BR", text: "" },
+  ];
+  const entries = describeStructure(nodes);
+  const t = (key, vars = {}) => `${key}${vars.n === undefined ? "" : `:${vars.n}`}`;
+  assert.deepEqual(
+    entries.map((entry) => labelFor(entry, t)),
+    ["element.text", "element.title", "element.list:3", "element.paragraph"]
+  );
+  assert.ok(entries.every((entry) => !/^(li|br|style)$/i.test(entry.tag)));
+});

@@ -104,7 +104,7 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
 }
 
 async fn run_inner(
-    state: &AppState,
+    state: &Arc<AppState>,
     request: ChatRequest,
     tx: &UnboundedSender<ChatEvent>,
     cancel: tokio::sync::watch::Receiver<bool>,
@@ -162,7 +162,29 @@ async fn run_inner(
         );
         compact_history(&mut turns);
         input_chars += (system.len() + turns.iter().map(Turn::chars).sum::<usize>()) as u64;
-        let (assistant, round_usage) = transport::stream(
+        // Slides the model finishes while it is still writing the call are
+        // applied right away, so a long generation fills the storyboard slide by
+        // slide instead of showing nothing until the very end.
+        let (partial_tx, mut partial_rx) =
+            tokio::sync::mpsc::unbounded_channel::<transport::PartialSlides>();
+        let applier_state = state.clone();
+        let applier = tokio::spawn(async move {
+            let mut applied = tools::Applied::default();
+            let mut tool = String::new();
+            while let Some(batch) = partial_rx.recv().await {
+                tool = batch.tool.clone();
+                tools::apply_partial(
+                    &applier_state,
+                    &batch.tool,
+                    batch.header.as_ref(),
+                    &batch.slides,
+                    &mut applied,
+                )
+                .await;
+            }
+            (tool, applied)
+        });
+        let streamed = transport::stream(
             state.copilot.http(),
             &transport::StreamRequest {
                 provider,
@@ -171,10 +193,16 @@ async fn run_inner(
                 system: &system,
                 turns: &turns,
                 cancel: &cancel,
+                partial: Some(&partial_tx),
             },
             tx,
         )
-        .await?;
+        .await;
+        drop(partial_tx);
+        let (applied_tool, applied) = applier.await.unwrap_or_default();
+        let (assistant, round_usage) = streamed?;
+        let mut applied =
+            Some(applied).filter(|applied| applied.created || !applied.slides.is_empty());
 
         if round_usage.is_reported() {
             reported.input += round_usage.input;
@@ -246,7 +274,15 @@ async fn run_inner(
                 name: call.name.clone(),
                 status: "running".into(),
             });
-            let outcome = tools::execute(state, &call.name, call.arguments.clone()).await;
+            // Only the call that was applied while streaming skips its slides.
+            let prefix = if call.name == applied_tool {
+                applied.take()
+            } else {
+                None
+            };
+            let outcome =
+                tools::execute_with(state, &call.name, call.arguments.clone(), prefix.as_ref())
+                    .await;
             let (content, status) = match outcome {
                 Ok(outcome) => (
                     serde_json::to_string(&outcome.result)
@@ -386,6 +422,7 @@ pub fn tool_result_for_test(name: &str, result: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt as _;
 
     fn message(role: &str, text: &str) -> ChatMessageInput {
         ChatMessageInput {
@@ -448,7 +485,10 @@ mod tests {
                 seen.push(body);
                 seen.len()
             };
-            let chunk = if round == 1 {
+            // Round one streams the deck in pieces with pauses in between, like a
+            // slow reasoning model; round two is the closing sentence.
+            let mut chunks: Vec<String> = Vec::new();
+            if round == 1 {
                 let slides: Vec<Value> = (1..=6)
                     .map(|n| json!({
                         "html_code": format!("<section><h1>Slide {n}</h1><p>{}</p></section>", "body ".repeat(300)),
@@ -456,21 +496,50 @@ mod tests {
                         "notes": format!("note {n}")
                     }))
                     .collect();
-                let args = json!({ "title": "Mock deck", "theme": "paper", "aspect_ratio": "16:9", "slides": slides });
-                json!({ "choices": [{ "delta": { "tool_calls": [{
-                    "index": 0, "id": "call_1", "type": "function",
-                    "function": { "name": "build_deck", "arguments": args.to_string() }
-                }]}}]})
+                // Written by hand: serde_json sorts object keys, and a real model writes
+                // the deck fields before the slides.
+                let args = format!(
+                    r#"{{"title":"Mock deck","theme":"paper","aspect_ratio":"16:9","slides":{}}}"#,
+                    serde_json::to_string(&slides).unwrap()
+                );
+                let size = args.len().div_ceil(4);
+                let mut start = 0;
+                for piece in 0..4 {
+                    let mut end = (start + size).min(args.len());
+                    while !args.is_char_boundary(end) {
+                        end += 1;
+                    }
+                    let mut call =
+                        json!({ "index": 0, "function": { "arguments": &args[start..end] } });
+                    if piece == 0 {
+                        call["id"] = json!("call_1");
+                        call["type"] = json!("function");
+                        call["function"]["name"] = json!("build_deck");
+                    }
+                    chunks.push(format!(
+                        "data: {}\n\n",
+                        json!({ "choices": [{ "delta": { "tool_calls": [call] } }] })
+                    ));
+                    start = end;
+                }
             } else {
-                json!({ "choices": [{ "delta": { "content": "Built a six-slide deck." } }] })
-            };
-            (
-                [("content-type", "text/event-stream")],
-                format!(
-                    "data: {chunk}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                    json!({ "choices": [], "usage": { "prompt_tokens": 1000, "completion_tokens": 200 } })
-                ),
-            )
+                chunks.push(format!(
+                    "data: {}\n\n",
+                    json!({ "choices": [{ "delta": { "content": "Built a six-slide deck." } }] })
+                ));
+            }
+            chunks.push(format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({ "choices": [], "usage": { "prompt_tokens": 1000, "completion_tokens": 200 } })
+            ));
+            let stream = futures_util::stream::iter(chunks).then(|chunk| async move {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(chunk))
+            });
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from_stream(stream))
+                .unwrap()
         }
 
         let seen: Seen = Default::default();
@@ -502,7 +571,7 @@ mod tests {
             .insert("mock".into(), "k".into());
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        run(
+        let turn = tokio::spawn(run(
             state.clone(),
             ChatRequest {
                 provider: "mock".into(),
@@ -514,8 +583,19 @@ mod tests {
                 request_id: None,
             },
             tx,
-        )
-        .await;
+        ));
+        // Watch the deck while the model is still streaming: slides must show up
+        // before the call ends, not all at once at the end.
+        let mut seen_counts = std::collections::BTreeSet::new();
+        while !turn.is_finished() {
+            seen_counts.insert(state.view().await.presentation.slides.len());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        turn.await.unwrap();
+        assert!(
+            seen_counts.iter().any(|count| (1..6).contains(count)),
+            "slides must appear while the call is still streaming: {seen_counts:?}"
+        );
 
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {

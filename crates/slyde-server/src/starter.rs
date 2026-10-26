@@ -13,7 +13,8 @@ pub fn template_type(raw: &str) -> TemplateType {
         "diagram" => TemplateType::Diagram,
         "chart" => TemplateType::Chart,
         "image_layout" | "image" => TemplateType::ImageLayout,
-        _ => TemplateType::Code,
+        "code" => TemplateType::Code,
+        _ => TemplateType::Custom,
     }
 }
 
@@ -263,7 +264,8 @@ mod tests {
     #[test]
     fn unknown_template_falls_back_to_hero() {
         assert_eq!(default_code("nope"), default_code("hero"));
-        assert_eq!(template_type("nope"), TemplateType::Code);
+        assert_eq!(template_type("nope"), TemplateType::Custom);
+        assert_eq!(template_type("code"), TemplateType::Code);
     }
 
     #[test]

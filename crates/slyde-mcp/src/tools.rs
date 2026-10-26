@@ -51,7 +51,7 @@ pub fn definitions() -> Value {
                     },
                     "template": {
                         "type": "string",
-                        "enum": ["code", "diagram", "bullet", "hero", "image_layout", "chart"],
+                        "enum": ["code", "diagram", "bullet", "hero", "image_layout", "chart", "custom"],
                         "description": "Semantic label for the storyboard. Does not change rendering."
                     },
                     "animation": {

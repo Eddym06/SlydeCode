@@ -2011,3 +2011,28 @@
 .bulk-bar {
   flex-wrap: wrap;
 }
+
+/* ---------- friendlier element list, roomier deck title ---------- */
+.element-tree-tag {
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.dev-meta {
+  margin: 0 14px 8px;
+}
+
+.deck-title {
+  flex: 1 1 220px;
+  width: auto;
+  min-width: 140px;
+  max-width: 520px;
+}
+
+.save-status {
+  flex: 0 0 auto;
+}
