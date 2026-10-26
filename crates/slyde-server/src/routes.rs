@@ -316,6 +316,42 @@ async fn apply_command(
                 .collect();
             core.set_slides_code(&items).map(|_| None)
         }
+        UiCommand::ApplyTemplate {
+            title,
+            theme_id,
+            aspect_ratio,
+            slides,
+        } => {
+            let theme = slyde_core::Theme::resolve(&theme_id).ok_or_else(|| {
+                slyde_core::CoreError::InvalidTheme(format!("unknown theme: {theme_id}"))
+            })?;
+            let ratio = slyde_core::AspectRatio::parse(&aspect_ratio)
+                .ok_or(slyde_core::CoreError::InvalidAspectRatio(aspect_ratio))?;
+            let slides = slides
+                .into_iter()
+                .map(|item| slyde_core::TemplateSlide {
+                    code: item.code,
+                    template: item
+                        .template
+                        .as_deref()
+                        .map(crate::starter::template_type)
+                        .unwrap_or_default(),
+                    notes: item.notes,
+                    animation: Vec::new(),
+                    transition: item
+                        .transition
+                        .as_deref()
+                        .and_then(slyde_core::TransitionKind::parse)
+                        .filter(|kind| *kind != slyde_core::TransitionKind::None)
+                        .map(|kind| slyde_core::Transition {
+                            kind,
+                            duration_ms: 450,
+                        }),
+                })
+                .collect();
+            core.apply_template(&title, theme, ratio, slides)
+                .map(|_| None)
+        }
         UiCommand::SetTransition {
             slide_ids,
             kind,

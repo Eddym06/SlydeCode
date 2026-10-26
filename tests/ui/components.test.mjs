@@ -447,3 +447,52 @@ test("align and distribute keep every block inside the canvas", async () => {
   assert.ok(outside.every((row) => row.x >= 0 && row.x + row.w <= 1280), "clamped to the canvas");
   assert.equal(arrangeBoxes("spin", boxes, canvas), null);
 });
+
+test("the wizard picks a writing model and never an embedding or audio one", async () => {
+  const { recommendedModel } = await import("../../ui/static/onboarding-models.js");
+  const ids = (...list) => list.map((id) => ({ id }));
+  assert.equal(recommendedModel("deepseek", ids("deepseek-reasoner", "deepseek-chat")), "deepseek-chat");
+  assert.equal(
+    recommendedModel("openai", ids("text-embedding-3-large", "gpt-4o-mini", "gpt-4o", "whisper-1", "gpt-4.1")),
+    "gpt-4.1"
+  );
+  assert.equal(
+    recommendedModel("anthropic", ids("claude-3-5-haiku-latest", "claude-sonnet-4-20250514", "claude-sonnet-4-5")),
+    "claude-sonnet-4-5",
+    "the newest of the preferred family"
+  );
+  assert.equal(recommendedModel("gemini", ids("gemini-2.0-flash", "gemini-2.5-flash", "embedding-001")), "gemini-2.5-flash");
+  assert.equal(recommendedModel("openrouter", ids("a/b", "vendor/model:free")), "vendor/model:free");
+  assert.equal(recommendedModel("unknown", ids("tts-1", "some-model", "other")), "some-model");
+  assert.equal(recommendedModel("openai", []), "");
+  assert.equal(recommendedModel("openai", ids("whisper-1", "tts-1")), "", "nothing suitable means no pick");
+});
+
+test("every deck template renders in both languages without inventing data", async () => {
+  const { TEMPLATES, buildTemplate } = await import("../../ui/static/deck-templates.js");
+  const { THEME_COLORS } = await import("../../ui/static/layout-previews.js");
+  const { LAYOUTS } = await import("../../ui/static/layouts.js");
+  assert.ok(TEMPLATES.length >= 5);
+  for (const template of TEMPLATES) {
+    assert.ok(THEME_COLORS[template.theme], `${template.id} uses a known theme`);
+    for (const lang of ["en", "es"]) {
+      const built = buildTemplate(template, lang, { w: 1280, h: 720 });
+      assert.ok(built.slides.length >= 6, `${template.id} tells a story in ${built.slides.length} slides`);
+      for (const slide of built.slides) {
+        assert.ok(slide.code.includes("slide layout-"), "rendered through a layout");
+        assert.ok(slide.notes && slide.notes.length > 10, `${template.id} has speaker guidance`);
+        assert.ok(!/<script|javascript:|\son\w+=/i.test(slide.code));
+      }
+      assert.ok(built.title.length > 2);
+    }
+    for (const item of template.slides) {
+      assert.ok(LAYOUTS.includes(item.layout), `${template.id} uses a real layout`);
+      assert.ok(item.content.en.title && item.content.es.title, "both languages carry a title");
+    }
+  }
+  // Placeholders, never fake figures.
+  const numbers = TEMPLATES.flatMap((template) =>
+    template.slides.flatMap((item) => item.content.en.paragraphs.filter((text) => /^\d/.test(text)))
+  );
+  assert.ok(numbers.length > 0 && numbers.every((value) => /^0+%?$/.test(value)), `placeholders only: ${numbers}`);
+});

@@ -350,6 +350,13 @@ pub enum UiCommand {
     SetSlidesCode {
         items: Vec<SlideCodeItem>,
     },
+    /// Fills the deck from a ready-made template (title, theme, ratio, slides).
+    ApplyTemplate {
+        title: String,
+        theme_id: String,
+        aspect_ratio: String,
+        slides: Vec<TemplateSlideItem>,
+    },
     /// Sets the transition into one, several or (without ids) every slide.
     SetTransition {
         #[serde(default)]
@@ -376,6 +383,17 @@ pub struct GeometryItem {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TemplateSlideItem {
+    pub code: String,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub transition: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

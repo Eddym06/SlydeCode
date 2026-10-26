@@ -18,5 +18,5 @@ pub use model::{
 pub use project::{FILE_EXTENSION, FORMAT_ID, FORMAT_VERSION, ProjectFile};
 pub use state::{
     DEFAULT_COALESCE_WINDOW_MS, DEFAULT_MAX_CODE_BYTES, DEFAULT_MAX_HISTORY, DEFAULT_MAX_SLIDES,
-    HistoryEntry, Limits, PresentationState, UpsertOutcome, new_slide_id,
+    HistoryEntry, Limits, PresentationState, TemplateSlide, UpsertOutcome, new_slide_id,
 };

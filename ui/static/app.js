@@ -6,6 +6,7 @@ import {
   tickActivity,
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
+import { hasBeenWelcomed, isPristineDeck, mountWelcome } from "./welcome.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
@@ -45,6 +46,7 @@ function boot(sessionToken) {
   const client = createClient(sessionToken);
 
   let view = null;
+  let welcome = null;
   let sandboxOrigin = "";
   // Authorizes slide documents only. It is embedded in every iframe URL, so a
   // slide's own script can read it; the session token stays out of that document.
@@ -190,6 +192,12 @@ function boot(sessionToken) {
         label: t("action.library"),
         hint: "L",
         run: () => openLibrary(),
+      },
+      {
+        id: "deck.welcome",
+        group: t("palette.group.deck"),
+        label: t("welcome.menu"),
+        run: () => welcome?.open(),
       },
       {
         id: "deck.new",
@@ -2059,6 +2067,13 @@ function boot(sessionToken) {
         notify: toast,
         getDeckId: () => activeDeckId,
       });
+      document.getElementById("topbar-welcome")?.addEventListener("click", () => welcome?.open());
+      welcome = mountWelcome({
+        copilot,
+        getSize: () => canvasSize("16:9"),
+        applyTemplate: (template) => run("apply_template", template),
+      });
+      if (!hasBeenWelcomed() && isPristineDeck(deck())) welcome.open();
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {
       showFatal(error.message);

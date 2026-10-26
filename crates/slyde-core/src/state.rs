@@ -493,6 +493,47 @@ impl PresentationState {
         Ok(())
     }
 
+    /// Replaces the deck's content with a ready-made one (a template) as one
+    /// undoable step. The deck keeps its identity; only what it holds changes.
+    pub fn apply_template(
+        &mut self,
+        title: &str,
+        theme: Theme,
+        aspect_ratio: AspectRatio,
+        slides: Vec<TemplateSlide>,
+    ) -> Result<(), CoreError> {
+        theme.validate()?;
+        if slides.is_empty() {
+            return Err(CoreError::EmptySlideCode);
+        }
+        if slides.len() > self.limits.max_slides {
+            return Err(CoreError::SlideLimit {
+                max: self.limits.max_slides,
+            });
+        }
+        let mut next = Presentation::new(title, theme, aspect_ratio);
+        for item in slides {
+            if item.code.trim().is_empty() {
+                return Err(CoreError::EmptySlideCode);
+            }
+            if item.code.len() > self.limits.max_code_bytes {
+                return Err(CoreError::CodeTooLarge {
+                    actual: item.code.len(),
+                    max: self.limits.max_code_bytes,
+                });
+            }
+            let mut slide = Slide::new(new_slide_id(), crate::html::ensure_element_ids(&item.code));
+            slide.template = item.template;
+            slide.notes = item.notes.filter(|notes| !notes.trim().is_empty());
+            slide.animation = item.animation;
+            validate_animation(&slide.animation)?;
+            slide.transition = item.transition;
+            next.slides.push(slide);
+        }
+        self.commit("apply_template", next);
+        Ok(())
+    }
+
     /// Sets the transition into one slide, or into every slide when `slide_ids`
     /// is `None`. `None` as the transition clears it (a cut).
     pub fn set_transition(
@@ -755,6 +796,16 @@ impl PresentationState {
             self.cursor = self.cursor.saturating_sub(excess);
         }
     }
+}
+
+/// One slide of a template, as the studio sends it.
+#[derive(Debug, Clone)]
+pub struct TemplateSlide {
+    pub code: String,
+    pub template: TemplateType,
+    pub notes: Option<String>,
+    pub animation: Vec<AnimationStep>,
+    pub transition: Option<Transition>,
 }
 
 pub fn new_slide_id() -> SlideId {
@@ -2268,6 +2319,57 @@ mod tests {
         assert!(
             s.presentation().slides[1].code.contains("1</h1>"),
             "one undo restores both slides"
+        );
+    }
+
+    #[test]
+    fn a_template_replaces_the_deck_in_one_undoable_step() {
+        let mut s = PresentationState::new("Old", Theme::studio(), AspectRatio::R16x9);
+        s.upsert_slide(0, None, "<h1>old</h1>".into(), TemplateType::Hero, vec![])
+            .unwrap();
+        let slides = vec![
+            TemplateSlide {
+                code: "<h1>One</h1>".into(),
+                template: TemplateType::Hero,
+                notes: Some("Say hello".into()),
+                animation: vec![],
+                transition: Some(Transition {
+                    kind: TransitionKind::Fade,
+                    duration_ms: 400,
+                }),
+            },
+            TemplateSlide {
+                code: "<ul><li>a</li><li>b</li></ul>".into(),
+                template: TemplateType::Bullet,
+                notes: Some("   ".into()),
+                animation: vec![],
+                transition: None,
+            },
+        ];
+        s.apply_template(
+            "Pitch",
+            Theme::resolve("night").unwrap(),
+            AspectRatio::R4x3,
+            slides,
+        )
+        .unwrap();
+        let deck = s.presentation();
+        assert_eq!(deck.title, "Pitch");
+        assert_eq!(deck.theme.id, "night");
+        assert_eq!(deck.aspect_ratio, AspectRatio::R4x3);
+        assert_eq!(deck.slides.len(), 2);
+        assert_eq!(deck.slides[0].notes.as_deref(), Some("Say hello"));
+        assert!(deck.slides[1].notes.is_none(), "blank notes are dropped");
+        assert!(deck.slides[0].transition.is_some());
+        s.undo().unwrap();
+        assert_eq!(
+            s.presentation().title,
+            "Old",
+            "one undo brings the old deck back"
+        );
+        assert!(
+            s.apply_template("X", Theme::studio(), AspectRatio::R16x9, vec![])
+                .is_err()
         );
     }
 }

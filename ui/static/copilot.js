@@ -2,6 +2,7 @@
 // status. The server owns provider keys and the tool loop; this module never
 // sees a key and never renders provider-authored free text.
 
+import { recommendedModel } from "./onboarding-models.js";
 import { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } from "./copilot-work.js";
 import { lang, onLangChange, t } from "./i18n.js";
 import { createModelSheet } from "./copilot-model-sheet.js";
@@ -1389,6 +1390,42 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     },
     isStreaming() {
       return streaming;
+    },
+    /** True when a provider with a saved key and a chosen model is ready. */
+    isConnected() {
+      const provider = activeProvider();
+      return Boolean(provider && provider.configured && modelId);
+    },
+    /**
+     * One-step setup for the welcome wizard: saves the key, picks a model that
+     * writes slides well and makes it the active selection.
+     */
+    async connect(provider, key) {
+      const models = await client.copilotSaveKey(provider, key);
+      const model = recommendedModel(provider, models);
+      if (!model) {
+        const error = new Error("no_model");
+        error.code = "no_model";
+        throw error;
+      }
+      if (config && config.providers) {
+        config = {
+          ...config,
+          providers: config.providers.map((item) =>
+            item.id === provider ? { ...item, configured: true } : item
+          ),
+        };
+      }
+      providerId = provider;
+      modelId = model;
+      persistSelection();
+      syncHeader();
+      return { model };
+    },
+    /** Provider list for the wizard (loads the configuration when needed). */
+    async providers() {
+      if (!config) await loadConfig();
+      return config && config.providers ? config.providers : [];
     },
   };
 }

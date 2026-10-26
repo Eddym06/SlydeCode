@@ -51,7 +51,7 @@ function waitForAppUrl(child) {
   });
 }
 
-export async function startStudio({ viewport = { width: 1280, height: 800 } } = {}) {
+export async function startStudio({ viewport = { width: 1280, height: 800 }, welcomed = true } = {}) {
   const binary = findBinary();
   if (!binary) throw new Error("slyde binary not found. Run `cargo build` or set SLYDE_BIN.");
   const dataDir = mkdtempSync(join(tmpdir(), "slyde-ui-panels-"));
@@ -68,7 +68,7 @@ export async function startStudio({ viewport = { width: 1280, height: 800 } } = 
   const appUrl = await waitForAppUrl(server);
   const token = new URL(appUrl).searchParams.get("t");
   const browser = await launchChrome({ viewport });
-  const page = await browser.newPage(appUrl);
+  const page = await browser.newPage(appUrl, { welcomed });
   await page.waitFor("document.querySelectorAll('.thumb').length >= 1");
 
   /** POSTs a studio command and waits for the UI to see the new state. */
