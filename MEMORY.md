@@ -310,13 +310,11 @@ MIT and the license is compatible with a commercial product.
 
 ## Brand mark (2026-10-27)
 
-- One symbol for the product and the copilot: a slide with a prompt chevron, a
-  caret and a spark. Source of truth: `assets/brand/slydecode-mark.svg` (app
-  icon, favicon, README). The copilot glyph (`sparkSvg()` in `copilot.js`, plus
-  the static copies in `ui/index.html`) is the same drawing in `currentColor`;
-  keep them in sync. It replaces the generic four-point sparkle and the old
-  stacked-slides logo (raster `logo.png` files deleted).
-- PNG/ICO are rendered from the SVG (Chromium screenshot); regenerate them
-  rather than editing by hand. README uses a light/dark `<picture>` pair because
-  the wordmark is transparent.
-
+- The product logo is the stacked-slides mark with `</>` in the violet-to-coral
+  gradient: `assets/brand/slydecode-mark.svg` (app icon, favicon, README). The
+  user likes it; do not replace it. PNG/ICO are rendered from the SVG with a
+  Chromium screenshot. README uses a light/dark `<picture>` pair because the
+  wordmark is transparent.
+- Only the copilot glyph (`sparkSvg()` in `copilot.js` and the static copies in
+  `ui/index.html`) uses the separate "slide + prompt + spark" drawing; keep those
+  copies in sync.
