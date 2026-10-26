@@ -12,6 +12,19 @@ const esc = (text) =>
 
 const clean = (text) => String(text || "").replace(/\s+/g, " ").trim();
 
+/** The words a fragment shows, as plain text (tags and style blocks dropped). */
+function visibleText(html) {
+  return clean(
+    html
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&")
+  );
+}
+
 /**
  * Reads the content of a slide's markup.
  * @param {string} code the slide source
@@ -21,6 +34,21 @@ export function extractContent(code, parse = (html) => new DOMParser().parseFrom
   const doc = parse(`<body>${code}</body>`);
   doc.querySelectorAll("style, script").forEach((node) => node.remove());
   const text = (node) => clean(node && node.textContent);
+
+  // A layout remembers every word the slide had when it was applied, because a
+  // layout shows only some of them (a cover has no bullets). While the visible
+  // text is untouched the full content comes back; if the user edited it, their
+  // words win and only what the layout hid is filled in from memory.
+  const marked = doc.querySelector("[data-layout-content]");
+  let stored = null;
+  if (marked) {
+    try {
+      stored = JSON.parse(marked.getAttribute("data-layout-content"));
+    } catch {
+      stored = null;
+    }
+    if (stored && marked.getAttribute("data-layout-sig") === visibleText(code)) return stored;
+  }
 
   const eyebrow = text(doc.querySelector(".eyebrow"));
   const heading = doc.querySelector(".title") || doc.querySelector("h1, h2, h3");
@@ -41,13 +69,22 @@ export function extractContent(code, parse = (html) => new DOMParser().parseFrom
     // No heading: the first block of text plays that role.
     headline = paragraphs.shift() || subtitle || bullets[0] || "";
   }
-  return {
+  const found = {
     eyebrow,
     title: headline,
     subtitle,
     paragraphs,
     bullets,
     image: image && image.getAttribute("src") ? image.getAttribute("src") : "",
+  };
+  if (!stored) return found;
+  return {
+    eyebrow: found.eyebrow || stored.eyebrow || "",
+    title: found.title || stored.title || "",
+    subtitle: found.subtitle || stored.subtitle || "",
+    paragraphs: found.paragraphs.length ? found.paragraphs : stored.paragraphs || [],
+    bullets: found.bullets.length ? found.bullets : stored.bullets || [],
+    image: found.image || stored.image || "",
   };
 }
 
@@ -60,12 +97,13 @@ export function leadNumber(content) {
 
 const BASE = `.slide{position:absolute;inset:0;display:flex;flex-direction:column;box-sizing:border-box}`;
 
-function shell(name, css, body, size) {
+function shell(name, css, body, size, content) {
   const { w, h } = size;
   const u = Math.min(w / 1280, h / 720);
   // Pixel sizes below are authored for a 1280x720 canvas and scaled by `u`.
   const px = (value) => `${Math.round(value * u * 10) / 10}px`;
-  return `<div class="slide ${name}">${body}</div>
+  const memory = esc(JSON.stringify(content));
+  return `<div class="slide ${name}" data-layout-content="${memory}" data-layout-sig="${esc(visibleText(body))}">${body}</div>
 <style>
   ${BASE}
   .${name}{padding:${px(84)} ${px(92)};}
@@ -99,7 +137,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-bullet .points li{position:relative;padding-left:${px(34)};font-size:${px(32)};line-height:1.35;}
   .layout-bullet .points li::before{content:"";position:absolute;left:0;top:.55em;width:${px(14)};height:${px(14)};border-radius:50%;background:var(--slyde-accent);}`,
         body,
-        size
+        size,
+        content
       );
     }
     case "image_layout": {
@@ -120,7 +159,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-image .media-empty{background:linear-gradient(135deg,var(--slyde-accent),transparent 120%);opacity:.55;}
   .layout-image .points{margin:0;padding-left:1.1em;font-size:${px(26)};line-height:1.5;color:var(--slyde-muted);}`,
         body,
-        size
+        size,
+        content
       );
     }
     case "two_columns": {
@@ -141,7 +181,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-columns .col{display:grid;gap:${px(18)};align-content:start;border-top:${px(3)} solid var(--slyde-accent);padding-top:${px(20)};}
   .layout-columns .col p{margin:0;font-size:${px(26)};line-height:1.5;}`,
         body,
-        size
+        size,
+        content
       );
     }
     case "quote": {
@@ -159,7 +200,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-quote .by{margin-top:${px(10)};font-size:${px(22)};}
   .layout-quote .by::before{content:"— ";}`,
         body,
-        size
+        size,
+        content
       );
     }
     case "big_number": {
@@ -175,7 +217,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-number .figure{margin:0;font-size:${px(230)};line-height:.9;letter-spacing:-.05em;font-weight:650;color:var(--slyde-accent);}
   .layout-number .label{font-size:${px(34)};color:var(--slyde-fg);max-width:24ch;}`,
         body,
-        size
+        size,
+        content
       );
     }
     case "section": {
@@ -187,7 +230,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-section .title{font-size:${px(96)};max-width:14ch;}
   .layout-section .rule{display:block;width:${px(120)};height:${px(8)};border-radius:${px(4)};background:var(--slyde-accent);}`,
         body,
-        size
+        size,
+        content
       );
     }
     default: {
@@ -199,7 +243,8 @@ export function renderLayout(layout, content, size = { w: 1280, h: 720 }) {
   .layout-hero{justify-content:center;gap:${px(24)};}
   .layout-hero .title{font-size:${px(84)};}`,
         body,
-        size
+        size,
+        content
       );
     }
   }

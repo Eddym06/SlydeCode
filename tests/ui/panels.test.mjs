@@ -216,6 +216,13 @@ async function resetToOneSlide(code) {
   await page.evaluate(`document.getElementById("subtab-slide").click(); true`);
 }
 
+async function ensureSlides(count) {
+  for (let current = (await slides()).length; current < count; current += 1) {
+    await studio.command("add_slide", { template: "hero" });
+  }
+  await page.waitFor(`document.querySelectorAll(".thumb").length === ${count}`);
+}
+
 test("a slide written without a template is labeled from its content, not as code", async () => {
   const count = (await slides()).length;
   await page.evaluate(`fetch("/api/agent?t=${studio.token}", {
@@ -252,7 +259,29 @@ test("a layout keeps the slide's words and can be applied to the whole deck", as
   assert.equal((await firstSlide()).template, "custom");
 });
 
+test("switching layouts never loses words the previous layout did not show", async () => {
+  await resetToOneSlide(
+    `<span class="eyebrow">Q3</span><h1 class="title">Growth</h1><p class="sub">Up 72% on last year</p><ul><li>New customers doubled</li><li>Churn fell to 2%</li></ul>`
+  );
+  const apply = async (layout) => {
+    await page.evaluate(`document.querySelector('[data-layout="${layout}"]').click(); true`);
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if ((await firstSlide()).code.includes(`layout-${{ hero: "hero", bullet: "bullet", big_number: "number" }[layout]}`)) return;
+      await sleep(100);
+    }
+  };
+  await page.waitFor(`document.querySelector('[data-layout="hero"]')`);
+  await apply("hero");
+  assert.ok(!(await firstSlide()).code.includes("<li>"), "a cover shows no bullets");
+  await apply("big_number");
+  await apply("bullet");
+  const code = (await firstSlide()).code;
+  assert.ok(code.includes("New customers doubled") && code.includes("Churn fell to 2%"), "the bullets came back");
+  assert.ok(code.includes("Growth"), "and so did the original title");
+});
+
 test("transitions are stored per slide and can be applied to every slide", async () => {
+  await ensureSlides(2);
   await page.evaluate(`document.querySelector('[data-transition="zoom"]').click(); true`);
   for (let attempt = 0; attempt < 30 && (await firstSlide()).transition?.kind !== "zoom"; attempt += 1) await sleep(100);
   assert.equal((await firstSlide()).transition.kind, "zoom");
@@ -266,6 +295,7 @@ test("transitions are stored per slide and can be applied to every slide", async
 });
 
 test("named versions can be saved and restored, and a restore is undoable", async () => {
+  await ensureSlides(2);
   await page.evaluate(`document.getElementById("subtab-deck").click(); true`);
   await page.waitFor(`document.querySelector(".version-input")`);
   await page.evaluate(`(() => {
