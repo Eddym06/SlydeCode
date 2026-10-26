@@ -1,3 +1,4 @@
+import { trapFocus } from "./focus-trap.js";
 // Deck library sheet.
 //
 // Before this existed the studio had one deck: starting another one replaced it.
@@ -36,7 +37,7 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
+export function mountDeckLibrary({ root, client, t, notify, onApplied, coverUrl }) {
   if (!root) throw new Error("deck library needs a root element");
 
   let decks = [];
@@ -49,6 +50,26 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
   // Filled in by the consumer: the sheet renders translated markup itself, so it
   // needs the same `apply(root)` pass the rest of the UI uses.
   let applyI18n = () => {};
+  // One iframe per deck revision, kept across re-renders so typing in the search
+  // box does not reload every thumbnail.
+  const covers = new Map();
+
+  function coverFor(deck) {
+    if (typeof coverUrl !== "function" || !deck.slides) return null;
+    const key = `${deck.id}:${deck.updated_at_ms}:${deck.slides}`;
+    let frame = covers.get(key);
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.setAttribute("sandbox", "allow-scripts");
+      frame.setAttribute("loading", "lazy");
+      frame.setAttribute("tabindex", "-1");
+      frame.setAttribute("aria-hidden", "true");
+      frame.title = "";
+      frame.src = coverUrl(deck.id);
+      covers.set(key, frame);
+    }
+    return frame;
+  }
 
   root.innerHTML = `
     <div class="library-scrim" data-library-action="close"></div>
@@ -128,6 +149,8 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
     const confirming = confirmDeleteId === deck.id;
     return `
       <li class="deck-row${isActive ? " is-active" : ""}" data-deck-id="${escapeHtml(deck.id)}">
+        <span class="deck-cover" data-cover="${escapeHtml(deck.id)}" aria-hidden="true"
+              style="aspect-ratio:${escapeHtml(String(deck.aspect_ratio || "16:9").replace(":", "/"))}"></span>
         <button type="button" class="deck-open" data-library-action="open" data-deck-id="${escapeHtml(deck.id)}">
           <span class="deck-title">${escapeHtml(deck.title)}</span>
           <span class="deck-meta">${metaLine(deck)}</span>
@@ -160,6 +183,11 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
   function render() {
     const rows = visibleDecks();
     els.list.innerHTML = rows.map(rowMarkup).join("");
+    rows.forEach((deck) => {
+      const slot = els.list.querySelector(`[data-cover="${CSS.escape(deck.id)}"]`);
+      const frame = slot && coverFor(deck);
+      if (slot && frame) slot.append(frame);
+    });
     els.empty.hidden = rows.length > 0;
     if (decks.length === 0) {
       els.empty.textContent = t("library.empty");
@@ -295,11 +323,14 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
 
   document.addEventListener("keydown", onKeydown);
 
+  let releaseTrap = null;
+
   function openSheet() {
     if (open) return;
     open = true;
     lastFocus = document.activeElement;
     root.hidden = false;
+    releaseTrap = trapFocus(root);
     query = "";
     editingId = null;
     confirmDeleteId = null;
@@ -316,6 +347,8 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
     editingId = null;
     confirmDeleteId = null;
     root.hidden = true;
+    if (releaseTrap) releaseTrap();
+    releaseTrap = null;
     showError(null);
     if (lastFocus && typeof lastFocus.focus === "function") {
       lastFocus.focus({ preventScroll: true });

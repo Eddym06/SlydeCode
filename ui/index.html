@@ -184,7 +184,18 @@
       <aside class="rail">
         <div class="panel-head">
           <span data-i18n="storyboard.title">Storyboard</span>
-          <span class="count" id="slide-count"></span>
+          <span class="panel-head-tools">
+            <span class="count" id="slide-count"></span>
+            <button type="button" class="icon-btn icon-btn-sm" id="storyboard-view" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg>
+            </button>
+          </span>
+        </div>
+        <div class="bulk-bar" id="bulk-bar" hidden>
+          <span class="bulk-count" data-bulk-count></span>
+          <button type="button" class="bulk-btn" data-bulk="duplicate" data-i18n="storyboard.duplicate">Duplicate</button>
+          <button type="button" class="bulk-btn bulk-danger" data-bulk="delete" data-i18n="storyboard.delete">Delete</button>
+          <button type="button" class="bulk-btn" data-bulk="clear" data-i18n-aria="shortcuts.close" aria-label="Close">✕</button>
         </div>
         <div class="storyboard" id="storyboard" data-i18n-aria="storyboard.title" aria-label="Storyboard"></div>
         <div class="add-slide-wrap">

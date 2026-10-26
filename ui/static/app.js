@@ -12,7 +12,7 @@ import { createReveal, keyToAction, progressPercent } from "./presenter-core.js"
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { mountMenus } from "./menus.js";
 import { mountShortcuts } from "./shortcuts.js";
-import { templateIcon } from "./template-icons.js";
+import { layoutPreview } from "./layout-previews.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
@@ -348,8 +348,19 @@ function boot(sessionToken) {
 
   function setDrawer(open) {
     const next = Boolean(open) && narrowQuery.matches;
+    const wasOpen = $("app").dataset.panel === "open";
     $("app").dataset.panel = next ? "open" : "closed";
     panelToggle.setAttribute("aria-expanded", String(next));
+    // Move focus into the drawer when it opens and back to its button on close,
+    // so a keyboard user never loses their place behind the slide-over.
+    if (next && !wasOpen) {
+      window.setTimeout(() => {
+        const tab = document.querySelector('#right-panel [role="tab"][aria-selected="true"]');
+        if (tab) tab.focus();
+      }, 60);
+    } else if (!next && wasOpen && $("right-panel").contains(document.activeElement)) {
+      panelToggle.focus();
+    }
   }
 
   panelToggle.addEventListener("click", () => setDrawer($("app").dataset.panel !== "open"));
@@ -717,6 +728,8 @@ function boot(sessionToken) {
   /// The storyboard is its own module; the shell only hands it the slides.
   const storyboard = createStoryboard({
     root: els.storyboard,
+    bulkBar: $("bulk-bar"),
+    viewToggle: $("storyboard-view"),
     t,
     escapeHtml,
     hash,
@@ -1165,23 +1178,30 @@ function boot(sessionToken) {
     const closeBtn = els.closeTemplatePopover;
     if (!popover || !grid) return;
 
-    grid.innerHTML = "";
-    TEMPLATES.forEach((tpl) => {
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "template-card";
-      card.innerHTML = `<span class="template-card-icon">${templateIcon(tpl.id)}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
-      card.addEventListener("click", () => {
-        popover.hidden = true;
-        run("add_slide", { template: tpl.id });
+    // Rebuilt on open so the previews always wear the deck's current theme.
+    function renderCards() {
+      const themeId = deck() && deck().theme ? deck().theme.id : "studio";
+      grid.innerHTML = "";
+      TEMPLATES.forEach((tpl, index) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "template-card";
+        card.style.setProperty("--i", String(index));
+        card.innerHTML = `<span class="template-card-icon">${layoutPreview(tpl.id, themeId)}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
+        card.addEventListener("click", () => {
+          popover.hidden = true;
+          run("add_slide", { template: tpl.id });
+        });
+        grid.append(card);
       });
-      grid.append(card);
-    });
+    }
+    renderCards();
 
     if (pickerBtn) {
       pickerBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         popover.hidden = !popover.hidden;
+        if (!popover.hidden) renderCards();
       });
     }
     if (closeBtn) {
@@ -1918,6 +1938,8 @@ function boot(sessionToken) {
         buildActions: buildPaletteActions,
       });
       library = mountDeckLibrary({
+        coverUrl: (deckId) =>
+          `${sandboxOrigin}/d/${encodeURIComponent(deckId)}?static=1${sourceQuery}`,
         root: $("deck-library"),
         client,
         t,

@@ -105,6 +105,7 @@ pub fn sandbox_router(state: Arc<AppState>) -> Router {
         .route("/assets/{name}", get(crate::asset_api::serve_asset))
         .route("/print", get(print_document))
         .route("/s/{id}", get(sandbox_slide))
+        .route("/d/{deck_id}", get(sandbox_deck_cover))
         .with_state(state)
 }
 
@@ -510,6 +511,48 @@ async fn sandbox_slide(
     let is_edit = query.edit.as_deref() == Some("1");
     let html = sandbox::render_document(deck, slide, is_static, is_edit);
 
+    let mut response = Html(html).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(sandbox::csp_header()),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+/// First slide of any deck in the library, as a static slide document.
+///
+/// The library sheet shows one thumbnail per deck without opening it. The active
+/// deck is read from memory (its file may be a debounce behind); the others come
+/// from disk. Nothing here launches a browser.
+async fn sandbox_deck_cover(
+    State(state): State<Arc<AppState>>,
+    Path(deck_id): Path<String>,
+    Query(auth): Query<AuthQuery>,
+) -> Response {
+    if !crate::state::is_slide_authorized(&state, &auth) {
+        return unauthorized();
+    }
+    let Some(library) = state.library.clone() else {
+        return (StatusCode::NOT_FOUND, "no deck library").into_response();
+    };
+    let deck = if library.active().as_deref() == Some(deck_id.as_str()) {
+        state.core.read().await.presentation().clone()
+    } else {
+        match library.load(&deck_id) {
+            Ok(Some(deck)) => deck,
+            _ => return (StatusCode::NOT_FOUND, "deck not found").into_response(),
+        }
+    };
+    let Some(slide) = deck.slides.first() else {
+        return (StatusCode::NOT_FOUND, "this deck has no slides").into_response();
+    };
+    let html = sandbox::render_document(&deck, slide, true, false);
     let mut response = Html(html).into_response();
     let headers = response.headers_mut();
     headers.insert(

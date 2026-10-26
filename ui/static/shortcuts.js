@@ -1,6 +1,8 @@
 // Keyboard shortcut sheet, opened with "?". It owns its own markup so the shell
 // only has to mount it; strings come from the locale dictionaries.
 
+import { trapFocus } from "./focus-trap.js";
+
 const GROUPS = [
   {
     title: "shortcuts.studio",
@@ -59,16 +61,20 @@ export function mountShortcuts({ t, applyI18n }) {
 
   const sheet = root.querySelector(".shortcuts-sheet");
   let returnFocus = null;
+  let release = null;
 
   function open() {
     returnFocus = document.activeElement;
     applyI18n(root);
     root.hidden = false;
+    release = trapFocus(sheet);
     sheet.focus();
   }
 
   function close() {
     root.hidden = true;
+    if (release) release();
+    release = null;
     if (returnFocus && typeof returnFocus.focus === "function") returnFocus.focus();
   }
 

@@ -1,4 +1,4 @@
-// Studio inspector: slide tab, deck tab and the animation timeline.
+// Studio design panel (the "inspector"): slide tab, deck tab and the animation timeline.
 //
 // It used to live inside the studio's boot closure, which made the shell 2,400
 // lines of intertwined state and markup. The inspector is a self-contained panel:
@@ -8,6 +8,8 @@
 // The DOM ids are deliberately unchanged (`#theme-select`, `#notes`, `#export-pdf`,
 // …): they are the contract with the export progress handler and with the E2E
 // suite. What changed is who owns the markup and the event wiring.
+
+import { createCodeEditor } from "./code-editor.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
 export const THEME_CHOICES = [
@@ -53,6 +55,8 @@ export function createInspector({ root, t, escapeHtml, actions }) {
   let subtab = "slide";
   let notesTimer = null;
   let lastEnterKey = "";
+  let codeEditor = null; // survives re-renders so typing is never overwritten
+  let devOpen = false;
   let current = { deck: null, slide: null, selectedElement: null, structureNodes: [] };
 
   // ---------- building blocks ----------
@@ -363,10 +367,10 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       card(3, "elements", t("tree.title"), tree, {
         extra: structureNodes.length ? `<span class="card-count">${structureNodes.length}</span>` : "",
       }),
-      `<details class="dev card" style="--i:4">
+      `<details class="dev card" style="--i:4"${devOpen ? " open" : ""}>
         <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
-        <pre class="dev-code">${escapeHtml(slide.code)}</pre>
+        <div id="code-editor-host"></div>
       </details>`,
     ].join("");
   }
@@ -429,6 +433,31 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     actions.applyI18n(root);
   }
 
+  function mountCodeEditor(slide, editorState) {
+    const host = root.querySelector("#code-editor-host");
+    const details = root.querySelector("details.dev");
+    if (details) {
+      details.addEventListener("toggle", () => {
+        devOpen = details.open;
+      });
+    }
+    if (!host) return;
+    if (codeEditor && codeEditor.slideId === slide.id) {
+      if (!codeEditor.dirty && !editorState) codeEditor.setValue(slide.code);
+    } else {
+      codeEditor = createCodeEditor({
+        value: slide.code,
+        label: t("inspector.developer"),
+        onSave: (code) =>
+          actions.command("set_slide_code", { slide_id: slide.id, code }, { silent: true }),
+        onBlur: () => window.setTimeout(() => render(), 0),
+      });
+      codeEditor.slideId = slide.id;
+    }
+    host.append(codeEditor.el);
+    if (editorState) codeEditor.restore(editorState);
+  }
+
   // ---------- render ----------
 
   function render(state = current) {
@@ -463,6 +492,10 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     const showSlide = subtab === "slide";
+    // The editor outlives the markup: detach it so the rebuild does not destroy
+    // the text the user is typing (and its caret).
+    const editorState = codeEditor && codeEditor.focused ? codeEditor.selection() : null;
+    if (codeEditor) codeEditor.el.remove();
     root.innerHTML = `
       <div id="inspector-slide-section" ${showSlide ? "" : 'style="display:none"'}>
         ${slideMarkup(currentSlide, { selectedElement, structureNodes })}
@@ -513,6 +546,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     bindAnimationEditor(currentSlide);
+    mountCodeEditor(currentSlide, editorState);
 
     const remove = root.querySelector("#delete-slide");
     if (remove) {
