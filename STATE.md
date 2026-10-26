@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 15:30
+> Last updated: 2026-10-26 13:30
 
 ## Current Phase
 
@@ -31,6 +31,27 @@ old suite:
   the gnu profile by list order instead of by recency.
 
 ## Implemented & Working
+
+### Copilot efficiency and UI polish (2026-10-26)
+
+- New copilot tools `build_deck` (create + every slide, notes and animations in
+  one call) and `write_slides` (batch replace/append). A scripted-provider test
+  drives the real loop: a six-slide deck takes **2 provider calls** (it used to
+  take one per slide plus notes). `upsert_slide` clamps a guessed index instead
+  of failing, and executed tool calls are stubbed in the resent history
+  (`compact_history`), so later rounds no longer replay slide source.
+- Bug: slide documents (opaque origin) could not load Geist from the sandbox port
+  (CORS). `/fonts` and `/vendor` on the sandbox now send `Access-Control-Allow-Origin: *`.
+- Bug: the shell grid had no column track, so at <1100px Export/Present were
+  pushed off-screen and the copilot was hidden. Now the right panel is a
+  slide-over drawer (topbar toggle, Esc/outside click closes) and the topbar
+  collapses progressively down to 560px.
+- Template icons are SVG (`template-icons.js`) instead of emoji; copilot
+  suggestion chips follow the selection (block / slide / deck) and hide until a
+  provider is connected.
+- E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
+  the PDF export test fails on the untouched baseline in this container.
+
 
 ### Deck library (new)
 

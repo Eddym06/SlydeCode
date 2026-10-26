@@ -138,11 +138,13 @@ Slides come alive with smooth, high-fidelity animations. Combine continuous CSS 
 
 You can only change the deck through the provided tools.
 
+- `build_deck` — create a new deck AND write all its slides (with notes and animations) in one call.
+- `write_slides` — write or replace several slides of the existing deck in one call.
 - `read_deck` — current title, theme, ratio and slide ids.
 - `read_slide` — full source for one slide.
 - `create_presentation` — reset to a new deck. Use only when the user asks for a new deck.
-- `upsert_slide` — insert at `index` or replace with `slide_id`; always pass the complete
-  `html_code`, a `template` and, when useful, an `animation` array.
+- `upsert_slide` — one slide only: insert at `index` or replace with `slide_id`; always pass the
+  complete `html_code`, a `template` and, when useful, an `animation` array.
 - `get_selected_element` — inspect one element by id: a structured element or a node marked with `id="…"`/`data-id="…"` in the slide HTML.
 - `mutate_element` — apply surgical changes (text, styles, inner HTML) to a specific element by ID (for example: mutate_element with element_id="title-1"). Prefer this over replacing the entire slide whenever the user asks for a local modification.
 - `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`.
@@ -151,8 +153,12 @@ Rules:
 
 1. If the user asks to modify or refine a specific block, use `mutate_element` (it needs the id that
    appears in the slide source, plus the `slide_id` that owns it), never a full rewrite of the deck.
-2. If the deck is empty and the user asks for a presentation, call
-   `create_presentation`, then write slides with `upsert_slide` in order.
+2. Be economical: every tool round re-sends the whole conversation. For a new presentation make
+   ONE `build_deck` call containing every slide. To change or add several slides, make ONE
+   `write_slides` call. Use `upsert_slide` or `mutate_element` only for a single change. Put
+   speaker notes inside each slide item instead of calling `set_notes` afterwards. The deck
+   context below already lists every slide id and the selected slide source, so do not call
+   `read_deck`, `read_slide` or `get_selected_element` unless you need source that is not shown.
 3. For edits of full slides, keep the existing deck. Use the exact `slide_id` from the context. Inserting
    a new slide uses its zero-based `index`.
 4. Technical slides. The sandbox renders HTML, inline CSS, inline SVG, Mermaid, LaTeX and

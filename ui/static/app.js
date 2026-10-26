@@ -10,6 +10,7 @@ import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { templateIcon } from "./template-icons.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
@@ -139,6 +140,7 @@ function boot(sessionToken) {
 
   function askCopilotForElement(text) {
     setPanel("copilot");
+    setDrawer(true);
     if (copilot && typeof copilot.ask === "function") {
       copilot.ask(text);
       return;
@@ -242,7 +244,7 @@ function boot(sessionToken) {
         id: `slide.add.${template.id}`,
         group: t("palette.group.slide"),
         label: t(`template.${template.id}`),
-        hint: `+ ${template.icon}`,
+        hint: "+",
         run: () => run("add_slide", { template: template.id }),
       });
     });
@@ -325,6 +327,28 @@ function boot(sessionToken) {
       $(copilotActive ? "tab-copilot" : "tab-inspector").focus();
     }
   }
+
+  // Below 1100px the right panel is a slide-over drawer instead of a column, so
+  // the copilot stays reachable on a small window.
+  const narrowQuery = window.matchMedia("(max-width: 1100px)");
+  const panelToggle = $("panel-toggle");
+
+  function setDrawer(open) {
+    const next = Boolean(open) && narrowQuery.matches;
+    $("app").dataset.panel = next ? "open" : "closed";
+    panelToggle.setAttribute("aria-expanded", String(next));
+  }
+
+  panelToggle.addEventListener("click", () => setDrawer($("app").dataset.panel !== "open"));
+  narrowQuery.addEventListener("change", () => setDrawer(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && $("app").dataset.panel === "open") setDrawer(false);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if ($("app").dataset.panel !== "open") return;
+    if (event.target.closest("#right-panel, #panel-toggle, .sheet, .library, [role='dialog']")) return;
+    setDrawer(false);
+  });
 
   $("tab-inspector").addEventListener("click", () => setPanel("inspector"));
   $("tab-copilot").addEventListener("click", () => setPanel("copilot"));
@@ -637,12 +661,23 @@ function boot(sessionToken) {
       delete els.copilotContextPill.dataset.target;
     }
 
-    const suggestions = [
-      t("copilot.prompt.summarize"),
-      t("copilot.prompt.action"),
-      t("copilot.prompt.animate"),
-      t("copilot.prompt.punchline"),
-    ];
+    // Suggestions follow what the user is looking at: a block, a slide, or a
+    // whole deck, so each chip is a request the copilot can act on right away.
+    const suggestions = canvas.selectedElement
+      ? [
+          t("copilot.prompt.elemShorter"),
+          t("copilot.prompt.elemStandOut"),
+          t("copilot.prompt.elemRewrite"),
+        ]
+      : d.slides.length >= 3 && !current
+        ? [t("copilot.prompt.notes"), t("copilot.prompt.consistency")]
+        : [
+            t("copilot.prompt.summarize"),
+            t("copilot.prompt.action"),
+            t("copilot.prompt.animate"),
+            t("copilot.prompt.punchline"),
+            ...(d.slides.length >= 3 ? [t("copilot.prompt.notes")] : []),
+          ];
 
     els.copilotPromptPills.innerHTML = "";
     suggestions.forEach((text) => {
@@ -985,6 +1020,7 @@ function boot(sessionToken) {
   $("empty-cta").addEventListener("click", () => run("add_slide", { template: "hero" }));
   $("empty-copilot").addEventListener("click", () => {
     setPanel("copilot");
+    setDrawer(true);
     if (copilot) copilot.focus();
   });
 
@@ -1092,12 +1128,12 @@ function boot(sessionToken) {
   });
 
   const TEMPLATES = [
-    { id: "hero", icon: "✨" },
-    { id: "bullet", icon: "📋" },
-    { id: "diagram", icon: "📊" },
-    { id: "chart", icon: "📈" },
-    { id: "image_layout", icon: "🖼️" },
-    { id: "code", icon: "💻" },
+    { id: "hero" },
+    { id: "bullet" },
+    { id: "diagram" },
+    { id: "chart" },
+    { id: "image_layout" },
+    { id: "code" },
   ];
 
   function setupTemplatePicker() {
@@ -1112,7 +1148,7 @@ function boot(sessionToken) {
       const card = document.createElement("button");
       card.type = "button";
       card.className = "template-card";
-      card.innerHTML = `<span class="template-card-icon">${tpl.icon}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
+      card.innerHTML = `<span class="template-card-icon">${templateIcon(tpl.id)}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
       card.addEventListener("click", () => {
         popover.hidden = true;
         run("add_slide", { template: tpl.id });

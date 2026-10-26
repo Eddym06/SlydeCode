@@ -258,3 +258,10 @@ MIT and the license is compatible with a commercial product.
 - Three-file memory system (`MEMORY.md` + `ESTADO.md` + `TASK.md`), superseded on 2026-10-24: three files meant three reads per task, duplicated update work and allowed contradictions between state and tracker. Replaced by `MEMORY.md` + `STATE.md`.
 - PDF export through the CDP `Page.printToPDF` call, superseded on 2026-10-24 by the Chrome CLI (`--print-to-pdf`): the CLI needs no WebSocket client or protocol version, and `@page size` already yields the exact page size. CDP stays as the fallback if per-page control is needed.
 - "Lightweight native rendering engine" as an embedded component (Wry/Ultralight/Servo), superseded on 2026-10-24 by Chrome as the only rendering surface; the shell is now a swappable launcher.
+## Copilot tool surface (2026-10-26)
+- Additive: `build_deck` and `write_slides` batch tools. Cost model: every tool
+  round resends the whole conversation, so rounds, not tools, are what cost
+  tokens. Prefer one batch call; executed tool-call payloads are stubbed in
+  history because the system prompt is rebuilt from the live deck each round.
+- Gotcha: sandboxed slide iframes have an opaque origin, so any asset they load
+  from the sandbox port needs CORS (`public_static` in `slyde-server/src/lib.rs`).

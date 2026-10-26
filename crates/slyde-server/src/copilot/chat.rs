@@ -148,6 +148,7 @@ async fn run_inner(
             request.selected_element_id.as_deref(),
             language,
         );
+        compact_history(&mut turns);
         let assistant = transport::stream(
             state.copilot.http(),
             &transport::StreamRequest {
@@ -235,6 +236,38 @@ async fn run_inner(
     Err(CopilotError::ToolLimit(format!(
         "the copilot reached its limit of {MAX_TOOL_ROUNDS} steps and stopped; the changes it already made are saved"
     )))
+}
+
+/// Strings longer than this inside an already-executed tool call are replaced
+/// by a stub when the history is resent.
+const STUB_ABOVE_CHARS: usize = 400;
+
+/// Every round resends the whole conversation, and the bulk of it is the slide
+/// source the model wrote in earlier rounds. That code is already in the deck,
+/// and the system prompt is rebuilt from the live deck each round, so resending
+/// it only costs input tokens. Executed tool calls keep their shape (providers
+/// require valid JSON arguments) but lose their large string payloads.
+fn compact_history(turns: &mut [Turn]) {
+    fn stub(value: &mut Value) {
+        match value {
+            Value::String(text) if text.chars().count() > STUB_ABOVE_CHARS => {
+                *value = Value::String(format!(
+                    "[{} characters, already applied to the deck]",
+                    text.chars().count()
+                ));
+            }
+            Value::Array(items) => items.iter_mut().for_each(stub),
+            Value::Object(map) => map.values_mut().for_each(stub),
+            _ => {}
+        }
+    }
+    for turn in turns {
+        if let Turn::Assistant { tool_calls, .. } = turn {
+            for call in tool_calls {
+                stub(&mut call.arguments);
+            }
+        }
+    }
 }
 
 fn activity(phase: AgentPhase) -> ServerEvent {
@@ -338,6 +371,141 @@ mod tests {
         assert_eq!(turns.len(), 3);
         assert!(matches!(turns[0], Turn::User { .. }));
         assert!(matches!(turns[1], Turn::Assistant { .. }));
+    }
+
+    #[test]
+    fn executed_tool_calls_lose_their_bulky_payloads_but_keep_their_shape() {
+        let big = "x".repeat(2_000);
+        let mut turns = vec![Turn::Assistant {
+            text: String::new(),
+            tool_calls: vec![super::super::wire::ToolCall {
+                id: "c1".into(),
+                name: "write_slides".into(),
+                arguments: json!({ "slides": [{ "html_code": big, "template": "hero" }] }),
+            }],
+        }];
+        compact_history(&mut turns);
+        let Turn::Assistant { tool_calls, .. } = &turns[0] else {
+            panic!("assistant turn expected");
+        };
+        let slide = &tool_calls[0].arguments["slides"][0];
+        assert_eq!(slide["template"], "hero");
+        let html = slide["html_code"].as_str().unwrap();
+        assert!(html.contains("2000 characters") && html.len() < 100);
+    }
+
+    /// Drives the whole loop against a scripted OpenAI-compatible server: a
+    /// "make a deck" request must finish in two provider calls (one batch tool
+    /// call, one summary), and the second request must not resend slide source.
+    #[tokio::test]
+    async fn a_new_deck_takes_two_provider_calls_and_the_second_is_compact() {
+        use axum::{Router, extract::State, response::IntoResponse, routing::post};
+        use std::sync::Mutex;
+
+        type Seen = std::sync::Arc<Mutex<Vec<Value>>>;
+        async fn completions(
+            State(seen): State<Seen>,
+            axum::Json(body): axum::Json<Value>,
+        ) -> impl IntoResponse {
+            let round = {
+                let mut seen = seen.lock().unwrap();
+                seen.push(body);
+                seen.len()
+            };
+            let chunk = if round == 1 {
+                let slides: Vec<Value> = (1..=6)
+                    .map(|n| json!({
+                        "html_code": format!("<section><h1>Slide {n}</h1><p>{}</p></section>", "body ".repeat(300)),
+                        "template": "bullet",
+                        "notes": format!("note {n}")
+                    }))
+                    .collect();
+                let args = json!({ "title": "Mock deck", "theme": "paper", "aspect_ratio": "16:9", "slides": slides });
+                json!({ "choices": [{ "delta": { "tool_calls": [{
+                    "index": 0, "id": "call_1", "type": "function",
+                    "function": { "name": "build_deck", "arguments": args.to_string() }
+                }]}}]})
+            } else {
+                json!({ "choices": [{ "delta": { "content": "Built a six-slide deck." } }] })
+            };
+            (
+                [("content-type", "text/event-stream")],
+                format!("data: {chunk}\n\ndata: [DONE]\n\n"),
+            )
+        }
+
+        let seen: Seen = Default::default();
+        let app = Router::new()
+            .route("/chat/completions", post(completions))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        catalog::tests_support::register_mock(&base);
+
+        let state = AppState::new(
+            slyde_core::PresentationState::new(
+                "Deck",
+                slyde_core::Theme::studio(),
+                slyde_core::AspectRatio::R16x9,
+            ),
+            "tok".into(),
+            std::path::PathBuf::from("ui"),
+            vec![],
+            "http://127.0.0.1:1".into(),
+        );
+        state
+            .copilot
+            .config
+            .write()
+            .await
+            .keys
+            .insert("mock".into(), "k".into());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        run(
+            state.clone(),
+            ChatRequest {
+                provider: "mock".into(),
+                model: "m".into(),
+                messages: vec![message("user", "Make a deck about launches")],
+                selected_slide_id: None,
+                selected_element_id: None,
+                language: Some("en".into()),
+                request_id: None,
+            },
+            tx,
+        )
+        .await;
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        assert!(
+            events.iter().any(|event| matches!(event, ChatEvent::Done)),
+            "the turn must finish cleanly: {events:?}"
+        );
+        let view = state.view().await;
+        assert_eq!(view.presentation.slides.len(), 6);
+        assert_eq!(view.presentation.title, "Mock deck");
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one batch call plus one summary");
+        // The system message legitimately carries short previews of the live
+        // deck; only the replayed conversation must be free of slide source.
+        let second = seen[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] != "system")
+            .map(Value::to_string)
+            .collect::<String>();
+        assert!(
+            !second.contains("body body body"),
+            "executed slide source must not be resent"
+        );
+        assert!(second.contains("already applied to the deck"));
     }
 
     #[test]

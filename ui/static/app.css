@@ -2,6 +2,9 @@
 
 .app {
   display: grid;
+  /* Without an explicit track the column sizes to the topbar's content and the
+     whole shell overflows a narrow window, pushing Export/Present off-screen. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 56px 1fr;
   height: 100vh;
   min-height: 0;
@@ -2839,7 +2842,8 @@ body.has-thinking-expanded .copilot-panel {
 }
 
 .template-card-icon {
-  font-size: 16px;
+  display: inline-flex;
+  color: var(--brand);
 }
 
 /* ---------- Inspector Subtabs & Visual Theme Swatches ---------- */
@@ -2983,17 +2987,79 @@ body.has-thinking-expanded .copilot-panel {
   transform: translateY(-1px);
 }
 
+.panel-toggle {
+  display: none;
+}
+
 @media (max-width: 1100px) {
   .workspace {
     grid-template-columns: 200px minmax(0, 1fr);
+    position: relative;
   }
 
+  .panel-toggle {
+    display: inline-flex;
+  }
+
+  .app[data-panel="open"] .panel-toggle {
+    color: var(--brand);
+    background: var(--brand-soft);
+  }
+
+  /* Slide-over drawer: same panel, same DOM, so focus order and the copilot
+     thread survive opening and closing. */
   .inspector {
+    position: fixed;
+    top: 56px;
+    right: 0;
+    bottom: 0;
+    width: min(380px, 100vw);
+    z-index: 40;
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow-3);
+    transform: translateX(105%);
+    visibility: hidden;
+    transition: transform var(--dur-base) var(--ease-out), visibility 0s linear var(--dur-base);
+  }
+
+  .app[data-panel="open"] .inspector {
+    transform: none;
+    visibility: visible;
+    transition: transform var(--dur-base) var(--ease-out);
+  }
+
+  /* Compact top bar: tools that have a ⌘K entry or a keyboard shortcut yield
+     first, so Export and Present always fit. */
+  .topbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .brand-sub,
+  .save-label,
+  .zoom-controls {
     display: none;
   }
 
-  #empty-copilot {
+  .deck-meta {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
     display: none;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inspector {
+    transition: none !important;
   }
 }
 
@@ -3789,4 +3855,36 @@ body.has-thinking-expanded .copilot-panel {
 .library .icon-btn {
   width: 32px;
   height: 32px;
+}
+
+/* Phones and very narrow windows. Kept last so it wins over the component
+   rules above: the bar keeps brand, language, panel, Export and Present. */
+@media (max-width: 760px) {
+  .deck-quick-tools,
+  #theme-toggle,
+  #undo,
+  #redo,
+  .deck-meta .deck-title {
+    display: none;
+  }
+
+  .topbar {
+    gap: 8px;
+  }
+
+  .topbar-actions {
+    margin-left: auto;
+    gap: 6px;
+  }
+
+  .topbar-export-btn span {
+    display: none;
+  }
+}
+
+/* Nothing to act on until a provider is connected: hide the context pill and the
+   suggestion chips so the empty state has one clear call to action. */
+#copilot-panel:has(.copilot-connect) .copilot-context-bar,
+#copilot-panel:has(.copilot-connect) .copilot-prompt-pills {
+  display: none;
 }

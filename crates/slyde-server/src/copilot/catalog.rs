@@ -140,6 +140,10 @@ pub const PROVIDERS: &[ProviderDef] = &[
 ];
 
 pub fn find(id: &str) -> Option<&'static ProviderDef> {
+    #[cfg(test)]
+    if let Some(mock) = tests_support::MOCK.get().filter(|mock| mock.id == id) {
+        return Some(mock);
+    }
     PROVIDERS.iter().find(|provider| provider.id == id)
 }
 
@@ -204,5 +208,31 @@ mod tests {
         let url = gemini.models_url("a b+c");
         assert!(url.contains("key=a%20b%2Bc"));
         assert!(!url.contains("a b+c"));
+    }
+}
+
+/// A scripted provider for end-to-end tests of the tool loop: tests point it at a
+/// local mock server instead of a vendor.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+    use std::sync::OnceLock;
+
+    pub static MOCK: OnceLock<ProviderDef> = OnceLock::new();
+
+    pub fn register_mock(base: &str) {
+        let base: &'static str = Box::leak(base.to_string().into_boxed_str());
+        let _ = MOCK.set(ProviderDef {
+            id: "mock",
+            name: "Mock",
+            company: "Mock",
+            icon: "mock",
+            key_url: "",
+            key_env: &[],
+            wire: Wire::OpenAi,
+            chat_base: base,
+            models_url: base,
+            model_shape: ModelShape::OpenAi,
+        });
     }
 }
