@@ -11,7 +11,9 @@ use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
 use crate::xml;
-use crate::{EMU_PER_PIXEL, PptxDeck, PptxError, PptxSlide, build_package};
+use crate::{
+    EMU_PER_PIXEL, PptxAlign, PptxDeck, PptxError, PptxRun, PptxSlide, PptxText, build_package,
+};
 
 #[path = "../tests/support/png.rs"]
 mod png;
@@ -24,6 +26,7 @@ fn slide(title: &str) -> PptxSlide {
         title: title.to_string(),
         png: png::solid(16, 9, [0x1F, 0x24, 0x30]),
         notes: None,
+        texts: Vec::new(),
     }
 }
 
@@ -32,6 +35,7 @@ fn notes_slide(title: &str, notes: &str) -> PptxSlide {
         title: title.to_string(),
         png: png::solid(16, 9, [0xE8, 0x5D, 0x3B]),
         notes: Some(notes.to_string()),
+        texts: Vec::new(),
     }
 }
 
@@ -255,6 +259,66 @@ fn title_characters_are_escaped() {
 
     let core = text(&parts, "docProps/core.xml");
     assert!(core.contains("SlydeCode test deck"));
+}
+
+#[test]
+fn editable_text_becomes_real_text_boxes_with_escaped_content() {
+    let mut with_text = slide("Editable");
+    with_text.texts = vec![PptxText {
+        x_px: 96,
+        y_px: -4,
+        w_px: 640,
+        h_px: 120,
+        align: PptxAlign::Center,
+        wrap: true,
+        line_spacing_pct: 82,
+        runs: vec![
+            PptxRun {
+                text: "R&D <plan>".to_string(),
+                color: "ff6b4a".to_string(),
+                opacity: 60,
+                size_centipx: 4800,
+                bold: true,
+                italic: false,
+                font: "Geist".to_string(),
+            },
+            PptxRun {
+                text: "\nSecond \"line\"".to_string(),
+                color: "not-a-color".to_string(),
+                opacity: 100,
+                size_centipx: 2000,
+                bold: false,
+                italic: true,
+                font: "A&B".to_string(),
+            },
+        ],
+    }];
+    let parts = package(&[with_text]);
+    let slide_xml = text(&parts, "ppt/slides/slide1.xml");
+    assert_well_formed("slide1.xml", &slide_xml);
+    assert!(slide_xml.contains("txBox=\"1\""));
+    assert!(slide_xml.contains("R&amp;D &lt;plan&gt;"));
+    assert!(slide_xml.contains("algn=\"ctr\""));
+    assert!(
+        slide_xml.contains("sz=\"3600\""),
+        "48px is 36pt: {slide_xml}"
+    );
+    assert!(slide_xml.contains("<a:alpha val=\"60000\"/>"));
+    assert!(slide_xml.contains("<a:spcPct val=\"82000\"/>"));
+    assert!(slide_xml.contains("srgbClr val=\"FF6B4A\""));
+    assert!(
+        slide_xml.contains("srgbClr val=\"000000\""),
+        "an invalid color must never reach the XML"
+    );
+    assert_eq!(
+        slide_xml.matches("<a:p>").count(),
+        2,
+        "a newline starts a paragraph"
+    );
+    assert!(
+        slide_xml.contains("y=\"-38100\""),
+        "negative offsets survive"
+    );
 }
 
 #[test]

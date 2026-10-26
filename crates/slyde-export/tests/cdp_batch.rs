@@ -109,3 +109,68 @@ async fn renders_every_slide_in_a_single_chrome_session() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn extracts_text_blocks_and_leaves_unreadable_content_in_the_picture() {
+    let Some(chrome) = find_chrome() else {
+        eprintln!("no Chromium found; skipping the text extraction test");
+        return;
+    };
+    let html = r#"<!doctype html><html data-slyde-ready="1"><meta charset=utf-8>
+      <body style="margin:0;background:#101018">
+      <main id="slyde-stage" style="position:absolute;inset:0">
+        <h1 style="position:absolute;left:80px;top:60px;margin:0;font:700 64px sans-serif;color:#ff6b4a">
+          Hello <span style="color:#ffffff">editable</span> world</h1>
+        <p style="position:absolute;left:80px;top:200px;margin:0;font:400 28px sans-serif;color:#ccc;text-align:center;width:900px">Second<br>line</p>
+        <pre style="position:absolute;left:80px;top:400px;margin:0;color:#0f0">let kept = true;</pre>
+      </main></body></html>"#;
+    let url = format!("data:text/html;charset=utf-8,{}", urlencode(html));
+
+    let dir = std::env::temp_dir().join(format!("slyde-cdp-text-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let slides = vec![SlideTarget {
+        id: "sld_text".into(),
+        url,
+    }];
+    let captured = slyde_export::export_slides_batch(
+        &chrome,
+        &slides,
+        AspectRatio::R16x9,
+        &dir,
+        1,
+        None,
+        true,
+    )
+    .await
+    .expect("the export should render and extract");
+
+    let blocks = &captured[0].text;
+    assert_eq!(
+        blocks.len(),
+        2,
+        "the heading and the paragraph, not the <pre>: {blocks:?}"
+    );
+    let heading = &blocks[0];
+    let plain: String = heading.runs.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(plain.trim(), "Hello editable world");
+    assert!(
+        heading.runs.iter().any(|run| run.color == "ffffff"),
+        "the span keeps its own color"
+    );
+    assert!(
+        heading
+            .runs
+            .iter()
+            .all(|run| run.bold && run.size_centipx == 6400)
+    );
+    assert_eq!(blocks[1].align, "ctr");
+    assert!(
+        blocks[1].runs.iter().any(|run| run.text == "\n"),
+        "<br> becomes a line break"
+    );
+    assert!(blocks[1].wrap, "two lines are multi-line text");
+
+    let png = std::fs::read(&captured[0].png).expect("png written");
+    assert!(png_size(&png).is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
