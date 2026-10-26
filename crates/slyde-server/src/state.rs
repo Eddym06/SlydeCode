@@ -197,6 +197,7 @@ pub enum AgentAction {
     TriggerAnimation,
     MutateElement,
     SetTheme,
+    SetTitle,
     /// The in-app copilot is generating or choosing a tool. This is the only
     /// action that can legitimately sit in `Thinking` phase.
     Chat,

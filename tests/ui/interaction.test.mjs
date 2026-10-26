@@ -271,11 +271,25 @@ test("gizmo: arrow keys nudge by 1px, 10px with Shift, and commit", async () => 
   const box = await stageBox(slideId, ".sub");
   const centre = screenCentre(frame, box);
 
-  // Select .sub
-  await studio.inStage(slideId, (cdp) =>
-    cdp.evaluate(`document.querySelector(".sub").click()`)
-  );
-  await sleep(350);
+  // A nudge commit can reload the stage, so every selection first waits for a
+  // live document and then for the selection outline instead of sleeping.
+  const selectSub = async () => {
+    await studio.waitForStageReady(slideId);
+    await studio.inStage(slideId, (cdp) =>
+      cdp.evaluate(`document.querySelector(".sub").click()`)
+    );
+    await until(
+      () =>
+        studio.inStage(slideId, (cdp) =>
+          cdp.evaluate(
+            `[...document.querySelectorAll("[data-slyde-ui]")].some((n) => n.style.display === "block")`
+          )
+        ),
+      { label: "selection outline" }
+    );
+  };
+
+  await selectSub();
   const initialLeft = px((await liveStyle(slideId, ".sub")).left) || 0;
 
   // Dispatch arrow key into the stage document
@@ -291,10 +305,7 @@ test("gizmo: arrow keys nudge by 1px, 10px with Shift, and commit", async () => 
   );
   const startLeft = px((await liveStyle(slideId, ".sub")).left);
 
-  await studio.inStage(slideId, (cdp) =>
-    cdp.evaluate(`document.querySelector(".sub").click()`)
-  );
-  await sleep(200);
+  await selectSub();
 
   await studio.inStage(slideId, (cdp) =>
     cdp.evaluate(
@@ -305,10 +316,7 @@ test("gizmo: arrow keys nudge by 1px, 10px with Shift, and commit", async () => 
     label: "10px nudge",
   });
 
-  await studio.inStage(slideId, (cdp) =>
-    cdp.evaluate(`document.querySelector(".sub").click()`)
-  );
-  await sleep(200);
+  await selectSub();
 
   await studio.inStage(slideId, (cdp) =>
     cdp.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }))`)

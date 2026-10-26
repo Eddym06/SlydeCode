@@ -9,6 +9,9 @@ use slyde_core::{AnimationStep, AspectRatio, CoreError, PresentationState, Theme
 
 use crate::state::{AgentAction, AgentPhase, AppState, ServerEvent};
 
+/// Longest deck title an agent may set; it ends up in file names and the topbar.
+const MAX_TITLE_CHARS: usize = 120;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AgentCommand {
@@ -73,6 +76,10 @@ pub enum AgentCommand {
         muted: Option<String>,
         #[serde(default)]
         font_family: Option<String>,
+    },
+    /// Renames the deck without touching its slides.
+    SetTitle {
+        title: String,
     },
 }
 
@@ -156,6 +163,12 @@ impl AgentCommand {
             AgentCommand::SetTheme { .. } => Activity {
                 phase: AgentPhase::Writing,
                 action: AgentAction::SetTheme,
+                slide_id: None,
+                slide_index: None,
+            },
+            AgentCommand::SetTitle { .. } => Activity {
+                phase: AgentPhase::Adjusting,
+                action: AgentAction::SetTitle,
                 slide_id: None,
                 slide_index: None,
             },
@@ -283,6 +296,21 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
             core.set_theme(theme)?;
             Ok(AgentOutcome::default())
         }
+        AgentCommand::SetTitle { title } => {
+            // The editor may clear the title field while typing, so core stays
+            // permissive; an agent has no such excuse and must name the deck.
+            let title = title.trim();
+            if title.is_empty() {
+                return Err(CoreError::InvalidTitle("the title is empty".into()));
+            }
+            if title.chars().count() > MAX_TITLE_CHARS {
+                return Err(CoreError::InvalidTitle(format!(
+                    "the title is over {MAX_TITLE_CHARS} characters"
+                )));
+            }
+            core.set_title(title)?;
+            Ok(AgentOutcome::default())
+        }
     }
 }
 
@@ -400,6 +428,51 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("neon"));
         assert_eq!(state.core.read().await.presentation().title, "Deck");
+    }
+
+    #[tokio::test]
+    async fn set_title_renames_the_deck_and_keeps_its_slides() {
+        let state = state();
+        handle(
+            &state,
+            AgentCommand::UpsertSlide {
+                index: 0,
+                slide_id: Some("sld_a".into()),
+                html_code: "<h1>Hi</h1>".into(),
+                template: None,
+                animation: None,
+            },
+        )
+        .await
+        .unwrap();
+        handle(
+            &state,
+            AgentCommand::SetTitle {
+                title: "  Energía solar  ".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let core = state.core.read().await;
+        assert_eq!(core.presentation().title, "Energía solar");
+        assert_eq!(core.presentation().slides.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn set_title_refuses_empty_and_oversized_titles() {
+        let state = state();
+        for bad in ["   ".to_string(), "x".repeat(MAX_TITLE_CHARS + 1)] {
+            let err = handle(&state, AgentCommand::SetTitle { title: bad })
+                .await
+                .unwrap_err();
+            assert!(matches!(err, CoreError::InvalidTitle(_)), "{err}");
+        }
+        assert_eq!(state.core.read().await.presentation().title, "Deck");
+        let ok = "x".repeat(MAX_TITLE_CHARS);
+        handle(&state, AgentCommand::SetTitle { title: ok.clone() })
+            .await
+            .unwrap();
+        assert_eq!(state.core.read().await.presentation().title, ok);
     }
 
     #[test]

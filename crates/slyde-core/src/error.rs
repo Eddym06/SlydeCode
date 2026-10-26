@@ -32,6 +32,9 @@ pub enum CoreError {
     #[error("invalid aspect ratio: {0}")]
     InvalidAspectRatio(String),
 
+    #[error("invalid title: {0}")]
+    InvalidTitle(String),
+
     #[error("animation step {index} does not exist on slide {slide_id}")]
     AnimationStepNotFound { slide_id: String, index: usize },
 

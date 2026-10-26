@@ -123,6 +123,7 @@ export default {
   "copilot.tool.move_slide": "Reordering slides…",
   "copilot.tool.trigger_animation": "Adding motion…",
   "copilot.tool.set_notes": "Writing speaker notes…",
+  "copilot.tool.set_title": "Naming the deck…",
   "copilot.tool.generic": "Updating the deck…",
   "copilot.sheetTitle": "Provider & model",
   "copilot.models": "Models",
