@@ -1,14 +1,34 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-26 12:10
+> Last updated: 2026-10-26 15:40
 
 ## Current Phase
 
-Phase 3.6 — **Review follow-up: hardening, copilot validated live, PNG quality, CSS split.**
-230 Rust tests and 77 UI tests (browser/CDP + component + module) green; `cargo fmt --check`
-and `clippy -D warnings` clean.
+Phase 3.7 — **Review follow-up closed: keychain, editable PowerPoint, library covers, shell split.**
+240 Rust tests (+1 that runs on request against the real credential store) and 81 UI tests
+(browser/CDP + component + module) green; `cargo fmt --check` and `clippy -D warnings` clean.
 
-### Done in this round (2026-10-26)
+### Done in the second half of this round (2026-10-26)
+
+- **Provider keys in the OS credential store** (Windows Credential Manager, macOS Keychain)
+  through `keyring` 3.x; the owner-only file remains the fallback (Linux, or a store that
+  refuses a write). Keys found in the file by an older version migrate on the next start.
+  A custom `SLYDE_DATA_DIR` never touches the credential store. Verified against the real
+  Windows store with an `#[ignore]` round-trip test.
+- **Editable PowerPoint.** One Chrome session reads each slide's text (visual lines,
+  font, colour, alignment) and hides it; the PPTX gets that clean plate plus real text
+  boxes. Checked with a real-Chrome integration test, `python-pptx` (reads the boxes as
+  editable, 2 lines, 42 pt) and an E2E that opens the exported ZIP. Diagrams, code, maths
+  and images stay in the plate. **Not verified in real PowerPoint, Keynote or Google
+  Slides** (none is installed here).
+- **Library covers.** `POST /api/decks/thumbnails` renders the missing ones in one Chrome
+  session, `GET /api/decks/{id}/thumbnail` serves the cache (`<id>-<updated_at>.png`).
+  Nothing is rendered until the sheet asks. The same change fixed a CSS class collision
+  that had hidden every row's metadata line since the library shipped.
+- **Shell split.** `presenter-overlay.js` (15 private `let`s) and `agent-activity-view.js`
+  (7) left `app.js`, which went from 2,068 to ~1,440 lines.
+
+### Done in the first half of this round (2026-10-26)
 
 - **Copilot validated against a live provider.** DeepSeek (`deepseek-flash` and
   `deepseek-v4-pro`) built a 3-slide deck, wrote notes, switched theme and read the deck
@@ -232,17 +252,14 @@ Nothing partially implemented on the branch.
 
 ## Not Implemented Yet
 
-- `app.js` is the shell in one closure (~1,730 lines): it is now glue (topbar,
-  stage frame, chips, presenter overlay, boot), but it is still one closure with
-  shared mutable state rather than a state object with per-region render.
-- OS keychain for provider keys (the file is owner-only on Unix; Windows has no
-  DACL yet).
-- `app.js` is still one large `boot()` closure, and the presenter logic is
-  duplicated between `app.js` and `present.js`.
+- `app.js` (~1,440 lines) is still one `boot()` closure for what the shell itself owns
+  (`view`, selection, stage key, zoom, panels). A store is only worth it if that grows.
+- The overlay presenter in the studio and the standalone `/present` page share the reveal
+  state machine, but each still has its own DOM wiring.
 - A DOM component runner (the pure modules are covered; the DOM wiring is only
   covered end-to-end).
-- Deck thumbnails in the library (rows show title, slide count, age and theme).
-- PPTX exports pictures, not editable text shapes.
+- PowerPoint: diagrams, code blocks, maths and images are part of the plate, not editable.
+- The OS credential store is not used on Linux (see `MEMORY.md` for why).
 
 ## Known Issues / Bugs
 
@@ -263,7 +280,6 @@ Nothing partially implemented on the branch.
   previous session are gone by design.
 - Copilot: 40 rounds is still a budget, not a guarantee, and large decks may need
   a second "continue".
-- PNG export at 2x triples the file size; there is no user-facing 1x/2x choice.
 - Provider model lists include models that may not support tool calling; the UI
   shows metadata but does not pre-validate capability.
 - Only DeepSeek has been exercised with a live key. OpenAI, Anthropic, Gemini, xAI, Groq,
@@ -274,7 +290,9 @@ Nothing partially implemented on the branch.
   Coalescing thinking deltas would cut traffic without changing the UI.
 - `studio.test.mjs` is ~2,200 lines and `interaction.test.mjs` still uses many fixed
   `sleep()` waits; one of them already flaked. Convert them to readiness waits as they bite.
-- `app.js` is still ~1,900 lines with shared mutable state (backlog #2).
+- PowerPoint output is validated with `python-pptx` only; a missing Geist typeface makes
+  PowerPoint substitute another one (glyph widths change, line breaks do not).
+- The tests leave hundreds of `slyde-*` folders in `%TEMP%`.
 
 ## Build & Platform Status
 
@@ -296,25 +314,24 @@ Nothing partially implemented on the branch.
 
 1. **Validate the remaining copilot providers** (seven left) and add one retry for a
    connection reset that happens before the first delta.
-2. **Turn the shell into a state object**: the panels are modules, but the shell
-   still shares ~30 mutable `let`s through closures instead of one read model
-   with explicit subscriptions.
-3. **OS keychain** for provider keys (Windows has a DACL now; a real keychain is
-   next).
-4. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
-5. **Editable PPTX** (text shapes) behind the current image-per-slide baseline.
+2. Open the exported `.pptx` in real PowerPoint/Keynote/Google Slides and compare it
+   with the presenter; tune the line spacing if the baseline sits off.
+3. Linux credential store, if a `libdbus` dependency ever becomes acceptable.
+4. Clean the test temp folders (each suite should remove its own).
+5. Editable PowerPoint shapes for diagrams and code blocks.
 6. A DOM component runner if the zero-npm rule is ever relaxed.
 7. Content-addressed assets so two decks can share one image.
 8. Token/cost estimates for copilot turns.
 
 ## Next Immediate Step
 
-- Review the branch, then run the same live probe against the other providers. The
-  decisions that still need the owner: OS keychain (new dependency, fallback design) and
-  the shell state object (architecture change), both listed in the backlog.
+- Review the branch, open an exported deck in real PowerPoint, and run the same live
+  probe against the other seven providers.
 
 ## Completed
 
+- [x] Keychain for provider keys, editable PowerPoint text, library covers and the
+      presenter/activity extraction from `app.js` — 2026-10-26
 - [x] Review follow-up: license docs, sandbox hardening, PNG quality, `set_title`, CSS
       split, live DeepSeek validation, flaky nudge test — 2026-10-26
 - [x] Fixed the first CI run: browser discovery now builds its candidate list

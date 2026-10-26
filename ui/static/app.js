@@ -1,20 +1,13 @@
 import { createClient, readToken } from "./api.js";
-import {
-  idleActivity,
-  nextTransition,
-  receiveActivity,
-  tickActivity,
-} from "./agent-activity.js";
+import { createAgentActivityView } from "./agent-activity-view.js";
 import { mountCopilot } from "./copilot.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
-import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
-import { mountPresenterDraw } from "./presenter-draw.js";
+import { createPresenterOverlay } from "./presenter-overlay.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
-import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,15 +46,7 @@ function boot(sessionToken) {
   let titleTimer = null;
   let resizeTimer = null;
   let exportJob = null;
-  let activity = idleActivity();
-  let activityTimer = null;
-  let lastInteractionAt = 0;
-  let lastSheenKey = "";
-  let sweepPending = false;
-  let lastAnnouncedLabel = "";
-  let chipHideTimer = null;
 
-  const FOLLOW_IDLE_MS = 1800;
 
   $("app").hidden = false;
   syncThemeToggle();
@@ -195,14 +180,14 @@ function boot(sessionToken) {
         group: t("palette.group.present"),
         label: t("action.fullscreen"),
         hint: "f",
-        run: () => openPresentationInStudio(false),
+        run: () => presenter.open(false),
       },
       {
         id: "present.speaker",
         group: t("palette.group.present"),
         label: t("action.speakerConsole"),
         hint: "s",
-        run: () => openPresentationInStudio(true),
+        run: () => presenter.open(true),
       },
       {
         id: "present.window",
@@ -488,142 +473,11 @@ function boot(sessionToken) {
   }
 
   // ---------- AI activity ----------
-
-  function activityLabel(state) {
-    if (!state) return "";
-    switch (state.phase) {
-      case "writing":
-        if (state.action === "set_notes") return t("agent.notes");
-        if (state.action === "upsert_slide") {
-          return Number.isInteger(state.slideIndex)
-            ? t("agent.writing", { n: state.slideIndex + 1 })
-            : t("agent.writingGeneric");
-        }
-        return t("agent.writingGeneric");
-      case "adjusting":
-        if (state.action === "create_presentation") return t("agent.preparing");
-        if (state.action === "remove_slide") return t("agent.removing");
-        if (state.action === "move_slide") return t("agent.moving");
-        return t("agent.adjusting");
-      case "animating":
-        return t("agent.animating");
-      case "done":
-        return state.action === "upsert_slide" ? t("agent.doneSlide") : t("agent.done");
-      case "thinking":
-        return t("agent.thinking");
-      case "error":
-        return t("agent.error");
-      default:
-        return "";
-    }
-  }
-
-  function renderAgentActivity({ announce = true } = {}) {
-    const idle = activity.phase === "idle";
-    const label = idle ? "" : activityLabel(activity);
-
-    // The chip exits with a short fade instead of disappearing between two
-    // frames; a new active event during the fade cancels it.
-    if (idle) {
-      if (!els.agentChip.hidden) {
-        if (!chipHideTimer) {
-          els.agentChip.classList.add("leaving");
-          chipHideTimer = window.setTimeout(() => {
-            chipHideTimer = null;
-            els.agentChip.hidden = true;
-            els.agentChip.classList.remove("leaving");
-            els.agentChip.dataset.phase = "idle";
-            els.agentLabel.textContent = "";
-          }, 180);
-        }
-      } else {
-        els.agentChip.classList.remove("leaving");
-        els.agentChip.dataset.phase = "idle";
-        els.agentLabel.textContent = "";
-      }
-    } else {
-      if (chipHideTimer) {
-        window.clearTimeout(chipHideTimer);
-        chipHideTimer = null;
-      }
-      els.agentChip.hidden = false;
-      els.agentChip.classList.remove("leaving");
-      els.agentChip.dataset.phase = activity.phase;
-      els.agentLabel.textContent = label;
-    }
-
-    // Live announcements follow the visual phases, not the raw events: a
-    // mutation is instant, but "Slide ready" should be heard when it appears.
-    if (idle) {
-      if (lastAnnouncedLabel) els.agentAnnouncer.textContent = "";
-      lastAnnouncedLabel = "";
-    } else if (activity.phase === "thinking") {
-      // Reserved for a future explicit generation channel; inferred calls never
-      // emit it, so it is not announced.
-    } else if (!announce) {
-      lastAnnouncedLabel = label;
-    } else if (label && label !== lastAnnouncedLabel) {
-      lastAnnouncedLabel = label;
-      els.agentAnnouncer.textContent = label;
-    }
-
-    const writingSlide =
-      activity.phase === "writing" && activity.action === "upsert_slide";
-    const targetVisible =
-      Boolean(activity.slideId) && activity.slideId === selectedId;
-    const sheen = writingSlide && targetVisible;
-
-    if (!sheen) {
-      lastSheenKey = "";
-      sweepPending = false;
-      delete els.frameWrap.dataset.agentPhase;
-      return;
-    }
-
-    els.frameWrap.dataset.agentPhase = "writing";
-    const key = `${activity.slideId}:${activity.action}`;
-    if (key !== lastSheenKey) {
-      lastSheenKey = key;
-      sweepPending = true;
-    }
-    maybeSweep();
-  }
-
-  function maybeSweep() {
-    if (!sweepPending || els.frameWrap.hidden) return;
-    sweepPending = false;
-    els.stageScan.classList.remove("run");
-    void els.stageScan.offsetWidth;
-    els.stageScan.classList.add("run");
-  }
-
-  function scheduleActivityTick() {
-    if (activityTimer) {
-      window.clearTimeout(activityTimer);
-      activityTimer = null;
-    }
-    const now = Date.now();
-    const at = nextTransition(activity, now);
-    if (!at) return;
-    activityTimer = window.setTimeout(() => {
-      activityTimer = null;
-      activity = tickActivity(activity, Date.now());
-      renderAgentActivity();
-      scheduleActivityTick();
-    }, Math.max(0, at - now) + 20);
-  }
-
-  function userIsEngaged() {
-    if (Date.now() - lastInteractionAt < FOLLOW_IDLE_MS) return true;
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = (el.tagName || "").toLowerCase();
-    if (tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable) {
-      return true;
-    }
-    // Never move the storyboard selection while keyboard focus is in it.
-    return Boolean(el.closest(".rail"));
-  }
+  const agentActivity = createAgentActivityView({
+    t,
+    els,
+    getSelectedId: () => selectedId,
+  });
 
   /// Follow the slide the agent wrote only when the user is watching, not
   /// editing. Otherwise the storyboard still updates, but selection is theirs.
@@ -633,7 +487,7 @@ function boot(sessionToken) {
     if (!view || !view.presentation.slides.some((s) => s.id === event.slide_id)) {
       return;
     }
-    if (selectedId === event.slide_id || userIsEngaged()) return;
+    if (selectedId === event.slide_id || agentActivity.userIsEngaged()) return;
     selectedId = event.slide_id;
     stageKey = "";
     applyView(view);
@@ -664,9 +518,9 @@ function boot(sessionToken) {
     renderStage(d);
     renderChips(d);
     renderInspector(d);
-    renderAgentActivity({ announce: false });
+    agentActivity.render({ announce: false });
     updateCopilotContext(d);
-    maybeSweep();
+    agentActivity.maybeSweep();
   }
 
   function updateCopilotContext(d) {
@@ -1007,10 +861,10 @@ function boot(sessionToken) {
       return;
     }
     if (event.type === "agent_activity") {
-      activity = receiveActivity(activity, event, Date.now());
+      agentActivity.receive(event);
       followAgentSlide(event);
-      renderAgentActivity();
-      scheduleActivityTick();
+      agentActivity.render();
+      agentActivity.scheduleTick();
       return;
     }
     if (event.type === "export_progress") {
@@ -1085,7 +939,7 @@ function boot(sessionToken) {
       storyboard.invalidate();
       applyView(view);
     }
-    renderAgentActivity({ announce: false });
+    agentActivity.render({ announce: false });
     if (view) setStatus(els.statusDot.dataset.state || "connecting");
     if (library) library.setI18n(applyI18n);
   });
@@ -1094,14 +948,14 @@ function boot(sessionToken) {
   document.addEventListener(
     "pointerdown",
     () => {
-      lastInteractionAt = Date.now();
+      agentActivity.markInteraction();
     },
     { capture: true }
   );
   document.addEventListener(
     "keydown",
     () => {
-      lastInteractionAt = Date.now();
+      agentActivity.markInteraction();
     },
     { capture: true }
   );
@@ -1129,7 +983,7 @@ function boot(sessionToken) {
     if (!typing && (event.key === "F5" || (mod && (event.key === "Enter" || key === "p")))) {
       event.preventDefault();
       const speaker = event.shiftKey || event.altKey;
-      openPresentationInStudio(speaker);
+      presenter.open(speaker);
       return;
     }
 
@@ -1352,515 +1206,28 @@ function boot(sessionToken) {
     }
   }
 
-  // ---------- In-Studio Presentation Mode (No popup / in-place) ----------
-  let isPresenting = false;
-  let presentIndex = 0;
-  let presentDraw = null;
-  let presentSpeakerMode = false;
-  let presentBlackout = false;
-  let presentSlideKey = "";
-
-  // Steps can only be delivered once the sandboxed document has registered
-  // its message listener. Messages posted before that are silently dropped,
-  // which left every animated element frozen at `opacity: 0` (a black slide).
-  // Reveal state (slide + queued steps + frame readiness) lives in
-  // `presenter-core.js`, shared with the standalone presenter so the two can
-  // never disagree about when a step plays.
-  const presentReveal = createReveal([]);
-  // Set right before a deliberate exit from fullscreen (F), so leaving
-  // fullscreen does not end the presentation.
-  let presentKeepWindowed = false;
-  let presentTimerSeconds = 0;
-  let presentTimerRunning = false;
-  let presentSlideStartSeconds = 0;
-  let presentTimerInterval = null;
-  let presentHudTimer = null;
-  let presentClockInterval = null;
-  let presentNotesFontSize = 18;
-
-  const presentEls = {
-    overlay: $("present-overlay"),
-    screen: $("present-screen"),
-    frameWrap: $("present-frame"),
-    frame: $("present-slide"),
-    empty: $("present-empty"),
-    hud: $("hud"),
-    current: $("hud-current"),
-    total: $("hud-total"),
-    progress: $("progress"),
-    progressFill: $("progress-fill"),
-    hudSpeaker: $("hud-speaker"),
-    hudFullscreen: $("hud-fullscreen"),
-    hudExitBtn: $("hud-exit-btn"),
-    speakerConsole: $("speaker-console"),
-    speakerTitle: $("speaker-deck-title"),
-    wallClock: $("wall-clock"),
-    timerDisplay: $("timer-display"),
-    timerToggle: $("timer-toggle"),
-    timerReset: $("timer-reset"),
-    exitSpeaker: $("exit-speaker"),
-    speakerCloseBtn: $("speaker-close-btn"),
-    scCurrent: $("sc-current"),
-    scTotal: $("sc-total"),
-    scCurrentFrame: $("sc-current-frame"),
-    scNextFrame: $("sc-next-frame"),
-    noNextHint: $("no-next-hint"),
-    notesBody: $("speaker-notes-body"),
-    notesDown: $("notes-font-down"),
-    notesUp: $("notes-font-up"),
-    notesPace: $("notes-pace"),
-  };
-
-  function formatPresentTime(sec) {
-    const m = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  }
-
-  function startPresentTimer() {
-    if (presentTimerRunning) return;
-    presentTimerRunning = true;
-    if (presentEls.timerToggle) presentEls.timerToggle.textContent = "⏸";
-    presentTimerInterval = setInterval(() => {
-      presentTimerSeconds += 1;
-      if (presentEls.timerDisplay) presentEls.timerDisplay.textContent = formatPresentTime(presentTimerSeconds);
-      updatePresentPace();
-    }, 1000);
-  }
-
-  function pausePresentTimer() {
-    presentTimerRunning = false;
-    if (presentEls.timerToggle) presentEls.timerToggle.textContent = "▶";
-    clearInterval(presentTimerInterval);
-  }
-
-  function resetPresentTimer() {
-    pausePresentTimer();
-    presentTimerSeconds = 0;
-    if (presentEls.timerDisplay) presentEls.timerDisplay.textContent = "00:00";
-  }
-
-  function updatePresentWallClock() {
-    if (presentEls.wallClock) {
-      const now = new Date();
-      presentEls.wallClock.textContent = now.toTimeString().slice(0, 8);
-    }
-  }
-
-  function fitPresentFrame() {
-    if (!view || !presentEls.frameWrap) return;
-    const ratio = view.presentation.aspect_ratio.split(":").map(Number);
-    const [w, h] = ratio;
-    const availableW = window.innerWidth;
-    const availableH = window.innerHeight;
-    let width = availableW;
-    let height = (width * h) / w;
-    if (height > availableH) {
-      height = availableH;
-      width = (height * w) / h;
-    }
-    presentEls.frameWrap.style.width = `${Math.round(width)}px`;
-    presentEls.frameWrap.style.height = `${Math.round(height)}px`;
-  }
-
-  function showPresentHud() {
-    if (!presentEls.hud) return;
-    presentEls.hud.dataset.visible = "true";
-    if (presentHudTimer) clearTimeout(presentHudTimer);
-    presentHudTimer = setTimeout(() => {
-      if (presentEls.hud) presentEls.hud.dataset.visible = "false";
-    }, 2800);
-  }
-
-  function renderPresentSpeakerConsole() {
-    if (!presentEls.speakerConsole || presentEls.speakerConsole.hidden || !view) return;
-    const slides = view.presentation.slides;
-    if (!slides.length) return;
-    const s = slides[presentIndex];
-    if (presentEls.speakerTitle) presentEls.speakerTitle.textContent = view.presentation.title || "SlydeCode";
-    if (presentEls.scCurrent) presentEls.scCurrent.textContent = String(presentIndex + 1);
-    if (presentEls.scTotal) presentEls.scTotal.textContent = String(slides.length);
-    if (presentEls.scCurrentFrame) {
-      presentEls.scCurrentFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?static=1${sourceQuery}`;
-    }
-    if (presentIndex + 1 < slides.length) {
-      const nextSlide = slides[presentIndex + 1];
-      if (presentEls.scNextFrame) {
-        presentEls.scNextFrame.hidden = false;
-        presentEls.scNextFrame.src = `${sandboxOrigin}/s/${encodeURIComponent(nextSlide.id)}?static=1${sourceQuery}`;
-      }
-      if (presentEls.noNextHint) presentEls.noNextHint.hidden = true;
-    } else {
-      if (presentEls.scNextFrame) presentEls.scNextFrame.hidden = true;
-      if (presentEls.noNextHint) presentEls.noNextHint.hidden = false;
-    }
-    if (presentEls.notesBody) {
-      if (s.notes && s.notes.trim()) {
-        presentEls.notesBody.textContent = s.notes;
-        presentEls.notesBody.classList.remove("speaker-notes-empty");
-      } else {
-        presentEls.notesBody.innerHTML = `<span class="speaker-notes-empty">(${t("present.noNotes")})</span>`;
-      }
-    }
-    updatePresentPace();
-  }
-
-  /** Reading-time estimate and pace for the current slide. */
-  function updatePresentPace() {
-    if (!presentEls.notesPace) return;
-    const current = view && view.presentation.slides[presentIndex];
-    const expected = readingSeconds(current && current.notes);
-    if (!expected) {
-      presentEls.notesPace.dataset.state = "none";
-      presentEls.notesPace.textContent = "";
-      return;
-    }
-    const elapsed = Math.max(0, presentTimerSeconds - presentSlideStartSeconds);
-    const state = paceState(elapsed, expected);
-    presentEls.notesPace.dataset.state = state;
-    presentEls.notesPace.textContent = `${t("present.pace.estimate", {
-      time: formatClock(expected),
-    })} · ${t(`present.pace.${state}`)}`;
-  }
-
-  function renderPresentSlide() {
-    if (!view || !isPresenting) return;
-    const slides = view.presentation.slides;
-    if (!slides.length) {
-      if (presentEls.frameWrap) presentEls.frameWrap.hidden = true;
-      if (presentEls.empty) presentEls.empty.hidden = false;
-      return;
-    }
-    if (presentEls.empty) presentEls.empty.hidden = true;
-    if (presentEls.frameWrap) presentEls.frameWrap.hidden = false;
-
-    presentIndex = Math.min(slides.length - 1, Math.max(0, presentIndex));
-    const s = slides[presentIndex];
-
-    if (presentEls.current) presentEls.current.textContent = String(presentIndex + 1);
-    if (presentEls.total) presentEls.total.textContent = String(slides.length);
-
-    const percent = progressPercent(presentIndex, slides.length);
-    if (presentEls.progressFill) presentEls.progressFill.style.width = `${percent}%`;
-    if (presentEls.progress) presentEls.progress.setAttribute("aria-valuenow", String(percent));
-
-    const key = `${s.id}:${s.code.length}:${s.animation.length}`;
-    if (key !== presentSlideKey) {
-      presentSlideKey = key;
-      presentReveal.reload();
-      presentSlideStartSeconds = presentTimerSeconds;
-      if (presentDraw) presentDraw.clear();
-      if (presentEls.frame) {
-        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
-      }
-    }
-
-    fitPresentFrame();
-    renderPresentSpeakerConsole();
-    showPresentHud();
-  }
-
-  function postPresentStep(step) {
-    const win = presentEls.frame && presentEls.frame.contentWindow;
-    if (!win) return;
-    win.postMessage({ __slyde: true, type: "animate", step }, "*");
-  }
-
-  /** Plays the slide's first step once the document is listening. */
-  function flushPresentSteps() {
-    const step = presentReveal.takeIntro();
-    if (step) postPresentStep(step);
-  }
-
-  function advancePresentSlide() {
-    const action = presentReveal.advance();
-    if (action.type === "step") {
-      postPresentStep(action.step);
-      return;
-    }
-    if (action.type === "slide") showPresentSlide(action);
-  }
-
-  function goPresentDelta(delta) {
-    if (!view) return;
-    const action = presentReveal.delta(delta);
-    if (action) showPresentSlide(action);
-  }
-
-  function jumpPresentIndex(target) {
-    if (!view) return;
-    const action = presentReveal.goTo(target);
-    if (action) showPresentSlide(action);
-  }
-
-  /// Renders the slide the reveal controller just loaded.
-  function showPresentSlide(action) {
-    presentIndex = action.index;
-    presentSlideKey = "";
-    renderPresentSlide();
-  }
-
-  function togglePresentBlackout() {
-    presentBlackout = !presentBlackout;
-    if (presentEls.frameWrap) presentEls.frameWrap.style.opacity = presentBlackout ? "0" : "1";
-  }
-
-  function togglePresentSpeakerMode(force) {
-    presentSpeakerMode = typeof force === "boolean" ? force : !presentSpeakerMode;
-    if (presentEls.speakerConsole) presentEls.speakerConsole.hidden = !presentSpeakerMode;
-    if (presentSpeakerMode && !presentTimerRunning && presentTimerSeconds === 0) {
-      startPresentTimer();
-    }
-    if (view) renderPresentSpeakerConsole();
-  }
-
-  function handlePresentKeydown(event) {
-    if (!isPresenting) return;
-    const action = keyToAction(event);
-    if (!action) return;
-    event.preventDefault();
-    switch (action) {
-      case "advance":
-        advancePresentSlide();
-        break;
-      case "back":
-        goPresentDelta(-1);
-        break;
-      case "first":
-        jumpPresentIndex(0);
-        break;
-      case "last":
-        if (view) jumpPresentIndex(view.presentation.slides.length - 1);
-        break;
-      case "blackout":
-        togglePresentBlackout();
-        break;
-      case "speaker":
-        togglePresentSpeakerMode();
-        break;
-      case "fullscreen":
-        togglePresentFullscreen();
-        break;
-      case "laser":
-        if (presentDraw) presentDraw.toggle("laser");
-        break;
-      case "pen":
-        if (presentDraw) presentDraw.toggle("pen");
-        break;
-      case "clearDraw":
-        if (presentDraw) presentDraw.clear();
-        break;
-      case "escape":
-        if (presentBlackout) {
-          togglePresentBlackout();
-        } else if (presentSpeakerMode) {
-          togglePresentSpeakerMode(false);
-        } else {
-          closePresentation();
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
-  function handlePresentClick(event) {
-    if (!isPresenting) return;
-    // The click that opens the presenter is registered on `document` while it
-    // is still bubbling, so it would otherwise advance the deck and consume the
-    // first animation step. Only clicks landing inside the overlay count.
-    if (!presentEls.overlay || !presentEls.overlay.contains(event.target)) return;
-    if (event.target.closest("#hud") || event.target.closest("#speaker-console")) return;
-    if (event.clientX < window.innerWidth / 2) goPresentDelta(-1);
-    else advancePresentSlide();
-  }
-
-  function togglePresentFullscreen() {
-    if (document.fullscreenElement) {
-      presentKeepWindowed = true;
-      document.exitFullscreen().catch(() => {
-        presentKeepWindowed = false;
-      });
-    } else {
-      document.documentElement.requestFullscreen().catch(() => {});
-    }
-  }
-
-  // Chrome consumes Escape to leave fullscreen instead of dispatching it to the
-  // page, so an unexpected exit from fullscreen is the presenter's exit gesture.
-  function handlePresentFullscreenChange() {
-    if (!isPresenting || document.fullscreenElement) return;
-    if (presentKeepWindowed) {
-      presentKeepWindowed = false;
-      return;
-    }
-    closePresentation();
-  }
-
-  function openPresentationInStudio(speaker = false) {
-    const d = deck();
-    if (!d || !d.slides.length) {
-      toast(t("present.empty"));
-      return;
-    }
-    isPresenting = true;
-    presentBlackout = false;
-    presentReveal.setSlides(d.slides);
-    presentIndex = Math.max(0, d.slides.findIndex((s) => s.id === selectedId));
-    presentReveal.goTo(presentIndex, { force: true });
-    presentSlideKey = "";
-
-    if (presentEls.overlay) presentEls.overlay.hidden = false;
-    document.documentElement.requestFullscreen().catch(() => {});
-
-    if (speaker) {
-      togglePresentSpeakerMode(true);
-    } else {
-      togglePresentSpeakerMode(false);
-    }
-
-    if (!presentClockInterval) {
-      updatePresentWallClock();
-      presentClockInterval = setInterval(updatePresentWallClock, 1000);
-    }
-
-    if (!presentDraw && presentEls.frameWrap) {
-      presentDraw = mountPresenterDraw(presentEls.frameWrap);
-    }
-    renderPresentSlide();
-
-    document.addEventListener("keydown", handlePresentKeydown);
-    document.addEventListener("click", handlePresentClick);
-    document.addEventListener("fullscreenchange", handlePresentFullscreenChange);
-    window.addEventListener("mousemove", showPresentHud);
-    window.addEventListener("resize", fitPresentFrame);
-  }
-
-  function closePresentation() {
-    if (!isPresenting) return;
-    isPresenting = false;
-    if (presentDraw) {
-      presentDraw.toggle("none");
-      presentDraw.clear();
-    }
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
-    }
-    if (presentEls.overlay) presentEls.overlay.hidden = true;
-
-    document.removeEventListener("keydown", handlePresentKeydown);
-    document.removeEventListener("click", handlePresentClick);
-    document.removeEventListener("fullscreenchange", handlePresentFullscreenChange);
-    window.removeEventListener("mousemove", showPresentHud);
-    window.removeEventListener("resize", fitPresentFrame);
-
-    if (view && view.presentation.slides[presentIndex]) {
-      selectedId = view.presentation.slides[presentIndex].id;
-    }
-    stageKey = "";
-    applyView(view);
-  }
-
-  function initPresenterListeners() {
-    if (presentEls.hudExitBtn) {
-      presentEls.hudExitBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        closePresentation();
-      });
-    }
-    if (presentEls.speakerCloseBtn) {
-      presentEls.speakerCloseBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        closePresentation();
-      });
-    }
-    if (presentEls.exitSpeaker) {
-      presentEls.exitSpeaker.addEventListener("click", (e) => {
-        e.stopPropagation();
-        togglePresentSpeakerMode(false);
-      });
-    }
-    if (presentEls.hudSpeaker) {
-      presentEls.hudSpeaker.addEventListener("click", (e) => {
-        e.stopPropagation();
-        togglePresentSpeakerMode();
-      });
-    }
-    if (presentEls.hudFullscreen) {
-      presentEls.hudFullscreen.addEventListener("click", (e) => {
-        e.stopPropagation();
-        togglePresentFullscreen();
-      });
-    }
-    if (presentEls.timerToggle) {
-      presentEls.timerToggle.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (presentTimerRunning) pausePresentTimer();
-        else startPresentTimer();
-      });
-    }
-    if (presentEls.timerReset) {
-      presentEls.timerReset.addEventListener("click", (e) => {
-        e.stopPropagation();
-        resetPresentTimer();
-      });
-    }
-    if (presentEls.notesDown) {
-      presentEls.notesDown.addEventListener("click", (e) => {
-        e.stopPropagation();
-        presentNotesFontSize = Math.max(14, presentNotesFontSize - 2);
-        if (presentEls.notesBody) presentEls.notesBody.style.fontSize = `${presentNotesFontSize}px`;
-      });
-    }
-    if (presentEls.notesUp) {
-      presentEls.notesUp.addEventListener("click", (e) => {
-        e.stopPropagation();
-        presentNotesFontSize = Math.min(32, presentNotesFontSize + 2);
-        if (presentEls.notesBody) presentEls.notesBody.style.fontSize = `${presentNotesFontSize}px`;
-      });
-    }
-    if (presentEls.frame) {
-      presentEls.frame.addEventListener("load", () => {
-        // `load` fires after the slide runtime installed its listener, and it is
-        // the only signal tied to *this* document. A stale `ready` from the
-        // document being replaced must never consume the intro step.
-        presentReveal.markReady();
-        flushPresentSteps();
-      });
-    }
-    window.addEventListener("message", (event) => {
-      const data = event.data;
-      if (!data || data.__slyde !== true) return;
-      const frameWindow = presentEls.frame && presentEls.frame.contentWindow;
-      if (data.type === "ready") {
-        presentReveal.markReady();
-        return;
-      }
-      if (data.type === "key") {
-        // A focused slide document owns the keyboard; the sandbox runtime
-        // forwards each key so navigation never dies after touching the slide.
-        if (!isPresenting || !frameWindow || event.source !== frameWindow) return;
-        handlePresentKeydown(
-          new KeyboardEvent("keydown", {
-            key: data.key,
-            code: data.code,
-            altKey: !!data.altKey,
-            ctrlKey: !!data.ctrlKey,
-            metaKey: !!data.metaKey,
-            shiftKey: !!data.shiftKey,
-            bubbles: false,
-            cancelable: true,
-          })
-        );
-      }
-    });
-  }
+  // ---------- In-Studio Presentation Mode ----------
+  const presenter = createPresenterOverlay({
+    $,
+    t,
+    toast,
+    getView: () => view,
+    getDeck: deck,
+    getSandboxOrigin: () => sandboxOrigin,
+    getSourceQuery: () => sourceQuery,
+    getSelectedId: () => selectedId,
+    onClosed: ({ slideId }) => {
+      if (slideId) selectedId = slideId;
+      stageKey = "";
+      applyView(view);
+    },
+  });
 
   function setupPresentGroup() {
-    initPresenterListeners();
+    presenter.bindControls();
 
     if (els.present) {
-      els.present.addEventListener("click", () => openPresentationInStudio(false));
+      els.present.addEventListener("click", () => presenter.open(false));
     }
     if (els.presentMenuTrigger && els.presentMenu) {
       els.presentMenuTrigger.addEventListener("click", (e) => {
@@ -1879,13 +1246,13 @@ function boot(sessionToken) {
     if (els.presentFullscreen) {
       els.presentFullscreen.addEventListener("click", () => {
         if (els.presentMenu) els.presentMenu.hidden = true;
-        openPresentationInStudio(false);
+        presenter.open(false);
       });
     }
     if (els.presentSpeaker) {
       els.presentSpeaker.addEventListener("click", () => {
         if (els.presentMenu) els.presentMenu.hidden = true;
-        openPresentationInStudio(true);
+        presenter.open(true);
       });
     }
     const presentWindow = $("present-window");

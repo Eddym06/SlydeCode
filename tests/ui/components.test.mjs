@@ -17,6 +17,8 @@ import {
 } from "../../ui/static/presenter-core.js";
 import { formatClock, paceState, readingSeconds } from "../../ui/static/teleprompter.js";
 import { ANIMATION_KINDS, THEME_CHOICES, readPngScale } from "../../ui/static/inspector.js";
+import { createAgentActivityView } from "../../ui/static/agent-activity-view.js";
+import { createPresenterOverlay } from "../../ui/static/presenter-overlay.js";
 import { canvasSize, placementFor } from "../../ui/static/canvas.js";
 import {
   idleActivity,
@@ -188,6 +190,76 @@ test("progress is a percentage of the deck, never out of range", () => {
   assert.equal(progressPercent(9, 4), 100, "clamped");
   assert.equal(progressPercent(0, 0), 0);
   assert.equal(progressPercent(0, undefined), 0);
+});
+
+test("the activity chip paints the phase, sweeps the visible slide and tracks engagement", () => {
+  const classes = new Set();
+  const els = {
+    agentChip: { hidden: true, dataset: {}, classList: { add: (c) => classes.add(c), remove: (c) => classes.delete(c) } },
+    agentLabel: { textContent: "" },
+    agentAnnouncer: { textContent: "" },
+    frameWrap: { hidden: false, dataset: {} },
+    stageScan: { offsetWidth: 1, classList: { add: (c) => classes.add(`scan:${c}`), remove: (c) => classes.delete(`scan:${c}`) } },
+  };
+  let selected = "sld_a";
+  const view = createAgentActivityView({
+    t: (key, vars) => (vars ? `${key}:${vars.n}` : key),
+    els,
+    getSelectedId: () => selected,
+  });
+
+  view.receive({ type: "agent_activity", phase: "writing", action: "upsert_slide", slide_id: "sld_a", slide_index: 0 });
+  view.render();
+  assert.equal(els.agentChip.hidden, false, "the chip appears");
+  assert.equal(els.agentChip.dataset.phase, "writing");
+  assert.equal(els.agentLabel.textContent, "agent.writing:1", "slide numbers are one-based");
+  assert.equal(els.agentAnnouncer.textContent, "agent.writing:1", "the phase is announced politely");
+  assert.equal(els.frameWrap.dataset.agentPhase, "writing", "the visible slide gets the sheen");
+  assert.ok(classes.has("scan:run"), "the sweep runs once");
+
+  // A slide that is not on the stage gets no sheen.
+  selected = "sld_other";
+  view.render({ announce: false });
+  assert.equal(els.frameWrap.dataset.agentPhase, undefined);
+
+  // People editing are not followed; the window closes by itself.
+  assert.equal(view.userIsEngaged === undefined, false);
+  view.markInteraction();
+  assert.equal(view.userIsEngaged(), true, "right after a key or pointer event the user is engaged");
+});
+
+test("the presenter overlay owns its state and refuses to open an empty deck", () => {
+  const toasts = [];
+  const closed = [];
+  // No DOM at all: every element lookup is null, which the overlay must tolerate.
+  const overlay = createPresenterOverlay({
+    $: () => null,
+    t: (key) => key,
+    toast: (message) => toasts.push(message),
+    getView: () => ({ presentation: { slides: [], aspect_ratio: "16:9", title: "Empty" } }),
+    getDeck: () => ({ slides: [] }),
+    getSandboxOrigin: () => "http://127.0.0.1:1",
+    getSourceQuery: () => "&t=x",
+    getSelectedId: () => null,
+    onClosed: (info) => closed.push(info),
+  });
+
+  const hadWindow = "window" in globalThis;
+  const originalWindow = globalThis.window;
+  // The overlay listens for the slide frame's messages on `window`.
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    assert.equal(overlay.isPresenting(), false);
+    overlay.bindControls(); // must not throw without the overlay markup
+    overlay.open(false);
+    assert.deepEqual(toasts, ["present.empty"], "the user is told why nothing opened");
+    assert.equal(overlay.isPresenting(), false);
+    overlay.close(); // closing a closed overlay is a no-op
+    assert.deepEqual(closed, [], "onClosed only fires for a real presentation");
+  } finally {
+    if (hadWindow) globalThis.window = originalWindow;
+    else delete globalThis.window;
+  }
 });
 
 test("the PNG quality defaults to 2x and survives a missing or hostile store", () => {
