@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-26 13:30
+> Last updated: 2026-10-26 16:00
 
 ## Current Phase
 
@@ -54,6 +54,18 @@ old suite:
 - SVG brand mark (`logo-icon.svg`, also the favicon) replaces the PNG in the
   topbar; a keyboard shortcut sheet (`?`, `shortcuts.js`) lists studio, canvas
   and presenter keys in EN/ES.
+- **Right column redesign.** "Inspector" is now **Design** (ES "Diseño"). A
+  sliding spring-physics switch (Design | Copilot) replaces the tab strip, the
+  Slide/Deck sub-switch shares the same mechanism, and panels cross-slide in the
+  direction of the thumb. Design is a stack of cards (layout, notes, a motion
+  timeline with numbered steps, an elements tree, source), the Deck tab has
+  mini-slide theme previews, aspect-ratio shapes and export tiles. Cards animate
+  in only when the slide or tab changes, never on a remote re-render. The
+  copilot got gradient user bubbles, a live avatar, an animated work log (spinner
+  to drawn check), a floating empty state, horizontally scrolling prompt chips
+  and an elevated composer with a morphing send/stop button. Styles live in
+  `ui/static/panels.css` (loaded after `app.css`); all ids/classes the scripts
+  and E2E rely on are unchanged. Reduced-motion is honored.
 - E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
   the PDF export test fails on the untouched baseline in this container.
 

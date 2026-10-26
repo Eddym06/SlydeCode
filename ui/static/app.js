@@ -322,8 +322,19 @@ function boot(sessionToken) {
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
     });
+    const switchEl = $("tab-inspector").parentElement;
+    const changed = switchEl.dataset.active !== activePanel;
+    switchEl.dataset.active = activePanel;
     $("inspector-panel").hidden = copilotActive;
     $("copilot-panel").hidden = !copilotActive;
+    if (changed) {
+      // Restart the entrance so each switch reads as a transition, not a swap.
+      const shown = $(copilotActive ? "copilot-panel" : "inspector-panel");
+      shown.dataset.dir = copilotActive ? "next" : "prev";
+      shown.classList.remove("panel-in");
+      void shown.offsetWidth;
+      shown.classList.add("panel-in");
+    }
     if (focus) {
       $(copilotActive ? "tab-copilot" : "tab-inspector").focus();
     }
@@ -875,6 +886,8 @@ function boot(sessionToken) {
       },
       applyI18n,
       onEmptyDeck: () => {
+        const group = els.subtabSlide && els.subtabSlide.parentElement;
+        if (group) group.dataset.active = "deck";
         if (els.subtabSlide) els.subtabSlide.disabled = true;
         if (els.subtabDeck) {
           els.subtabDeck.classList.add("active");
@@ -882,6 +895,8 @@ function boot(sessionToken) {
         }
       },
       onSubtabs: (showSlide) => {
+        const group = els.subtabSlide && els.subtabSlide.parentElement;
+        if (group) group.dataset.active = showSlide ? "slide" : "deck";
         if (els.subtabSlide) {
           els.subtabSlide.disabled = false;
           els.subtabSlide.classList.toggle("active", showSlide);

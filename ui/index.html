@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/static/fonts.css">
   <link rel="stylesheet" href="/static/tokens.css">
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/panels.css">
   <link rel="stylesheet" href="/static/present.css">
   <script>
     // Apply the saved theme before first paint to avoid a flash.
@@ -217,10 +218,12 @@
       </section>
 
       <aside class="inspector" id="right-panel">
-        <div class="panel-tabs" role="tablist" data-i18n-aria="panel.tabs" aria-label="Studio panels">
+        <div class="panel-tabs panel-switch" role="tablist" data-active="inspector" data-i18n-aria="panel.tabs" aria-label="Studio panels">
+          <span class="switch-thumb" aria-hidden="true"></span>
           <button type="button" class="panel-tab" id="tab-inspector" role="tab"
                   aria-selected="true" aria-controls="inspector-panel" tabindex="0">
-            <span data-i18n="inspector.title">Inspector</span>
+            <svg class="switch-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3Z"/><circle cx="7.5" cy="11.5" r=".9" fill="currentColor"/><circle cx="10.5" cy="7.5" r=".9" fill="currentColor"/><circle cx="15" cy="8" r=".9" fill="currentColor"/></svg>
+            <span data-i18n="inspector.title">Design</span>
           </button>
           <button type="button" class="panel-tab" id="tab-copilot" role="tab"
                   aria-selected="false" aria-controls="copilot-panel" tabindex="-1">
@@ -233,7 +236,8 @@
         </div>
 
         <div class="panel-body" id="inspector-panel" role="tabpanel" aria-labelledby="tab-inspector">
-          <div class="inspector-subtabs" role="tablist" aria-label="Inspector views">
+          <div class="inspector-subtabs" role="tablist" data-active="slide" aria-label="Design views">
+            <span class="switch-thumb" aria-hidden="true"></span>
             <button type="button" class="inspector-subtab active" id="subtab-slide" role="tab" aria-selected="true" data-i18n="inspector.tabSlide">Slide</button>
             <button type="button" class="inspector-subtab" id="subtab-deck" role="tab" aria-selected="false" data-i18n="inspector.tabDeck">Deck</button>
           </div>
