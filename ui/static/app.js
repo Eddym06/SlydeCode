@@ -10,6 +10,7 @@ import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { mountShortcuts } from "./shortcuts.js";
 import { templateIcon } from "./template-icons.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
@@ -349,6 +350,8 @@ function boot(sessionToken) {
     if (event.target.closest("#right-panel, #panel-toggle, .sheet, .library, [role='dialog']")) return;
     setDrawer(false);
   });
+
+  mountShortcuts({ t, applyI18n });
 
   $("tab-inspector").addEventListener("click", () => setPanel("inspector"));
   $("tab-copilot").addEventListener("click", () => setPanel("copilot"));

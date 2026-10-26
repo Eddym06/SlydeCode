@@ -49,6 +49,11 @@ old suite:
 - Template icons are SVG (`template-icons.js`) instead of emoji; copilot
   suggestion chips follow the selection (block / slide / deck) and hide until a
   provider is connected.
+- Copilot turns report `usage` (provider calls + ~input tokens, estimated at
+  4 chars/token) and the thread shows it under the finished message.
+- SVG brand mark (`logo-icon.svg`, also the favicon) replaces the PNG in the
+  topbar; a keyboard shortcut sheet (`?`, `shortcuts.js`) lists studio, canvas
+  and presenter keys in EN/ES.
 - E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
   the PDF export test fails on the untouched baseline in this container.
 

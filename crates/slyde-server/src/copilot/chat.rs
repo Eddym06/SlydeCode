@@ -125,10 +125,11 @@ async fn run_inner(
 
     let language = request.language.as_deref().unwrap_or("en");
 
+    let mut input_chars: u64 = 0;
     let mut last_signature: Option<String> = None;
     let mut repeats: u32 = 0;
 
-    for _round in 0..MAX_TOOL_ROUNDS {
+    for round in 0..MAX_TOOL_ROUNDS {
         if tx.is_closed() || crate::copilot::CopilotState::was_cancelled(&cancel) {
             return Err(CopilotError::Cancelled);
         }
@@ -149,6 +150,7 @@ async fn run_inner(
             language,
         );
         compact_history(&mut turns);
+        input_chars += (system.len() + turns.iter().map(Turn::chars).sum::<usize>()) as u64;
         let assistant = transport::stream(
             state.copilot.http(),
             &transport::StreamRequest {
@@ -174,6 +176,11 @@ async fn run_inner(
                     "the model returned an empty response".into(),
                 ));
             }
+            let _ = tx.send(ChatEvent::Usage {
+                calls: round as u32 + 1,
+                // ~4 characters per token is close enough for a budget hint.
+                approx_input_tokens: input_chars / 4,
+            });
             return Ok(());
         }
 
@@ -485,6 +492,12 @@ mod tests {
         assert!(
             events.iter().any(|event| matches!(event, ChatEvent::Done)),
             "the turn must finish cleanly: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ChatEvent::Usage { calls: 2, .. })),
+            "usage must report the two provider calls"
         );
         let view = state.view().await;
         assert_eq!(view.presentation.slides.len(), 6);

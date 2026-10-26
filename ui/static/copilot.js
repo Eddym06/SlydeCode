@@ -510,7 +510,15 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
 
     const state = message.el.querySelector(".msg-state");
-    state.textContent = message.state === "stopped" ? t("copilot.stopped") : "";
+    state.textContent =
+      message.state === "stopped"
+        ? t("copilot.stopped")
+        : message.state === "done" && message.usage
+          ? t("copilot.usage", {
+              calls: message.usage.calls,
+              tokens: formatTokens(message.usage.tokens),
+            })
+          : "";
 
     const typing = message.el.querySelector(".msg-typing");
     const running = message.tools.some((tool) => tool.status === "running");
@@ -823,6 +831,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
   }
 
+  function formatTokens(n) {
+    return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  }
+
   function handleStreamEvent(assistant, event) {
     if (event.type === "thinking") {
       if (assistant.state !== "streaming") return;
@@ -850,6 +862,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         else assistant.tools.push({ name, status: event.status });
       }
       syncAssistant(assistant);
+      return;
+    }
+    if (event.type === "usage") {
+      assistant.usage = { calls: event.calls, tokens: event.approx_input_tokens };
       return;
     }
     if (event.type === "done") {
