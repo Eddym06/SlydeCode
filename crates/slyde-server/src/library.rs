@@ -217,6 +217,7 @@ impl Library {
     /// the caller decides what to open next.
     pub fn remove(&self, id: &str) -> Result<(), ServerError> {
         validate_id(id)?;
+        crate::thumbnails::forget(&self.root, id);
         match std::fs::remove_file(self.path_for(id)) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

@@ -25,6 +25,7 @@ pub mod sandbox;
 pub mod starter;
 pub mod state;
 pub mod storage;
+pub mod thumbnails;
 pub mod ws;
 
 use std::path::PathBuf;

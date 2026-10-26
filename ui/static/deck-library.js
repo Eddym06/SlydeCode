@@ -46,6 +46,10 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
   let confirmDeleteId = null;
   let open = false;
   let lastFocus = null;
+  // Covers the server has rendered, as id -> the `updated_at_ms` they match. A
+  // deck that changed has a new key, so its old cover is never shown.
+  const covers = new Map();
+  let coverRun = 0;
   // Filled in by the consumer: the sheet renders translated markup itself, so it
   // needs the same `apply(root)` pass the rest of the UI uses.
   let applyI18n = () => {};
@@ -112,6 +116,18 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
     return `${slides} · ${when} · ${escapeHtml(theme)}`;
   }
 
+  function coverMarkup(deck) {
+    const ready = covers.get(deck.id) === deck.updated_at_ms;
+    const inner = ready
+      ? `<img alt="" decoding="async" src="${escapeHtml(
+          client.deckThumbnailUrl(deck.id, deck.updated_at_ms)
+        )}" />`
+      : `<span class="deck-cover-initial" aria-hidden="true">${escapeHtml(
+          (deck.title.trim()[0] || "·").toUpperCase()
+        )}</span>`;
+    return `<span class="deck-cover${ready ? " is-ready" : ""}" data-cover-for="${escapeHtml(deck.id)}" data-ratio="${escapeHtml(deck.aspect_ratio)}">${inner}</span>`;
+  }
+
   function rowMarkup(deck) {
     const isActive = deck.id === active;
     if (editingId === deck.id) {
@@ -129,13 +145,16 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
     return `
       <li class="deck-row${isActive ? " is-active" : ""}" data-deck-id="${escapeHtml(deck.id)}">
         <button type="button" class="deck-open" data-library-action="open" data-deck-id="${escapeHtml(deck.id)}">
-          <span class="deck-title">${escapeHtml(deck.title)}</span>
-          <span class="deck-meta">${metaLine(deck)}</span>
-          ${
-            isActive
-              ? `<span class="deck-badge" data-i18n="library.active"></span>`
-              : ""
-          }
+          ${coverMarkup(deck)}
+          <span class="deck-text">
+            <span class="deck-row-title">${escapeHtml(deck.title)}</span>
+            <span class="deck-row-meta">${metaLine(deck)}</span>
+            ${
+              isActive
+                ? `<span class="deck-badge" data-i18n="library.active"></span>`
+                : ""
+            }
+          </span>
         </button>
         <div class="deck-actions">
           ${
@@ -171,10 +190,42 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
   }
 
 
+  // Asks for the covers of the decks the sheet shows. The server renders the
+  // missing ones in one go; the images are then swapped in place, so a cover
+  // arriving never rebuilds the list under a rename field or a pending delete.
+  async function loadCovers() {
+    if (!open || typeof client.deckThumbnails !== "function") return;
+    const run = (coverRun += 1);
+    const wanted = visibleDecks()
+      .filter((deck) => deck.slides > 0 && covers.get(deck.id) !== deck.updated_at_ms)
+      .slice(0, 24);
+    if (wanted.length === 0) return;
+    let payload;
+    try {
+      payload = await client.deckThumbnails(wanted.map((deck) => deck.id));
+    } catch {
+      return; // covers are decoration: the list works without them
+    }
+    if (run !== coverRun || !open || !payload || !Array.isArray(payload.ready)) return;
+    for (const id of payload.ready) {
+      const deck = decks.find((candidate) => candidate.id === id);
+      if (!deck) continue;
+      covers.set(id, deck.updated_at_ms);
+      const slot = els.list.querySelector(`[data-cover-for="${CSS.escape(id)}"]`);
+      if (slot) {
+        slot.outerHTML = coverMarkup(deck);
+      }
+    }
+  }
+
   function setData(payload) {
     decks = Array.isArray(payload && payload.decks) ? payload.decks : [];
     active = payload && typeof payload.active === "string" ? payload.active : null;
+    for (const id of [...covers.keys()]) {
+      if (!decks.some((deck) => deck.id === id)) covers.delete(id);
+    }
     render();
+    loadCovers();
   }
 
   async function call(action) {
@@ -277,6 +328,7 @@ export function mountDeckLibrary({ root, client, t, notify, onApplied }) {
   els.search.addEventListener("input", () => {
     query = els.search.value;
     render();
+    loadCovers();
   });
 
   function onKeydown(event) {

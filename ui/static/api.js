@@ -127,6 +127,23 @@ export function createClient(token) {
       return json(`/api/decks`);
     },
 
+    /**
+     * Asks the server to render the covers that are missing (one Chrome session
+     * for all of them) and answers with the ids that now have one.
+     */
+    deckThumbnails(ids) {
+      return json(`/api/decks/thumbnails`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+    },
+
+    /** URL of a cached cover. `version` busts the browser cache when the deck changes. */
+    deckThumbnailUrl(id, version) {
+      return `/api/decks/${encodeURIComponent(id)}/thumbnail?${query}&v=${encodeURIComponent(version)}`;
+    },
+
     deckNew(title) {
       return json(`/api/decks/new`, {
         method: "POST",

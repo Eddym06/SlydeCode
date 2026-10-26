@@ -542,16 +542,66 @@
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
   border: 0;
   border-radius: var(--r-control);
   background: transparent;
   text-align: left;
 }
 
-.deck-title {
+.deck-text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deck-cover {
+  display: grid;
+  flex: 0 0 auto;
+  width: 112px;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--surface-sunken);
+  color: var(--ink-subtle);
+}
+
+.deck-cover[data-ratio="4:3"] {
+  aspect-ratio: 4 / 3;
+  width: 84px;
+}
+
+.deck-cover[data-ratio="9:16"] {
+  aspect-ratio: 9 / 16;
+  width: 36px;
+}
+
+.deck-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: deck-cover-in var(--dur-base) var(--ease-out);
+}
+
+.deck-cover-initial {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+@keyframes deck-cover-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.deck-row-title {
   overflow: hidden;
   color: var(--ink);
   font-size: 14px;
@@ -561,7 +611,7 @@
   white-space: nowrap;
 }
 
-.deck-meta {
+.deck-row-meta {
   color: var(--ink-muted);
   font-size: 11.5px;
   line-height: 1.4;

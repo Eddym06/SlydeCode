@@ -66,6 +66,11 @@ pub fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/decks/rename", post(crate::deck_api::api_rename))
         .route("/api/decks/duplicate", post(crate::deck_api::api_duplicate))
         .route("/api/decks/delete", post(crate::deck_api::api_delete))
+        .route("/api/decks/thumbnails", post(crate::thumbnails::api_ensure))
+        .route(
+            "/api/decks/{id}/thumbnail",
+            get(crate::thumbnails::api_thumbnail),
+        )
         .route(
             "/api/copilot/config",
             get(crate::copilot::routes::api_config),
@@ -101,6 +106,7 @@ pub fn sandbox_router(state: Arc<AppState>) -> Router {
         .route("/assets/{name}", get(crate::asset_api::serve_asset))
         .route("/print", get(print_document))
         .route("/s/{id}", get(sandbox_slide))
+        .route("/library/{id}/cover", get(crate::thumbnails::sandbox_cover))
         .with_state(state)
 }
 

@@ -2419,3 +2419,71 @@ test("the PowerPoint export keeps slide text as editable text boxes", async () =
   assert.match(slideXml, /b="1"/, "bold survives");
   assert.match(slideXml, /<p:pic>/, "the plate picture is still there");
 });
+
+test("the library shows real covers, renders them on demand and never serves a stale one", async () => {
+  const get = (path, init) =>
+    fetch(new URL(path, appUrl), {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+  const listing = await (await get("/api/decks")).json();
+  const activeId = listing.active;
+  assert.ok(activeId, "a deck is open");
+
+  // Nothing is rendered until somebody asks.
+  assert.equal(
+    (await get(`/api/decks/${activeId}/thumbnail`)).status === 200 ||
+      (await get(`/api/decks/${activeId}/thumbnail`)).status === 404,
+    true
+  );
+
+  // Hostile ids never reach the file system.
+  const hostile = await get("/api/decks/..%2F..%2Fsecret/thumbnail");
+  assert.notEqual(hostile.status, 200);
+
+  // The sheet asks for the covers it shows and swaps real images in.
+  const isOpen = await page.evaluate(`!document.getElementById("deck-library").hidden`);
+  if (isOpen) {
+    await page.evaluate(`document.querySelector('[data-library-action="close"]').click(); true`);
+    await sleep(200);
+  }
+  await page.evaluate(`document.getElementById("topbar-library").click(); true`);
+  await page.waitFor(
+    `(() => { const img = document.querySelector(".deck-cover.is-ready img"); return !!img && img.complete && img.naturalWidth > 0; })()`,
+    { timeout: 45000 }
+  );
+  const cover = await page.evaluate(`(() => {
+    const img = document.querySelector(".deck-cover.is-ready img");
+    return { width: img.naturalWidth, height: img.naturalHeight, alt: img.getAttribute("alt") };
+  })()`);
+  // The top bar has its own `.deck-title`/`.deck-meta`; the rows once inherited
+  // them and their metadata line collapsed to zero height without any error.
+  const metaHeight = await page.evaluate(
+    `document.querySelector(".deck-row-meta").getBoundingClientRect().height`
+  );
+  assert.ok(metaHeight > 8, `the row metadata is visible (height ${metaHeight})`);
+  assert.equal(cover.width, 1280, "covers render at 1x");
+  assert.equal(cover.alt, "", "the title already names the deck, the image is decoration");
+
+  // The cached file is a PNG served with the right type.
+  const served = await get(`/api/decks/${activeId}/thumbnail`);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get("content-type"), "image/png");
+
+  // Editing the deck changes its key: the old cover must not be served.
+  const edit = await get("/api/command", {
+    method: "POST",
+    body: JSON.stringify({ action: "set_title", title: "Cover invalidation probe" }),
+  });
+  assert.equal(edit.status, 200, "the edit was accepted");
+  assert.equal(
+    (await get(`/api/decks/${activeId}/thumbnail`)).status,
+    404,
+    "a changed deck has no cover until it is rendered again"
+  );
+  const again = await (await get("/api/decks/thumbnails", { method: "POST", body: JSON.stringify({ ids: [activeId] }) })).json();
+  assert.ok(again.ready.includes(activeId), "the new cover is rendered on request");
+  assert.equal((await get(`/api/decks/${activeId}/thumbnail`)).status, 200);
+
+  await page.evaluate(`document.querySelector('[data-library-action="close"]').click(); true`);
+});
