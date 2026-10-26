@@ -12,7 +12,7 @@
 // reserved word) is.
 
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
@@ -88,5 +88,27 @@ test("api.js exports the client factory without touching the DOM", async () => {
     "connect",
   ]) {
     assert.equal(typeof client[name], "function", `client.${name} exists`);
+  }
+});
+
+test("every stylesheet and script the HTML pages link exists", () => {
+  // The UI has no bundler: a stylesheet that was split or renamed but still
+  // linked (or the reverse) is a silently unstyled studio.
+  const uiDir = join(here, "..", "..", "ui");
+  for (const page of ["index.html", "present.html"]) {
+    const html = readFileSync(join(uiDir, page), "utf8");
+    const linked = [...html.matchAll(/(?:href|src)="\/static\/([^"?#]+)"/g)].map((m) => m[1]);
+    assert.ok(linked.length > 0, `${page} links nothing`);
+    for (const file of linked) {
+      assert.ok(existsSync(join(staticDir, file)), `${page} links a missing file: /static/${file}`);
+    }
+  }
+});
+
+test("the studio styles are split by responsibility and no sheet creeps back past 800 lines", () => {
+  assert.ok(!existsSync(join(staticDir, "app.css")), "app.css was split; do not recreate the monolith");
+  for (const name of readdirSync(staticDir).filter((n) => n.endsWith(".css"))) {
+    const lines = readFileSync(join(staticDir, name), "utf8").split("\n").length;
+    assert.ok(lines <= 800, `${name} has ${lines} lines; split it by responsibility`);
   }
 });

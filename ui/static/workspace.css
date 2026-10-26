@@ -1,0 +1,358 @@
+/* ---------- workspace ---------- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 244px minmax(0, 1fr) 352px;
+  min-height: 0;
+}
+
+.rail,
+.inspector {
+  background: var(--surface);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rail {
+  border-right: 1px solid var(--border);
+}
+
+.inspector {
+  border-left: 1px solid var(--border);
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.count {
+  font-size: 11px;
+  color: var(--ink-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.storyboard {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-sunken);
+  padding: 0;
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.thumb:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+
+.thumb[aria-current="true"] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px var(--brand-soft);
+}
+
+.thumb-media {
+  position: relative;
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+
+/* The slide document scales itself to whatever box it gets, so the thumbnail
+   iframe only has to fill that box. */
+.thumb-media iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+.thumb-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 10px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.thumb-index {
+  font-size: 12px;
+  color: var(--ink-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.thumb-template {
+  font-size: 12px;
+  color: var(--ink-muted);
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.add-slide-wrap {
+  display: flex;
+  margin: 0 12px 14px;
+  gap: 4px;
+}
+
+.add-slide-wrap .add-slide {
+  margin: 0;
+  flex: 1;
+}
+
+.add-slide-picker {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+.add-slide-picker:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.add-slide {
+  margin: 0 12px 14px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 13.5px;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.add-slide:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+/* ---------- stage ---------- */
+
+.stage-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-sunken);
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.stage.is-space-pan {
+  cursor: grab !important;
+}
+
+.stage.is-panning {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.stage-frame {
+  position: relative;
+  border-radius: var(--r-card);
+  overflow: hidden;
+  background: #17161a;
+  box-shadow: var(--shadow-3);
+  transition: width var(--dur-base) var(--ease-out), height var(--dur-base) var(--ease-out);
+}
+
+.stage-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Generation moment: a single 700ms sweep over the slide being written.
+   The sheen is anchored to the canvas, never to a panel. */
+.stage-agent {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: rgba(10, 10, 12, 0.04);
+  overflow: hidden;
+  transition: opacity var(--dur-base) var(--ease-out);
+}
+
+.stage-frame[data-agent-phase="writing"] .stage-agent {
+  opacity: 1;
+}
+
+.stage-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 16%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(255, 107, 74, 0.04) 55%,
+    rgba(255, 107, 74, 0.12) 82%,
+    rgba(255, 107, 74, 0.52) 98%,
+    rgba(255, 175, 130, 0.72) 100%
+  );
+  transform: translateY(-120%);
+  will-change: transform;
+}
+
+.stage-scan.run {
+  animation: stage-scan 700ms var(--ease-in-out) 1 both;
+}
+
+@keyframes stage-scan {
+  from {
+    transform: translateY(-120%);
+  }
+  to {
+    transform: translateY(520%);
+  }
+}
+
+.stage-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px 14px;
+  min-height: 44px;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-muted);
+  border-radius: 999px;
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.chip:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gradient-signature);
+}
+
+.stage-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--ink-subtle);
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-subtle);
+  transition: background var(--dur-base) var(--ease-out);
+}
+
+.status-dot[data-state="online"] {
+  background: var(--success);
+}
+
+.status-dot[data-state="offline"] {
+  background: var(--danger);
+}
+
+/* ---------- empty state ---------- */
+
+.empty {
+  max-width: 520px;
+  text-align: center;
+  padding: 40px 24px;
+}
+
+.empty-mark {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 20px;
+  border-radius: 18px;
+  background: var(--gradient-signature);
+  box-shadow: var(--glow-brand);
+  display: grid;
+  place-items: center;
+}
+
+.empty-mark svg {
+  width: 26px;
+  height: 26px;
+}
+
+.empty h1 {
+  margin: 0 0 10px;
+  font-size: 34px;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
+  font-weight: 600;
+}
+
+.empty p {
+  margin: 0 0 22px;
+  color: var(--ink-muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+

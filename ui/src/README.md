@@ -12,7 +12,9 @@ The frontend that ships today is plain ES modules in `ui/static/`:
 | `agent-activity.js` | Activity state machine (pure, unit-tested) |
 | `i18n.js` | EN/ES dictionaries plus the `t()` layer |
 | `present.js`, `teleprompter.js` | Standalone presenter and pacing |
-| `tokens.css`, `app.css`, `present.css` | Design tokens and surfaces |
+| `tokens.css`, `present.css` | Design tokens and the standalone presenter surface |
+| `topbar.css`, `workspace.css`, `inspector.css`, `widgets.css`, `canvas-library.css` | Studio shell surfaces. `index.html` links them in this order and the cascade depends on it |
+| `copilot.css`, `copilot-reasoning.css`, `copilot-sheet.css` | Copilot thread, reasoning drawer, provider and model sheet |
 
 These directories are the target for the split described in `STATE.md`:
 `components/` (one component per file), `features/` (storyboard, inspector,

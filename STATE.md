@@ -1,8 +1,36 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 18:20
+> Last updated: 2026-10-26 12:10
 
 ## Current Phase
+
+Phase 3.6 — **Review follow-up: hardening, copilot validated live, PNG quality, CSS split.**
+230 Rust tests and 77 UI tests (browser/CDP + component + module) green; `cargo fmt --check`
+and `clippy -D warnings` clean.
+
+### Done in this round (2026-10-26)
+
+- **Copilot validated against a live provider.** DeepSeek (`deepseek-flash` and
+  `deepseek-v4-pro`) built a 3-slide deck, wrote notes, switched theme and read the deck
+  back through the real tool loop. The other six providers are still unverified.
+- **`set_title` tool** (additive): `AgentCommand::SetTitle`, `AgentAction::SetTitle`, the
+  copilot tool, a prompt line and EN/ES labels. Found live: the model could not name an
+  existing deck and left "Untitled presentation". Agent titles are trimmed, non-empty and
+  at most 120 characters (`CoreError::InvalidTitle`); the editor path stays permissive.
+- **Sandbox hardening.** The slide runtime now ignores any message whose `event.source` is
+  not `window.parent`, and `select-by-id` no longer splices the id into a selector.
+- **PNG quality picker.** `POST /api/export?format=png&scale=1..3` (default 2, clamped,
+  PNG only), an inspector select persisted in `localStorage`, EN/ES strings, and an E2E
+  that checks real PNG widths (1280 / 2560 / 3840).
+- **No production `unwrap()` left in the HTML export path** (it now reuses `attachment()`
+  with the RFC 5987 filename).
+- **`app.css` (3,807 lines) split into 8 sheets** linked in the original order. A computed
+  style dump of 2,353 elements (light/dark) was identical before and after; a module test
+  now fails if a linked file is missing or a sheet passes 800 lines.
+- **`MEMORY.md` pruned**: the AGPL row is marked superseded by MIT, the broken table row is
+  fixed, and the stale PPTX/PNG/cancel notes carry their supersession.
+- **Flaky test fixed**: the arrow-key nudge test slept a fixed time after clicks while the
+  stage reloaded; it now waits for the stage document and the selection outline.
 
 Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
 All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
@@ -238,7 +266,15 @@ Nothing partially implemented on the branch.
 - PNG export at 2x triples the file size; there is no user-facing 1x/2x choice.
 - Provider model lists include models that may not support tool calling; the UI
   shows metadata but does not pre-validate capability.
-- Real provider calls are still unverified with live keys.
+- Only DeepSeek has been exercised with a live key. OpenAI, Anthropic, Gemini, xAI, Groq,
+  OpenRouter and NVIDIA are still unverified.
+- A provider connection reset mid-stream (seen once with DeepSeek, `os error 10054`) ends the
+  turn with a localized network error; there is no automatic retry.
+- A first copilot turn takes 70–140 s on DeepSeek and streams ~8–10k `thinking` SSE frames.
+  Coalescing thinking deltas would cut traffic without changing the UI.
+- `studio.test.mjs` is ~2,200 lines and `interaction.test.mjs` still uses many fixed
+  `sleep()` waits; one of them already flaked. Convert them to readiness waits as they bite.
+- `app.js` is still ~1,900 lines with shared mutable state (backlog #2).
 
 ## Build & Platform Status
 
@@ -258,7 +294,8 @@ Nothing partially implemented on the branch.
 
 ## Backlog (Prioritized)
 
-1. **Validate the copilot against live provider keys** (all eight).
+1. **Validate the remaining copilot providers** (seven left) and add one retry for a
+   connection reset that happens before the first delta.
 2. **Turn the shell into a state object**: the panels are modules, but the shell
    still shares ~30 mutable `let`s through closures instead of one read model
    with explicit subscriptions.
@@ -272,11 +309,14 @@ Nothing partially implemented on the branch.
 
 ## Next Immediate Step
 
-- Review the branch, then run the copilot with one real key and report any
-  provider/model that fails.
+- Review the branch, then run the same live probe against the other providers. The
+  decisions that still need the owner: OS keychain (new dependency, fallback design) and
+  the shell state object (architecture change), both listed in the backlog.
 
 ## Completed
 
+- [x] Review follow-up: license docs, sandbox hardening, PNG quality, `set_title`, CSS
+      split, live DeepSeek validation, flaky nudge test — 2026-10-26
 - [x] Fixed the first CI run: browser discovery now builds its candidate list
       per OS, so no platform leaves a dead `mut` (`unused_mut` under
       `-D warnings` on Linux); Linux also gained absolute snap/flatpak paths, and
