@@ -1468,7 +1468,8 @@ function escapeHtml(value) {
 }
 
 function sparkSvg() {
-  return `<svg class="spark" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true"><path class="spark-main" d="M10.2 3c.7 4.7 2.5 6.5 7.2 7.2-4.7.7-6.5 2.5-7.2 7.2-.7-4.7-2.5-6.5-7.2-7.2C7.7 9.5 9.5 7.7 10.2 3Z"/><path class="spark-small" d="M18.6 13.6c.3 2 .9 2.6 2.9 2.9-2 .3-2.6.9-2.9 2.9-.3-2-.9-2.6-2.9-2.9 2-.3 2.6-.9 2.9-2.9Z"/><circle class="spark-dot" cx="19.4" cy="4.6" r="1.1" stroke="none"/></svg>`;
+  // The copilot mark: a slide with a prompt, a blinking cursor and a spark.
+  return `<svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="spark-main" d="M14.2 5.2H7A3 3 0 0 0 4 8.2v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V11"/><path class="spark-chev" d="M9.4 10.2 12.6 13.2 9.4 16.2"/><path class="spark-dot" d="M14.6 16.4h2.6"/><path class="spark-small" fill="currentColor" stroke-width="1" d="M18.3 1.9c.3 2.1 1 2.9 3.1 3.2-2.1.3-2.8 1.1-3.1 3.2-.3-2.1-1-2.9-3.1-3.2 2.1-.3 2.8-1.1 3.1-3.2Z"/></svg>`;
 }
 
 function userSvg() {

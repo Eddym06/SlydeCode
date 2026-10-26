@@ -377,6 +377,9 @@ Nothing partially implemented on the branch.
 
 ## Completed
 
+- [x] New brand mark shared by the app icon, favicon, copilot glyph and README
+      (light/dark banner) — 2026-10-27
+
 - [x] First-run wizard, five full deck templates, one-step AI connect and the
       live slide draft while the copilot writes — 2026-10-27
 

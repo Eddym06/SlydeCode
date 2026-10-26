@@ -1476,7 +1476,7 @@
   max-width: 100%;
 }
 
-/* Copilot mark: a soft main sparkle, a twinkling satellite and a dot. */
+/* Copilot mark: a slide with a prompt chevron, a blinking caret and a spark. */
 .spark {
   display: block;
   overflow: visible;
@@ -1494,10 +1494,8 @@
   transform-origin: center;
 }
 
-.spark-main {
-  transform-box: fill-box;
-  transform-origin: center;
-  transition: transform 520ms var(--spring);
+.spark-chev {
+  transition: transform 420ms var(--spring);
 }
 
 @keyframes twinkle {
@@ -1505,10 +1503,10 @@
   50% { transform: scale(0.55); opacity: 0.55; }
 }
 
-.panel-tab:hover .spark-main,
-.msg-assistant[data-state="streaming"] .spark-main,
-.copilot-empty-mark .spark-main {
-  transform: rotate(90deg) scale(1.06);
+.panel-tab:hover .spark-chev,
+.msg-assistant[data-state="streaming"] .spark-chev,
+.copilot-empty-mark .spark-chev {
+  transform: translateX(1.3px);
 }
 
 .msg-assistant[data-state="streaming"] .spark-small,

@@ -308,3 +308,15 @@ MIT and the license is compatible with a commercial product.
   `slyde.welcomed`. A new E2E suite that fails everywhere at once is usually
   this overlay or a missing `SLYDE_BROWSER` in that shell.
 
+## Brand mark (2026-10-27)
+
+- One symbol for the product and the copilot: a slide with a prompt chevron, a
+  caret and a spark. Source of truth: `assets/brand/slydecode-mark.svg` (app
+  icon, favicon, README). The copilot glyph (`sparkSvg()` in `copilot.js`, plus
+  the static copies in `ui/index.html`) is the same drawing in `currentColor`;
+  keep them in sync. It replaces the generic four-point sparkle and the old
+  stacked-slides logo (raster `logo.png` files deleted).
+- PNG/ICO are rendered from the SVG (Chromium screenshot); regenerate them
+  rather than editing by hand. README uses a light/dark `<picture>` pair because
+  the wordmark is transparent.
+
