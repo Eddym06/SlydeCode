@@ -1,3 +1,4 @@
+import { trapFocus } from "./focus-trap.js";
 // Command palette (⌘K / Ctrl+K).
 //
 // One entry point for every action in the studio. It is intentionally dumb:
@@ -103,6 +104,8 @@ export function mountCommandPalette({ root, t, buildActions }) {
     }
   }
 
+  let releaseTrap = null;
+
   function open(scope = {}) {
     if (isOpen) return;
     previousFocus = document.activeElement;
@@ -111,6 +114,7 @@ export function mountCommandPalette({ root, t, buildActions }) {
     input.value = "";
     isOpen = true;
     root.hidden = false;
+    releaseTrap = trapFocus(root);
     document.documentElement.dataset.palette = "open";
     filter();
     input.focus();
@@ -120,6 +124,8 @@ export function mountCommandPalette({ root, t, buildActions }) {
     if (!isOpen) return;
     isOpen = false;
     root.hidden = true;
+    if (releaseTrap) releaseTrap();
+    releaseTrap = null;
     delete document.documentElement.dataset.palette;
     if (previousFocus && typeof previousFocus.focus === "function") {
       previousFocus.focus();

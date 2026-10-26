@@ -279,3 +279,48 @@ test("the activity state machine still reports every phase", () => {
   assert.equal(tickActivity(doneState, start + 1_200 + 3_000).phase, "idle");
   assert.ok(nextTransition(idle) >= 0);
 });
+
+// ---------- source editor, focus trap, layout previews ----------
+
+test("the source highlighter escapes everything it prints", async () => {
+  const { highlight } = await import("../../ui/static/code-editor.js");
+  const hostile = `<h1 onclick="x()">A & B <script>alert("x")</script></h1><!-- <b> -->`;
+  const html = highlight(hostile);
+  assert.ok(!/<(?!\/?span)/.test(html), `only our own spans may be markup: ${html}`);
+  assert.ok(html.includes("&lt;script&gt;") || html.includes("tok-tag\">script"));
+  assert.ok(html.includes("A &amp; B"));
+  // Stripping the spans gives back the escaped source: nothing is lost or invented.
+  const text = html.replace(/<\/?span[^>]*>/g, "");
+  const unescaped = text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  assert.equal(unescaped, hostile);
+});
+
+test("the highlighter colors tags, attributes, strings and css", async () => {
+  const { highlight } = await import("../../ui/static/code-editor.js");
+  const html = highlight(`<div class="a"><style>.a { color: #fff; margin: 4px; }</style></div>`);
+  for (const kind of ["tag", "attr", "string", "selector", "prop", "number"]) {
+    assert.ok(html.includes(`tok-${kind}`), `missing ${kind}`);
+  }
+});
+
+test("Tab wraps at both ends of a dialog and lets go of unknown focus", async () => {
+  const { wrapTarget } = await import("../../ui/static/focus-trap.js");
+  const items = ["first", "middle", "last"];
+  assert.equal(wrapTarget(items, "last", false), "first");
+  assert.equal(wrapTarget(items, "first", true), "last");
+  assert.equal(wrapTarget(items, "middle", false), null);
+  assert.equal(wrapTarget(items, "outside", false), "first", "focus outside the dialog is pulled in");
+  assert.equal(wrapTarget([], "x", false), null);
+});
+
+test("every theme has colors for the layout previews and every layout has a shape", async () => {
+  const { THEME_COLORS, layoutPreview } = await import("../../ui/static/layout-previews.js");
+  const { THEME_CHOICES } = await import("../../ui/static/inspector.js");
+  for (const theme of THEME_CHOICES) assert.ok(THEME_COLORS[theme.id], `no colors for ${theme.id}`);
+  for (const layout of ["hero", "bullet", "diagram", "chart", "image_layout", "code"]) {
+    const svg = layoutPreview(layout, "paper");
+    assert.ok(svg.includes("<rect"), `${layout} draws something`);
+    assert.ok(svg.includes(THEME_COLORS.paper.bg), `${layout} wears the theme`);
+  }
+  assert.ok(layoutPreview("hero", "no-such-theme").includes(THEME_COLORS.studio.bg), "unknown theme falls back");
+});

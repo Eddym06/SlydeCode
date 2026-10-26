@@ -50,8 +50,14 @@ pub fn px_to_emu(px: u32) -> i64 {
     i64::from(px) * i64::from(EMU_PER_PIXEL)
 }
 
+/// Same as [`px_to_emu`] for coordinates that can be negative (a box that starts
+/// slightly off-slide).
+pub fn px_to_emu_signed(px: i32) -> i64 {
+    i64::from(px) * i64::from(EMU_PER_PIXEL)
+}
+
 /// One slide: the rendered picture plus the text that goes with it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PptxSlide {
     /// Slide title. Stored as the slide name and the picture alt text.
     pub title: String,
@@ -59,6 +65,63 @@ pub struct PptxSlide {
     pub png: Vec<u8>,
     /// Speaker notes, when the deck has them.
     pub notes: Option<String>,
+    /// Editable text laid over the picture. When present, the picture should be
+    /// rendered *without* this text, so nothing appears twice.
+    pub texts: Vec<PptxText>,
+}
+
+/// Horizontal alignment of a text box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PptxAlign {
+    /// Left (or start).
+    #[default]
+    Left,
+    /// Centered.
+    Center,
+    /// Right (or end).
+    Right,
+}
+
+/// A run of text with one style.
+///
+/// A `\n` inside `text` starts a new paragraph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PptxRun {
+    /// The characters of the run.
+    pub text: String,
+    /// `RRGGBB`.
+    pub color: String,
+    /// Opacity, 0 to 100.
+    pub opacity: u8,
+    /// Font size in hundredths of a CSS pixel.
+    pub size_centipx: u32,
+    /// Bold weight.
+    pub bold: bool,
+    /// Italic style.
+    pub italic: bool,
+    /// Preferred family; PowerPoint substitutes one when it is not installed.
+    pub font: String,
+}
+
+/// One editable text box, positioned in CSS pixels on the slide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PptxText {
+    /// Left edge.
+    pub x_px: i32,
+    /// Top edge.
+    pub y_px: i32,
+    /// Width.
+    pub w_px: u32,
+    /// Height.
+    pub h_px: u32,
+    /// Paragraph alignment.
+    pub align: PptxAlign,
+    /// Wrap lines inside the box (multi-line text) or keep a single line.
+    pub wrap: bool,
+    /// Line spacing as a percentage of single spacing (100 = the font default).
+    pub line_spacing_pct: u16,
+    /// Styled runs.
+    pub runs: Vec<PptxRun>,
 }
 
 /// A whole deck, borrowed from the caller for the duration of the write.

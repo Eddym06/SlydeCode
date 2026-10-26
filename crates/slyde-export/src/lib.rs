@@ -14,7 +14,7 @@
 
 mod cdp;
 
-pub use cdp::export_png_batch;
+pub use cdp::{export_png_batch, export_slides_batch};
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -42,6 +42,80 @@ pub enum ExportError {
 pub struct SlideTarget {
     pub id: String,
     pub url: String,
+}
+
+/// A run of text with one style, as read from the rendered page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRun {
+    /// Characters; `\n` marks a line break.
+    pub text: String,
+    /// `rrggbb`.
+    pub color: String,
+    /// Opacity, 0 to 100.
+    pub opacity: u8,
+    /// Font size in hundredths of a pixel, in slide pixels.
+    pub size_centipx: u32,
+    pub bold: bool,
+    pub italic: bool,
+    pub font: String,
+}
+
+/// One block of text and where it sits on the slide, in slide pixels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBlock {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// `l`, `ctr` or `r`.
+    pub align: String,
+    /// True for multi-line text.
+    pub wrap: bool,
+    /// Line spacing relative to the font's natural spacing, in percent.
+    pub line_spacing_pct: u16,
+    pub runs: Vec<TextRun>,
+}
+
+impl TextBlock {
+    pub(crate) fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64);
+        let runs: Vec<TextRun> = value
+            .get("runs")?
+            .as_array()?
+            .iter()
+            .filter_map(|run| {
+                Some(TextRun {
+                    text: run.get("t")?.as_str()?.to_string(),
+                    color: run.get("c")?.as_str()?.to_string(),
+                    opacity: run.get("a")?.as_f64()?.clamp(0.0, 100.0) as u8,
+                    size_centipx: run.get("s")?.as_f64()?.clamp(100.0, 40_000.0) as u32,
+                    bold: run.get("b")?.as_bool()?,
+                    italic: run.get("i")?.as_bool()?,
+                    font: run.get("f")?.as_str()?.to_string(),
+                })
+            })
+            .collect();
+        if runs.is_empty() {
+            return None;
+        }
+        Some(Self {
+            x: number("x")? as f32,
+            y: number("y")? as f32,
+            w: number("w")? as f32,
+            h: number("h")? as f32,
+            align: value.get("align")?.as_str()?.to_string(),
+            wrap: value.get("wrap")?.as_bool()?,
+            line_spacing_pct: number("ls").unwrap_or(100.0).clamp(50.0, 300.0) as u16,
+            runs,
+        })
+    }
+}
+
+/// A rendered slide: its picture and, when requested, the text taken out of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapturedSlide {
+    pub png: PathBuf,
+    pub text: Vec<TextBlock>,
 }
 
 /// Emitted before the first slide and after every written file.

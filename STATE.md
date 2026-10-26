@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-25 15:30
+> Last updated: 2026-10-26 20:00
 
 ## Current Phase
 
@@ -31,6 +31,70 @@ old suite:
   the gnu profile by list order instead of by recency.
 
 ## Implemented & Working
+
+### Copilot efficiency and UI polish (2026-10-26)
+
+- New copilot tools `build_deck` (create + every slide, notes and animations in
+  one call) and `write_slides` (batch replace/append). A scripted-provider test
+  drives the real loop: a six-slide deck takes **2 provider calls** (it used to
+  take one per slide plus notes). `upsert_slide` clamps a guessed index instead
+  of failing, and executed tool calls are stubbed in the resent history
+  (`compact_history`), so later rounds no longer replay slide source.
+- Bug: slide documents (opaque origin) could not load Geist from the sandbox port
+  (CORS). `/fonts` and `/vendor` on the sandbox now send `Access-Control-Allow-Origin: *`.
+- Bug: the shell grid had no column track, so at <1100px Export/Present were
+  pushed off-screen and the copilot was hidden. Now the right panel is a
+  slide-over drawer (topbar toggle, Esc/outside click closes) and the topbar
+  collapses progressively down to 560px.
+- Template icons are SVG (`template-icons.js`) instead of emoji; copilot
+  suggestion chips follow the selection (block / slide / deck) and hide until a
+  provider is connected.
+- Copilot turns report `usage` (provider calls + ~input tokens, estimated at
+  4 chars/token) and the thread shows it under the finished message.
+- SVG brand mark (`logo-icon.svg`, also the favicon) replaces the PNG in the
+  topbar; a keyboard shortcut sheet (`?`, `shortcuts.js`) lists studio, canvas
+  and presenter keys in EN/ES.
+- **Right column redesign.** "Inspector" is now **Design** (ES "Diseño"). A
+  sliding spring-physics switch (Design | Copilot) replaces the tab strip, the
+  Slide/Deck sub-switch shares the same mechanism, and panels cross-slide in the
+  direction of the thumb. Design is a stack of cards (layout, notes, a motion
+  timeline with numbered steps, an elements tree, source), the Deck tab has
+  mini-slide theme previews, aspect-ratio shapes and export tiles. Cards animate
+  in only when the slide or tab changes, never on a remote re-render. The
+  copilot got gradient user bubbles, a live avatar, an animated work log (spinner
+  to drawn check), a floating empty state, horizontally scrolling prompt chips
+  and an elevated composer with a morphing send/stop button. Styles live in
+  `ui/static/panels.css` (loaded after `app.css`); all ids/classes the scripts
+  and E2E rely on are unchanged. Reduced-motion is honored.
+- **Backlog items 2-12 delivered.**
+  - Copilot: real token usage from the providers (OpenAI-compatible
+    `stream_options.include_usage`, Anthropic `message_start`/`message_delta`),
+    with a size estimate when a provider reports none; live write progress
+    (`progress` events with the slide count); one-step **Undo AI changes**
+    (`POST /api/copilot/revert`, valid only while the deck is exactly as the
+    turn left it); ArrowUp recall of earlier prompts.
+  - Shell: File and View menus (keyboard navigable, `menus.js`), zoom shortcuts
+    (Ctrl/Cmd +/-/0), palette entries for the new actions.
+  - Storyboard: Ctrl/Shift multi-select with a bulk bar (one undoable
+    `remove_slides`), Delete/Ctrl+D/Alt+Arrows, grid view, entrance animation.
+  - Layout picker previews wear the active theme (`layout-previews.js`); theme
+    swatches use the real theme colors.
+  - Source editor (`code-editor.js`): line numbers, HTML/CSS highlighting,
+    debounced `set_slide_code`, survives re-renders and keeps the caret.
+  - Accessibility: `focus-trap.js` on the library, palette, model sheet and
+    shortcut sheet; drawer focus handling; menu keyboard pattern.
+  - Library covers: `GET /d/{deck}` on the sandbox renders the first slide of any
+    deck (no browser launched); the sheet keeps one iframe per deck revision.
+  - **PowerPoint with editable text**: Chrome reads every text block (box, runs,
+    color, size, alignment, line spacing) over CDP, hides it and screenshots the
+    rest; `slyde-pptx` writes real text boxes over that picture. Code, math and
+    diagrams stay in the picture. Verified with python-pptx and LibreOffice.
+  - Tests: Rust 56 core / 138 server / 16 pptx / export extraction test against
+    real Chrome; UI `panels.test.mjs` (8 flows) plus component tests for the
+    highlighter, focus trap and layout previews.
+- E2E notes: Chrome needs `--no-sandbox` as root (wrapper via `SLYDE_BROWSER`);
+  the PDF export test fails on the untouched baseline in this container.
+
 
 ### Deck library (new)
 
@@ -202,7 +266,8 @@ Nothing partially implemented on the branch.
 - A DOM component runner (the pure modules are covered; the DOM wiring is only
   covered end-to-end).
 - Deck thumbnails in the library (rows show title, slide count, age and theme).
-- PPTX exports pictures, not editable text shapes.
+- PPTX text uses the deck font name; PowerPoint substitutes it when it is not installed. Gradient text becomes the accent color.
+- Cost estimates (price per token) are not shown: prices change per model.
 
 ## Known Issues / Bugs
 

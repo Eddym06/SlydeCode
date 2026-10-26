@@ -10,6 +10,9 @@ import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
+import { mountMenus } from "./menus.js";
+import { mountShortcuts } from "./shortcuts.js";
+import { layoutPreview } from "./layout-previews.js";
 import { createStoryboard } from "./storyboard.js";
 import { createCanvas } from "./canvas.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
@@ -139,6 +142,7 @@ function boot(sessionToken) {
 
   function askCopilotForElement(text) {
     setPanel("copilot");
+    setDrawer(true);
     if (copilot && typeof copilot.ask === "function") {
       copilot.ask(text);
       return;
@@ -242,7 +246,7 @@ function boot(sessionToken) {
         id: `slide.add.${template.id}`,
         group: t("palette.group.slide"),
         label: t(`template.${template.id}`),
-        hint: `+ ${template.icon}`,
+        hint: "+",
         run: () => run("add_slide", { template: template.id }),
       });
     });
@@ -289,6 +293,40 @@ function boot(sessionToken) {
         run: () => $("theme-toggle").click(),
       },
       {
+        id: "view.shortcuts",
+        group: t("palette.group.view"),
+        label: t("shortcuts.title"),
+        hint: "?",
+        run: () => $("view-shortcuts").click(),
+      },
+      {
+        id: "view.storyboard",
+        group: t("palette.group.view"),
+        label: t("storyboard.viewGrid") + " / " + t("storyboard.viewList"),
+        run: () => $("storyboard-view").click(),
+      },
+      {
+        id: "zoom.in",
+        group: t("palette.group.view"),
+        label: t("zoom.in"),
+        hint: "mod+=",
+        run: () => setZoom(1),
+      },
+      {
+        id: "zoom.out",
+        group: t("palette.group.view"),
+        label: t("zoom.out"),
+        hint: "mod+-",
+        run: () => setZoom(-1),
+      },
+      {
+        id: "zoom.fit",
+        group: t("palette.group.view"),
+        label: t("zoom.fit"),
+        hint: "mod+0",
+        run: () => setZoom(0),
+      },
+      {
         id: "lang.en",
         group: t("palette.group.view"),
         label: "English",
@@ -319,12 +357,60 @@ function boot(sessionToken) {
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
     });
+    const switchEl = $("tab-inspector").parentElement;
+    const changed = switchEl.dataset.active !== activePanel;
+    switchEl.dataset.active = activePanel;
     $("inspector-panel").hidden = copilotActive;
     $("copilot-panel").hidden = !copilotActive;
+    if (changed) {
+      // Restart the entrance so each switch reads as a transition, not a swap.
+      const shown = $(copilotActive ? "copilot-panel" : "inspector-panel");
+      shown.dataset.dir = copilotActive ? "next" : "prev";
+      shown.classList.remove("panel-in");
+      void shown.offsetWidth;
+      shown.classList.add("panel-in");
+    }
     if (focus) {
       $(copilotActive ? "tab-copilot" : "tab-inspector").focus();
     }
   }
+
+  // Below 1100px the right panel is a slide-over drawer instead of a column, so
+  // the copilot stays reachable on a small window.
+  const narrowQuery = window.matchMedia("(max-width: 1100px)");
+  const panelToggle = $("panel-toggle");
+
+  function setDrawer(open) {
+    const next = Boolean(open) && narrowQuery.matches;
+    const wasOpen = $("app").dataset.panel === "open";
+    $("app").dataset.panel = next ? "open" : "closed";
+    panelToggle.setAttribute("aria-expanded", String(next));
+    // Move focus into the drawer when it opens and back to its button on close,
+    // so a keyboard user never loses their place behind the slide-over.
+    if (next && !wasOpen) {
+      window.setTimeout(() => {
+        const tab = document.querySelector('#right-panel [role="tab"][aria-selected="true"]');
+        if (tab) tab.focus();
+      }, 60);
+    } else if (!next && wasOpen && $("right-panel").contains(document.activeElement)) {
+      panelToggle.focus();
+    }
+  }
+
+  panelToggle.addEventListener("click", () => setDrawer($("app").dataset.panel !== "open"));
+  narrowQuery.addEventListener("change", () => setDrawer(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && $("app").dataset.panel === "open") setDrawer(false);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if ($("app").dataset.panel !== "open") return;
+    if (event.target.closest("#right-panel, #panel-toggle, .sheet, .library, [role='dialog']")) return;
+    setDrawer(false);
+  });
+
+  const shortcuts = mountShortcuts({ t, applyI18n });
+  mountMenus();
+  $("view-shortcuts").addEventListener("click", () => shortcuts.open());
 
   $("tab-inspector").addEventListener("click", () => setPanel("inspector"));
   $("tab-copilot").addEventListener("click", () => setPanel("copilot"));
@@ -637,12 +723,23 @@ function boot(sessionToken) {
       delete els.copilotContextPill.dataset.target;
     }
 
-    const suggestions = [
-      t("copilot.prompt.summarize"),
-      t("copilot.prompt.action"),
-      t("copilot.prompt.animate"),
-      t("copilot.prompt.punchline"),
-    ];
+    // Suggestions follow what the user is looking at: a block, a slide, or a
+    // whole deck, so each chip is a request the copilot can act on right away.
+    const suggestions = canvas.selectedElement
+      ? [
+          t("copilot.prompt.elemShorter"),
+          t("copilot.prompt.elemStandOut"),
+          t("copilot.prompt.elemRewrite"),
+        ]
+      : d.slides.length >= 3 && !current
+        ? [t("copilot.prompt.notes"), t("copilot.prompt.consistency")]
+        : [
+            t("copilot.prompt.summarize"),
+            t("copilot.prompt.action"),
+            t("copilot.prompt.animate"),
+            t("copilot.prompt.punchline"),
+            ...(d.slides.length >= 3 ? [t("copilot.prompt.notes")] : []),
+          ];
 
     els.copilotPromptPills.innerHTML = "";
     suggestions.forEach((text) => {
@@ -665,6 +762,8 @@ function boot(sessionToken) {
   /// The storyboard is its own module; the shell only hands it the slides.
   const storyboard = createStoryboard({
     root: els.storyboard,
+    bulkBar: $("bulk-bar"),
+    viewToggle: $("storyboard-view"),
     t,
     escapeHtml,
     hash,
@@ -837,6 +936,8 @@ function boot(sessionToken) {
       },
       applyI18n,
       onEmptyDeck: () => {
+        const group = els.subtabSlide && els.subtabSlide.parentElement;
+        if (group) group.dataset.active = "deck";
         if (els.subtabSlide) els.subtabSlide.disabled = true;
         if (els.subtabDeck) {
           els.subtabDeck.classList.add("active");
@@ -844,6 +945,8 @@ function boot(sessionToken) {
         }
       },
       onSubtabs: (showSlide) => {
+        const group = els.subtabSlide && els.subtabSlide.parentElement;
+        if (group) group.dataset.active = showSlide ? "slide" : "deck";
         if (els.subtabSlide) {
           els.subtabSlide.disabled = false;
           els.subtabSlide.classList.toggle("active", showSlide);
@@ -985,6 +1088,7 @@ function boot(sessionToken) {
   $("empty-cta").addEventListener("click", () => run("add_slide", { template: "hero" }));
   $("empty-copilot").addEventListener("click", () => {
     setPanel("copilot");
+    setDrawer(true);
     if (copilot) copilot.focus();
   });
 
@@ -1000,6 +1104,7 @@ function boot(sessionToken) {
   function syncThemeToggle() {
     const dark = document.documentElement.dataset.theme === "dark";
     $("theme-toggle").setAttribute("aria-pressed", String(dark));
+    $("theme-toggle").setAttribute("aria-checked", String(dark));
   }
 
   $("theme-toggle").addEventListener("click", () => {
@@ -1053,6 +1158,12 @@ function boot(sessionToken) {
     const typing = tag === "input" || tag === "textarea" || tag === "select";
     const mod = event.metaKey || event.ctrlKey;
 
+    if (mod && (event.key === "=" || event.key === "+" || event.key === "-" || event.key === "0")) {
+      // The browser's own page zoom would scale the whole studio; zoom the slide.
+      event.preventDefault();
+      setZoom(event.key === "0" ? 0 : event.key === "-" ? -1 : 1);
+      return;
+    }
     if (mod && event.key.toLowerCase() === "z" && !typing) {
       event.preventDefault();
       run(event.shiftKey ? "redo" : "undo");
@@ -1092,12 +1203,12 @@ function boot(sessionToken) {
   });
 
   const TEMPLATES = [
-    { id: "hero", icon: "✨" },
-    { id: "bullet", icon: "📋" },
-    { id: "diagram", icon: "📊" },
-    { id: "chart", icon: "📈" },
-    { id: "image_layout", icon: "🖼️" },
-    { id: "code", icon: "💻" },
+    { id: "hero" },
+    { id: "bullet" },
+    { id: "diagram" },
+    { id: "chart" },
+    { id: "image_layout" },
+    { id: "code" },
   ];
 
   function setupTemplatePicker() {
@@ -1107,23 +1218,30 @@ function boot(sessionToken) {
     const closeBtn = els.closeTemplatePopover;
     if (!popover || !grid) return;
 
-    grid.innerHTML = "";
-    TEMPLATES.forEach((tpl) => {
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "template-card";
-      card.innerHTML = `<span class="template-card-icon">${tpl.icon}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
-      card.addEventListener("click", () => {
-        popover.hidden = true;
-        run("add_slide", { template: tpl.id });
+    // Rebuilt on open so the previews always wear the deck's current theme.
+    function renderCards() {
+      const themeId = deck() && deck().theme ? deck().theme.id : "studio";
+      grid.innerHTML = "";
+      TEMPLATES.forEach((tpl, index) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "template-card";
+        card.style.setProperty("--i", String(index));
+        card.innerHTML = `<span class="template-card-icon">${layoutPreview(tpl.id, themeId)}</span><span>${escapeHtml(t("template." + tpl.id))}</span>`;
+        card.addEventListener("click", () => {
+          popover.hidden = true;
+          run("add_slide", { template: tpl.id });
+        });
+        grid.append(card);
       });
-      grid.append(card);
-    });
+    }
+    renderCards();
 
     if (pickerBtn) {
       pickerBtn.addEventListener("click", (e) => {
         e.stopPropagation();
         popover.hidden = !popover.hidden;
+        if (!popover.hidden) renderCards();
       });
     }
     if (closeBtn) {
@@ -1860,6 +1978,8 @@ function boot(sessionToken) {
         buildActions: buildPaletteActions,
       });
       library = mountDeckLibrary({
+        coverUrl: (deckId) =>
+          `${sandboxOrigin}/d/${encodeURIComponent(deckId)}?static=1${sourceQuery}`,
         root: $("deck-library"),
         client,
         t,

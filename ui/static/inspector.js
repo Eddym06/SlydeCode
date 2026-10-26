@@ -1,4 +1,4 @@
-// Studio inspector: slide tab, deck tab and the animation timeline.
+// Studio design panel (the "inspector"): slide tab, deck tab and the animation timeline.
 //
 // It used to live inside the studio's boot closure, which made the shell 2,400
 // lines of intertwined state and markup. The inspector is a self-contained panel:
@@ -8,6 +8,9 @@
 // The DOM ids are deliberately unchanged (`#theme-select`, `#notes`, `#export-pdf`,
 // …): they are the contract with the export progress handler and with the E2E
 // suite. What changed is who owns the markup and the event wiring.
+
+import { createCodeEditor } from "./code-editor.js";
+import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
 export const THEME_CHOICES = [
@@ -52,50 +55,100 @@ export function createInspector({ root, t, escapeHtml, actions }) {
 
   let subtab = "slide";
   let notesTimer = null;
+  let lastEnterKey = "";
+  let codeEditor = null; // survives re-renders so typing is never overwritten
+  let devOpen = false;
   let current = { deck: null, slide: null, selectedElement: null, structureNodes: [] };
+
+  // ---------- building blocks ----------
+
+  const ICONS = {
+    layout:
+      '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 10h18M9 10v10"/>',
+    notes: '<path d="M5 4h14v12l-4 4H5z"/><path d="M15 20v-4h4M8 9h8M8 13h4"/>',
+    motion: '<path d="M4 12c3-7 5-7 8 0s5 7 8 0"/>',
+    elements:
+      '<path d="M12 3 3 8l9 5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+    palette:
+      '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.8-1.7 1.7-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3Z"/>',
+    ratio: '<rect x="3" y="6" width="18" height="12" rx="2.5"/>',
+    file: '<path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>',
+    export: '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
+    code: '<path d="m8 8-4 4 4 4M16 8l4 4-4 4"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3"/>',
+    play: '<path d="M8 5.5v13l10-6.5z" fill="currentColor"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    close: '<path d="M6 6l12 12M18 6 6 18"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+  };
+
+  function icon(name, size = 16) {
+    return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
+  }
+
+  /** One titled card. `--i` staggers the entrance when the view changes. */
+  function card(index, iconName, title, body, { id = "", extra = "", attrs = "" } = {}) {
+    return `
+      <section class="card"${id ? ` id="${id}"` : ""}${attrs ? ` ${attrs}` : ""} style="--i:${index}">
+        <header class="card-head">
+          <span class="card-icon">${icon(iconName, 15)}</span>
+          <h3 class="card-title">${escapeHtml(title)}</h3>
+          ${extra}
+        </header>
+        <div class="card-body">${body}</div>
+      </section>`;
+  }
 
   // ---------- animation editor ----------
 
   function renderAnimationEditor(slide) {
-    const rows = (slide.animation || [])
+    const steps = slide.animation || [];
+    const rows = steps
       .map(
         (step, index) => `
         <div class="anim-step" data-index="${index}" data-easing="${escapeHtml(step.easing || DEFAULT_EASING)}">
-          <div class="anim-step-head">
-            <span class="step-index">${index + 1}</span>
-            <select class="anim-kind" data-field="kind" aria-label="${escapeHtml(t("inspector.stepKind"))}">
-              ${ANIMATION_KINDS.map(
-                (kind) =>
-                  `<option value="${kind}"${kind === step.kind ? " selected" : ""}>${kind}</option>`
-              ).join("")}
-            </select>
-            <button type="button" class="step-play" data-play="${index}"
-                    data-i18n-title="action.play" aria-label="${escapeHtml(t("action.play"))}">▶</button>
-            <button type="button" class="anim-btn" data-move="-1"
-                    data-i18n-title="animation.moveUp" aria-label="${escapeHtml(t("animation.moveUp"))}"
-                    ${index === 0 ? "disabled" : ""}>↑</button>
-            <button type="button" class="anim-btn" data-move="1"
-                    data-i18n-title="animation.moveDown" aria-label="${escapeHtml(t("animation.moveDown"))}"
-                    ${index === slide.animation.length - 1 ? "disabled" : ""}>↓</button>
-            <button type="button" class="anim-btn anim-btn-danger" data-remove="${index}"
-                    data-i18n-title="animation.remove" aria-label="${escapeHtml(t("animation.remove"))}">✕</button>
-          </div>
-          <div class="anim-step-fields">
-            <label class="anim-field anim-field-target">
-              <span>${escapeHtml(t("inspector.stepTarget"))}</span>
-              <input class="anim-input" data-field="target" value="${escapeHtml(step.target)}"
-                     spellcheck="false" autocomplete="off">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDelay"))}</span>
-              <input class="anim-input" type="number" data-field="delay" value="${step.delay_ms}"
-                     min="0" max="10000" step="10">
-            </label>
-            <label class="anim-field">
-              <span>${escapeHtml(t("inspector.stepDuration"))}</span>
-              <input class="anim-input" type="number" data-field="duration" value="${step.duration_ms}"
-                     min="1" max="5000" step="10">
-            </label>
+          <span class="step-index" aria-hidden="true">${index + 1}</span>
+          <div class="anim-step-main">
+            <div class="anim-step-head">
+              <select class="anim-kind" data-field="kind" aria-label="${escapeHtml(t("inspector.stepKind"))}">
+                ${ANIMATION_KINDS.map(
+                  (kind) =>
+                    `<option value="${kind}"${kind === step.kind ? " selected" : ""}>${kind}</option>`
+                ).join("")}
+              </select>
+              <span class="step-tools">
+                <button type="button" class="step-play" data-play="${index}"
+                        title="${escapeHtml(t("action.play"))}" aria-label="${escapeHtml(t("action.play"))}">${icon("play", 12)}</button>
+                <button type="button" class="anim-btn" data-move="-1"
+                        title="${escapeHtml(t("animation.moveUp"))}" aria-label="${escapeHtml(t("animation.moveUp"))}"
+                        ${index === 0 ? "disabled" : ""}>${icon("up", 13)}</button>
+                <button type="button" class="anim-btn" data-move="1"
+                        title="${escapeHtml(t("animation.moveDown"))}" aria-label="${escapeHtml(t("animation.moveDown"))}"
+                        ${index === steps.length - 1 ? "disabled" : ""}>${icon("down", 13)}</button>
+                <button type="button" class="anim-btn anim-btn-danger" data-remove="${index}"
+                        title="${escapeHtml(t("animation.remove"))}" aria-label="${escapeHtml(t("animation.remove"))}">${icon("close", 13)}</button>
+              </span>
+            </div>
+            <div class="anim-step-fields">
+              <label class="anim-field anim-field-target">
+                <span>${escapeHtml(t("inspector.stepTarget"))}</span>
+                <input class="anim-input" data-field="target" value="${escapeHtml(step.target)}"
+                       spellcheck="false" autocomplete="off">
+              </label>
+              <label class="anim-field">
+                <span>${escapeHtml(t("inspector.stepDelay"))}</span>
+                <input class="anim-input" type="number" data-field="delay" value="${step.delay_ms}"
+                       min="0" max="10000" step="10">
+              </label>
+              <label class="anim-field">
+                <span>${escapeHtml(t("inspector.stepDuration"))}</span>
+                <input class="anim-input" type="number" data-field="duration" value="${step.duration_ms}"
+                       min="1" max="5000" step="10">
+              </label>
+            </div>
           </div>
         </div>`
       )
@@ -103,8 +156,10 @@ export function createInspector({ root, t, escapeHtml, actions }) {
 
     return `
       <div class="anim-editor" id="anim-editor">
-        ${rows || `<p class="hint">${escapeHtml(t("inspector.noAnimation"))}</p>`}
-        <button type="button" class="anim-add" id="anim-add">+ ${escapeHtml(t("inspector.addStep"))}</button>
+        <div class="anim-timeline">
+          ${rows || `<p class="hint empty-hint">${escapeHtml(t("inspector.noAnimation"))}</p>`}
+        </div>
+        <button type="button" class="anim-add" id="anim-add">${icon("plus", 14)}<span>${escapeHtml(t("inspector.addStep"))}</span></button>
       </div>`;
   }
 
@@ -187,56 +242,78 @@ export function createInspector({ root, t, escapeHtml, actions }) {
           <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
             deck.theme.id === choice.id
           }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
-            <span class="swatch-dots">
-              ${choice.dots
-                .map((color) => `<span class="swatch-dot" style="background:${color}"></span>`)
-                .join("")}
+            <span class="swatch-preview" style="--sw-bg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).bg};--sw-fg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).fg};--sw-a:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).accent}">
+              <span class="swatch-line"></span><span class="swatch-line short"></span>
+              <span class="swatch-dots">
+                ${choice.dots
+                  .map((color) => `<span class="swatch-dot" style="background:${color}"></span>`)
+                  .join("")}
+              </span>
             </span>
             <span class="swatch-name">${escapeHtml(t(`theme.${choice.id}`))}</span>
           </button>`
     ).join("");
-    const ratioOptions = ["16:9", "4:3", "9:16"]
+    const ratios = ["16:9", "4:3", "9:16"];
+    const ratioOptions = ratios
       .map(
         (ratio) =>
           `<option value="${ratio}" ${deck.aspect_ratio === ratio ? "selected" : ""}>${ratio}</option>`
       )
       .join("");
+    const ratioButtons = ratios
+      .map((ratio) => {
+        const [w, h] = ratio.split(":").map(Number);
+        const scale = 18 / Math.max(w, h);
+        return `<button type="button" class="ratio-btn" data-ratio="${ratio}" role="radio" aria-checked="${
+          deck.aspect_ratio === ratio
+        }"><span class="ratio-shape" style="width:${Math.round(w * scale)}px;height:${Math.round(
+          h * scale
+        )}px"></span><span>${ratio}</span></button>`;
+      })
+      .join("");
 
-    return `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.themeSwatches"))}</span>
-        <div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">
-          ${themeSwatches}
-        </div>
-      </section>
-      <section class="field">
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.theme"))}</span>
-          <select class="select" id="theme-select">${themeOptions}</select>
-        </label>
-        <label class="field">
-          <span class="hint">${escapeHtml(t("inspector.aspect"))}</span>
-          <select class="select" id="ratio-select">${ratioOptions}</select>
-        </label>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.file"))}</span>
-        <div class="file-actions">
-          <button type="button" class="file-btn" id="save-deck">${escapeHtml(t("inspector.saveCopy"))}</button>
-          <button type="button" class="file-btn" id="open-deck">${escapeHtml(t("inspector.open"))}</button>
-        </div>
-        <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
-        <input type="file" id="deck-file" accept=".slyde,application/json" hidden>
-      </section>
-      <section class="field" id="export-section" aria-busy="false">
-        <span class="field-label">${escapeHtml(t("export.section"))}</span>
-        <div class="export-actions">
-          <button type="button" class="file-btn" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
-          <button type="button" class="file-btn" id="export-png">${escapeHtml(t("export.png"))}</button>
-          <button type="button" class="file-btn" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
-        </div>
-        <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>
-      </section>`;
+    return [
+      card(
+        0,
+        "palette",
+        t("inspector.themeSwatches"),
+        `<div class="theme-swatches" role="radiogroup" aria-label="${escapeHtml(t("inspector.themeSwatches"))}">${themeSwatches}</div>
+         <label class="field sr-field">
+           <span class="hint">${escapeHtml(t("inspector.theme"))}</span>
+           <select class="select" id="theme-select">${themeOptions}</select>
+         </label>`
+      ),
+      card(
+        1,
+        "ratio",
+        t("inspector.aspect"),
+        `<div class="ratio-group" role="radiogroup" aria-label="${escapeHtml(t("inspector.aspect"))}">${ratioButtons}</div>
+         <select class="select sr-field" id="ratio-select" aria-label="${escapeHtml(t("inspector.aspect"))}">${ratioOptions}</select>`
+      ),
+      card(
+        2,
+        "file",
+        t("inspector.file"),
+        `<div class="tile-row">
+           <button type="button" class="tile-btn" id="save-deck">${icon("file", 16)}<span>${escapeHtml(t("inspector.saveCopy"))}</span></button>
+           <button type="button" class="tile-btn" id="open-deck">${icon("export", 16)}<span>${escapeHtml(t("inspector.open"))}</span></button>
+         </div>
+         <p class="hint">${escapeHtml(t("inspector.autosave"))}</p>
+         <input type="file" id="deck-file" accept=".slyde,application/json" hidden>`
+      ),
+      card(
+        3,
+        "export",
+        t("export.section"),
+        `<div class="tile-row tile-row-3">
+           <button type="button" class="tile-btn tile-badge" data-badge=".pdf" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".zip" id="export-png">${escapeHtml(t("export.png"))}</button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".pptx" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
+         </div>
+         <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>`,
+        { id: "export-section", attrs: 'aria-busy="false"' }
+      ),
+    ].join("");
   }
 
   function slideMarkup(slide, { selectedElement, structureNodes }) {
@@ -255,39 +332,48 @@ export function createInspector({ root, t, escapeHtml, actions }) {
           )
           .join("")}</ul>`
       : `<p class="hint">${escapeHtml(t("tree.empty"))}</p>`;
+    const steps = (slide.animation || []).length;
 
-    return `
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.slide"))}</span>
-        <div class="field-value">${escapeHtml(t(`template.${slide.template}`))}</div>
-        <div class="mono" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</div>
-        <div class="slide-quick-actions">
-          <button type="button" class="btn" id="inspector-insert-image">${escapeHtml(t("inspector.insertImage"))}</button>
-          <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
-          <button type="button" class="btn" id="inspector-duplicate-slide">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            ${escapeHtml(t("inspector.duplicate"))}
-          </button>
-          <button type="button" class="danger-btn" id="delete-slide">${escapeHtml(t("action.delete"))}</button>
-        </div>
-      </section>
-      <section class="field">
-        <label class="field-label" for="notes">${escapeHtml(t("inspector.notes"))}</label>
-        <textarea class="notes" id="notes" placeholder="${escapeHtml(t("inspector.notesPlaceholder"))}">${escapeHtml(slide.notes || "")}</textarea>
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("inspector.animation"))}</span>
-        ${renderAnimationEditor(slide)}
-      </section>
-      <section class="field">
-        <span class="field-label">${escapeHtml(t("tree.title"))}</span>
-        ${tree}
-      </section>
-      <details class="dev">
-        <summary>${escapeHtml(t("inspector.developer"))}</summary>
+    return [
+      card(
+        0,
+        "layout",
+        t("inspector.slide"),
+        `<div class="slide-identity">
+           <span class="layout-badge">${escapeHtml(t(`template.${slide.template}`))}</span>
+           <span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span>
+         </div>
+         <div class="slide-quick-actions">
+           <button type="button" class="tile-btn" id="inspector-insert-image">${icon("image", 16)}<span>${escapeHtml(t("inspector.insertImage"))}</span></button>
+           <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+           <button type="button" class="tile-btn" id="inspector-duplicate-slide">${icon("copy", 16)}<span>${escapeHtml(t("inspector.duplicate"))}</span></button>
+           <button type="button" class="tile-btn tile-danger" id="delete-slide">${icon("trash", 16)}<span>${escapeHtml(t("action.delete"))}</span></button>
+         </div>`
+      ),
+      card(
+        1,
+        "notes",
+        t("inspector.notes"),
+        `<textarea class="notes" id="notes" aria-label="${escapeHtml(t("inspector.notes"))}" placeholder="${escapeHtml(
+          t("inspector.notesPlaceholder")
+        )}">${escapeHtml(slide.notes || "")}</textarea>`
+      ),
+      card(
+        2,
+        "motion",
+        t("inspector.animation"),
+        renderAnimationEditor(slide),
+        { extra: steps ? `<span class="card-count">${steps}</span>` : "" }
+      ),
+      card(3, "elements", t("tree.title"), tree, {
+        extra: structureNodes.length ? `<span class="card-count">${structureNodes.length}</span>` : "",
+      }),
+      `<details class="dev card" style="--i:4"${devOpen ? " open" : ""}>
+        <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
-        <pre class="dev-code">${escapeHtml(slide.code)}</pre>
-      </details>`;
+        <div id="code-editor-host"></div>
+      </details>`,
+    ].join("");
   }
 
   // ---------- bindings ----------
@@ -313,6 +399,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     if (ratio) {
       ratio.addEventListener("change", () => actions.aspectRatioChanged(ratio.value));
     }
+
+    root.querySelectorAll(".ratio-btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.getAttribute("aria-checked") === "true") return;
+        actions.aspectRatioChanged(button.dataset.ratio);
+      });
+    });
 
     const save = root.querySelector("#save-deck");
     if (save) save.addEventListener("click", () => actions.saveDeck());
@@ -341,6 +434,31 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     actions.applyI18n(root);
   }
 
+  function mountCodeEditor(slide, editorState) {
+    const host = root.querySelector("#code-editor-host");
+    const details = root.querySelector("details.dev");
+    if (details) {
+      details.addEventListener("toggle", () => {
+        devOpen = details.open;
+      });
+    }
+    if (!host) return;
+    if (codeEditor && codeEditor.slideId === slide.id) {
+      if (!codeEditor.dirty && !editorState) codeEditor.setValue(slide.code);
+    } else {
+      codeEditor = createCodeEditor({
+        value: slide.code,
+        label: t("inspector.developer"),
+        onSave: (code) =>
+          actions.command("set_slide_code", { slide_id: slide.id, code }, { silent: true }),
+        onBlur: () => window.setTimeout(() => render(), 0),
+      });
+      codeEditor.slideId = slide.id;
+    }
+    host.append(codeEditor.el);
+    if (editorState) codeEditor.restore(editorState);
+  }
+
   // ---------- render ----------
 
   function render(state = current) {
@@ -360,15 +478,25 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         : null;
 
     const deckSection = deckMarkup(deck);
+    // Cards animate in only when the user lands on a different slide or tab.
+    // A remote edit re-renders the same view and must not replay the entrance.
+    const enterKey = `${subtab}|${currentSlide ? currentSlide.id : "-"}`;
+    const entering = enterKey !== lastEnterKey;
+    lastEnterKey = enterKey;
 
     if (!currentSlide) {
       root.innerHTML = `<div id="inspector-deck-section">${deckSection}</div>`;
+      root.classList.toggle("is-entering", entering);
       actions.onEmptyDeck();
       bindDeckControls();
       return;
     }
 
     const showSlide = subtab === "slide";
+    // The editor outlives the markup: detach it so the rebuild does not destroy
+    // the text the user is typing (and its caret).
+    const editorState = codeEditor && codeEditor.focused ? codeEditor.selection() : null;
+    if (codeEditor) codeEditor.el.remove();
     root.innerHTML = `
       <div id="inspector-slide-section" ${showSlide ? "" : 'style="display:none"'}>
         ${slideMarkup(currentSlide, { selectedElement, structureNodes })}
@@ -377,6 +505,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         ${deckSection}
       </div>`;
 
+    root.classList.toggle("is-entering", entering);
     actions.onSubtabs(showSlide);
     bindDeckControls();
 
@@ -418,6 +547,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     bindAnimationEditor(currentSlide);
+    mountCodeEditor(currentSlide, editorState);
 
     const remove = root.querySelector("#delete-slide");
     if (remove) {

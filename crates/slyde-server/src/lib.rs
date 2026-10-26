@@ -112,6 +112,28 @@ impl RunningServer {
     }
 }
 
+/// Public, read-only static files for the sandbox origin.
+///
+/// Slide documents run in an opaque origin (`sandbox` without
+/// `allow-same-origin`), so the browser treats `@font-face` loads from the
+/// sandbox port as cross-origin and blocks them without CORS headers. These
+/// directories hold only bundled fonts and renderers, never user data, so `*`
+/// is safe here; no other sandbox route gets it.
+fn public_static(dir: &std::path::Path) -> axum::Router {
+    use axum::http::{HeaderValue, header};
+    axum::Router::new()
+        .fallback_service(ServeDir::new(dir))
+        .layer(axum::middleware::map_response(
+            |mut response: axum::response::Response| async move {
+                response.headers_mut().insert(
+                    header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                    HeaderValue::from_static("*"),
+                );
+                response
+            },
+        ))
+}
+
 pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
     if !config.ui_dir.is_dir() {
         return Err(ServerError::UiMissing(config.ui_dir.display().to_string()));
@@ -187,7 +209,7 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
             // Same directory on both origins: the editor paints with Geist, and
             // every slide iframe shares one cached copy from the sandbox origin.
             app = app.nest_service("/fonts", ServeDir::new(&fonts));
-            sandbox = sandbox.nest_service("/fonts", ServeDir::new(&fonts));
+            sandbox = sandbox.nest("/fonts", public_static(&fonts));
         }
         Some(fonts) => {
             tracing::warn!(dir = %fonts.display(), "font directory not found; using system fallbacks");
@@ -199,7 +221,7 @@ pub async fn start(config: ServerConfig) -> Result<RunningServer, ServerError> {
     // a slide document may load same-origin assets, never the network.
     match config.assets_dir.as_ref().map(|dir| dir.join("vendor")) {
         Some(vendor) if vendor.is_dir() => {
-            sandbox = sandbox.nest_service("/vendor", ServeDir::new(&vendor));
+            sandbox = sandbox.nest("/vendor", public_static(&vendor));
         }
         Some(vendor) => {
             tracing::warn!(dir = %vendor.display(), "vendor directory not found; math and code blocks degrade to plain text");
@@ -318,6 +340,7 @@ const TOKEN_BYTES: usize = 32;
 mod tests {
     use super::*;
     use slyde_core::{AspectRatio, Theme};
+    use tower::ServiceExt as _;
 
     #[test]
     fn tokens_are_long_and_unique() {
@@ -336,5 +359,27 @@ mod tests {
             start(config).await,
             Err(ServerError::UiMissing(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn sandbox_static_files_carry_cors_for_the_opaque_slide_origin() {
+        let dir = std::env::temp_dir().join(format!("slyde-cors-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let app = axum::Router::new().nest("/fonts", public_static(&dir));
+        let response = app
+            .oneshot(
+                axum::http::Request::get("/fonts/a.txt")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers()[axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "*"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

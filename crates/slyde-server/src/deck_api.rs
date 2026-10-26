@@ -609,6 +609,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deck_covers_render_the_first_slide_and_need_the_sandbox_token() {
+        let dir = library_dir("cover");
+        let (state, library) = state_with_library(&dir).await;
+        let id = library.active().unwrap();
+        let token = state.sandbox_token.clone();
+
+        let denied = crate::routes::sandbox_router(state.clone())
+            .oneshot(
+                Request::get(format!("/d/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let ok = crate::routes::sandbox_router(state.clone())
+            .oneshot(
+                Request::get(format!("/d/{id}?t={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(ok.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("slyde-stage"));
+
+        let missing = crate::routes::sandbox_router(state)
+            .oneshot(
+                Request::get(format!("/d/..%2Fsecret?t={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn unknown_deck_ids_are_rejected() {
         let dir = library_dir("unknown");
         let (state, _) = state_with_library(&dir).await;

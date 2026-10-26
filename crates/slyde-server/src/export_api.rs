@@ -181,6 +181,9 @@ pub async fn api_export(
     // the print page's iframes need it to load at all.
     let slide_token = sandbox::percent_encode(&state.sandbox_token);
 
+    // Text read out of the rendered slides (PowerPoint only), one list per slide.
+    let mut slide_text: Vec<Vec<slyde_export::TextBlock>> = Vec::new();
+
     let result = match format {
         ExportFormat::Pdf => {
             let output = dir.join("deck.pdf");
@@ -203,17 +206,23 @@ pub async fn api_export(
             // One Chrome session for the whole deck, at 2x. If the DevTools
             // handshake fails on an unusual Chrome build, fall back to the
             // sequential CLI path instead of failing the export.
-            match slyde_export::export_png_batch(
+            // PowerPoint also gets the text of every slide as real text boxes.
+            let want_text = format == ExportFormat::Pptx;
+            match slyde_export::export_slides_batch(
                 &browser.path,
                 &targets,
                 aspect_ratio,
                 &dir,
                 PNG_SCALE,
                 Some(&progress_tx),
+                want_text,
             )
             .await
             {
-                Ok(files) => Ok(files),
+                Ok(captured) => {
+                    slide_text = captured.iter().map(|slide| slide.text.clone()).collect();
+                    Ok(captured.into_iter().map(|slide| slide.png).collect())
+                }
                 Err(error) => {
                     tracing::warn!(%error, "batch PNG export failed; using one Chrome per slide");
                     export_png(
@@ -261,8 +270,9 @@ pub async fn api_export(
             let files = files.clone();
             let notes = slide_notes.clone();
             let deck_title = title.clone();
+            let texts = std::mem::take(&mut slide_text);
             match tokio::task::spawn_blocking(move || {
-                bundle_pptx(&deck_title, &notes, &files, aspect_ratio)
+                bundle_pptx(&deck_title, &notes, &files, &texts, aspect_ratio)
             })
             .await
             {
@@ -314,14 +324,16 @@ fn attachment(title: &str, format: ExportFormat, body: Vec<u8>) -> Response {
 
 /// Builds the `.pptx` bundle from the rendered PNGs.
 ///
-/// The deck is already rendered by Chrome, so PowerPoint gets one full-bleed
-/// picture per slide: exactly what the presenter showed, no second layout
-/// engine and no HTML-to-shape translation to get wrong. Slide notes travel as
-/// real notes, so the speaker view still works.
+/// Chrome renders every slide, so the picture is exactly what the presenter
+/// showed. The text that Chrome could read back is laid over it as real text
+/// boxes (the picture was captured with that text hidden), which makes titles
+/// and paragraphs editable in PowerPoint while code, math and diagrams stay in
+/// the picture. Slide notes travel as real notes.
 fn bundle_pptx(
     deck_title: &str,
     notes: &[Option<String>],
     files: &[PathBuf],
+    texts: &[Vec<slyde_export::TextBlock>],
     aspect_ratio: slyde_core::AspectRatio,
 ) -> Result<Vec<u8>, String> {
     if files.is_empty() {
@@ -336,6 +348,10 @@ fn bundle_pptx(
             title: format!("Slide {}", index + 1),
             png,
             notes: notes.get(index).and_then(|value| value.clone()),
+            texts: texts
+                .get(index)
+                .map(|blocks| blocks.iter().map(to_pptx_text).collect())
+                .unwrap_or_default(),
         });
     }
 
@@ -355,6 +371,42 @@ fn bundle_pptx(
     let _ = std::fs::remove_file(&target);
     Ok(bytes)
 }
+/// Converts a block read from the page into a text box.
+///
+/// PowerPoint may not have the deck font and falls back to a wider one, so the
+/// box gets a little extra width on the side that the alignment leaves free.
+fn to_pptx_text(block: &slyde_export::TextBlock) -> slyde_pptx::PptxText {
+    use slyde_pptx::PptxAlign;
+    let slack = block.w * if block.wrap { 0.04 } else { 0.10 };
+    let (align, shift) = match block.align.as_str() {
+        "ctr" => (PptxAlign::Center, slack / 2.0),
+        "r" => (PptxAlign::Right, slack),
+        _ => (PptxAlign::Left, 0.0),
+    };
+    slyde_pptx::PptxText {
+        x_px: (block.x - shift).round() as i32,
+        y_px: block.y.round() as i32,
+        w_px: (block.w + slack).round().max(1.0) as u32,
+        h_px: block.h.round().max(1.0) as u32,
+        align,
+        wrap: block.wrap,
+        line_spacing_pct: block.line_spacing_pct,
+        runs: block
+            .runs
+            .iter()
+            .map(|run| slyde_pptx::PptxRun {
+                text: run.text.clone(),
+                color: run.color.clone(),
+                opacity: run.opacity,
+                size_centipx: run.size_centipx,
+                bold: run.bold,
+                italic: run.italic,
+                font: run.font.clone(),
+            })
+            .collect(),
+    }
+}
+
 /// PNGs are already compressed; storing them keeps the ZIP step near-instant.
 fn bundle_pngs(files: &[PathBuf]) -> Result<Vec<u8>, String> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

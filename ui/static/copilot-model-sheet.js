@@ -1,3 +1,4 @@
+import { trapFocus } from "./focus-trap.js";
 // Provider and model sheet for the copilot.
 //
 // Owns key entry, model search and the "Free" filter. It never displays a saved
@@ -48,6 +49,8 @@ export function createModelSheet({
     return Boolean(provider && provider.configured);
   }
 
+  let releaseTrap = null;
+
   function open(providerHint) {
     const selection = getSelection();
     const cfg = config();
@@ -72,6 +75,7 @@ export function createModelSheet({
     const provider = providerById(state.provider);
     state.view = configured(provider) ? "models" : "key";
     root.hidden = false;
+    releaseTrap = trapFocus(root);
     render();
     if (state.view === "models") {
       loadModels();
@@ -85,6 +89,8 @@ export function createModelSheet({
     if (!state.open) return;
     state.open = false;
     root.hidden = true;
+    if (releaseTrap) releaseTrap();
+    releaseTrap = null;
     root.innerHTML = "";
     if (onClose) onClose();
   }

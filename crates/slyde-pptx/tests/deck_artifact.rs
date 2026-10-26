@@ -33,6 +33,7 @@ fn writes_the_deck_checked_by_the_python_validator() {
             title: "Cover: SlydeCode export".to_string(),
             png: png::solid(1280, 720, [0x1F, 0x24, 0x30]),
             notes: None,
+            texts: Vec::new(),
         },
         PptxSlide {
             title: "Second slide, with notes".to_string(),
@@ -41,11 +42,13 @@ fn writes_the_deck_checked_by_the_python_validator() {
                 "Speaker notes for the second slide.\nThey are exported as a notes page."
                     .to_string(),
             ),
+            texts: Vec::new(),
         },
         PptxSlide {
             title: "Escaping < & > \"quoted\" 'single'".to_string(),
             png: png::solid(1280, 720, [0xF4, 0xF1, 0xEA]),
             notes: None,
+            texts: Vec::new(),
         },
     ];
     let (width_px, height_px) = CHECK_DECK_SIZE;

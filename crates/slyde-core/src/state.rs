@@ -103,6 +103,19 @@ impl PresentationState {
         self.revision
     }
 
+    /// A copy of the current deck, to restore later with [`Self::restore`].
+    pub fn snapshot(&self) -> Presentation {
+        self.presentation().clone()
+    }
+
+    /// Puts a previously taken snapshot back as one new history entry, so the
+    /// restore itself can be undone.
+    pub fn restore(&mut self, presentation: Presentation) -> Result<(), CoreError> {
+        presentation.theme.validate()?;
+        self.commit("restore", presentation);
+        Ok(())
+    }
+
     pub fn limits(&self) -> Limits {
         self.limits
     }
@@ -501,6 +514,44 @@ impl PresentationState {
         next.slides.remove(index);
         self.commit("remove_slide", next);
         Ok(index)
+    }
+
+    /// Removes several slides as one undoable step.
+    pub fn remove_slides(&mut self, slide_ids: &[String]) -> Result<usize, CoreError> {
+        let mut next = self.presentation().clone();
+        for id in slide_ids {
+            if next.slide_index(id).is_none() {
+                return Err(CoreError::SlideNotFound(id.clone()));
+            }
+        }
+        next.slides.retain(|slide| !slide_ids.contains(&slide.id));
+        self.commit("remove_slides", next);
+        Ok(slide_ids.len())
+    }
+
+    /// Replaces a slide's source, as when the code editor applies an edit.
+    ///
+    /// Typing in the editor coalesces into one history entry per burst, like the
+    /// notes do, so undo steps over an edit session and not over each keystroke.
+    pub fn set_slide_code(&mut self, slide_id: &str, code: String) -> Result<(), CoreError> {
+        if code.trim().is_empty() {
+            return Err(CoreError::EmptySlideCode);
+        }
+        if code.len() > self.limits.max_code_bytes {
+            return Err(CoreError::CodeTooLarge {
+                actual: code.len(),
+                max: self.limits.max_code_bytes,
+            });
+        }
+        let mut next = self.presentation().clone();
+        let slide = next
+            .slides
+            .iter_mut()
+            .find(|slide| slide.id == slide_id)
+            .ok_or_else(|| CoreError::SlideNotFound(slide_id.to_string()))?;
+        slide.code = crate::html::ensure_element_ids(&code);
+        self.commit_with("slide_code", Some(format!("code:{slide_id}")), next);
+        Ok(())
     }
 
     pub fn move_slide(&mut self, from: usize, to: usize) -> Result<usize, CoreError> {
@@ -1919,5 +1970,62 @@ mod tests {
             "Deck",
             "one undo still reaches the pre-edit state"
         );
+    }
+
+    #[test]
+    fn restore_brings_back_a_snapshot_and_can_be_undone() {
+        let mut state = PresentationState::new("A", Theme::studio(), AspectRatio::R16x9);
+        let before = state.snapshot();
+        state
+            .upsert_slide(
+                0,
+                None,
+                "<h1>x</h1>".into(),
+                TemplateType::default(),
+                vec![],
+            )
+            .unwrap();
+        assert_eq!(state.presentation().slides.len(), 1);
+        state.restore(before).unwrap();
+        assert!(state.presentation().slides.is_empty());
+        state.undo().unwrap();
+        assert_eq!(state.presentation().slides.len(), 1);
+    }
+
+    #[test]
+    fn code_edits_coalesce_and_multi_remove_is_one_step() {
+        let mut state = PresentationState::new("A", Theme::studio(), AspectRatio::R16x9);
+        let mut ids = Vec::new();
+        for n in 0..3 {
+            let outcome = state
+                .upsert_slide(
+                    n,
+                    None,
+                    format!("<h1>{n}</h1>"),
+                    TemplateType::default(),
+                    vec![],
+                )
+                .unwrap();
+            ids.push(outcome.slide_id);
+        }
+        state.set_slide_code(&ids[0], "<h1>a</h1>".into()).unwrap();
+        state.set_slide_code(&ids[0], "<h1>ab</h1>".into()).unwrap();
+        assert!(state.presentation().slides[0].code.contains("ab"));
+        assert!(matches!(
+            state.set_slide_code(&ids[0], "  ".into()),
+            Err(CoreError::EmptySlideCode)
+        ));
+        state.undo().unwrap();
+        assert!(
+            state.presentation().slides[0].code.contains("0</h1>"),
+            "both keystroke edits undo together"
+        );
+        state
+            .remove_slides(&[ids[0].clone(), ids[2].clone()])
+            .unwrap();
+        assert_eq!(state.presentation().slides.len(), 1);
+        state.undo().unwrap();
+        assert_eq!(state.presentation().slides.len(), 3);
+        assert!(state.remove_slides(&["nope".into()]).is_err());
     }
 }

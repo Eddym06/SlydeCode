@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::{ExportError, ExportProgress, SlideTarget, png_dimensions};
+use crate::{CapturedSlide, ExportError, ExportProgress, SlideTarget, TextBlock, png_dimensions};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(25);
 const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(20);
@@ -38,6 +38,26 @@ pub async fn export_png_batch(
     scale: u32,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<ExportProgress>>,
 ) -> Result<Vec<PathBuf>, ExportError> {
+    let captured =
+        export_slides_batch(chrome, slides, aspect_ratio, dir, scale, progress, false).await?;
+    Ok(captured.into_iter().map(|slide| slide.png).collect())
+}
+
+/// Like [`export_png_batch`], and when `extract_text` is set it also reads every
+/// text block out of the rendered page and hides that text before the capture.
+///
+/// The picture then holds everything *except* the extracted text, so a PowerPoint
+/// built from it can lay real, editable text boxes over the picture without
+/// anything appearing twice.
+pub async fn export_slides_batch(
+    chrome: &Path,
+    slides: &[SlideTarget],
+    aspect_ratio: slyde_core::AspectRatio,
+    dir: &Path,
+    scale: u32,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ExportProgress>>,
+    extract_text: bool,
+) -> Result<Vec<CapturedSlide>, ExportError> {
     if slides.is_empty() {
         return Err(ExportError::EmptyDeck);
     }
@@ -79,14 +99,14 @@ pub async fn export_png_batch(
         for (index, slide) in slides.iter().enumerate() {
             // A wedged DevTools session must not hang the export: every slide has
             // a hard budget, and the caller falls back to the CLI path on error.
-            let png = tokio::time::timeout(SLIDE_TIMEOUT, async {
+            let (png, text) = tokio::time::timeout(SLIDE_TIMEOUT, async {
                 session
                     .prepare(&format!(
                         r#"{{"width":{width},"height":{height},"deviceScaleFactor":{scale},"mobile":false}}"#
                     ))
                     .await?;
                 session
-                    .capture(&slide.url, NAVIGATION_TIMEOUT, SETTLE_TIMEOUT)
+                    .capture(&slide.url, NAVIGATION_TIMEOUT, SETTLE_TIMEOUT, extract_text)
                     .await
             })
             .await
@@ -97,7 +117,7 @@ pub async fn export_png_batch(
 
             let file = dir.join(format!("{:02}-{}.png", index + 1, safe_id(&slide.id)));
             tokio::fs::write(&file, png).await?;
-            written.push(file);
+            written.push(CapturedSlide { png: file, text });
             if let Some(tx) = progress {
                 let _ = tx.send(ExportProgress {
                     completed: index + 1,
@@ -271,7 +291,8 @@ impl Session {
         url: &str,
         navigation_timeout: Duration,
         settle_timeout: Duration,
-    ) -> Result<Vec<u8>, ExportError> {
+        extract_text: bool,
+    ) -> Result<(Vec<u8>, Vec<TextBlock>), ExportError> {
         self.send("Page.navigate", json!({ "url": url }), Some(&()))
             .await?;
 
@@ -302,6 +323,18 @@ impl Session {
         self.wait_for_js(&ready, settle_timeout + Duration::from_secs(2))
             .await?;
 
+        // Reading the text (and hiding it) must happen after the slide settled and
+        // before the screenshot. A page that cannot be read still exports: the
+        // slide just keeps its text inside the picture.
+        let blocks = if extract_text {
+            match self.eval_string(EXTRACT_TEXT_JS).await {
+                Ok(raw) => parse_blocks(&raw),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+
         let shot = self
             .send(
                 "Page.captureScreenshot",
@@ -316,12 +349,35 @@ impl Session {
                     status: "cdp".into(),
                     details: "Page.captureScreenshot returned no data".into(),
                 })?;
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).map_err(
-            |error| ExportError::Chrome {
+        let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .map_err(|error| ExportError::Chrome {
                 status: "cdp".into(),
                 details: format!("the screenshot was not valid base64: {error}"),
-            },
-        )
+            })?;
+        Ok((png, blocks))
+    }
+
+    /// Evaluates an expression that returns a string.
+    async fn eval_string(&mut self, expression: &str) -> Result<String, ExportError> {
+        let result = self
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+                Some(&()),
+            )
+            .await?;
+        if result.get("exceptionDetails").is_some() {
+            return Err(ExportError::Chrome {
+                status: "cdp".into(),
+                details: "the page script failed".into(),
+            });
+        }
+        Ok(result
+            .get("result")
+            .and_then(|value| value.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or("[]")
+            .to_string())
     }
 
     async fn wait_for_js(
@@ -433,3 +489,111 @@ impl Session {
         }
     }
 }
+
+fn parse_blocks(raw: &str) -> Vec<TextBlock> {
+    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    items.iter().filter_map(TextBlock::from_json).collect()
+}
+
+/// Runs in the slide document. For every block of text it records the box, the
+/// alignment and the styled runs, then makes that text transparent so the
+/// screenshot that follows carries no copy of it.
+///
+/// Text that cannot be rebuilt faithfully as a text box (code, math, diagrams,
+/// SVG) is left alone and stays in the picture.
+const EXTRACT_TEXT_JS: &str = r#"(() => {
+  try {
+    const stage = document.getElementById('slyde-stage');
+    if (!stage) return '[]';
+    const scale = stage.offsetWidth ? stage.getBoundingClientRect().width / stage.offsetWidth : 1;
+    const SKIP = 'svg,.katex,.slyde-diagram,.slyde-code,pre,code,canvas,script,style,iframe,img,video,[data-slyde-keep]';
+    const accent = (getComputedStyle(document.documentElement).getPropertyValue('--slyde-accent') || '#7c3aed').trim();
+    const parse = (value) => {
+      const m = /rgba?\(([^)]+)\)/.exec(value || '');
+      if (!m) return null;
+      const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number);
+      const hex = p.slice(0, 3).map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+      return { hex, alpha: p.length > 3 ? p[3] : 1 };
+    };
+    const accentColor = (() => {
+      const h = accent.replace('#', '');
+      return h.length === 6 ? { hex: h.toLowerCase(), alpha: 1 } : { hex: '7c3aed', alpha: 1 };
+    })();
+    const isInline = (el) => /^inline/.test(getComputedStyle(el).display);
+    const own = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+    const blocks = new Set();
+    for (const el of stage.querySelectorAll('*')) {
+      if (el.closest(SKIP) || !own(el)) continue;
+      let b = el;
+      while (isInline(b) && b.parentElement && b.parentElement !== stage) b = b.parentElement;
+      if (!b.closest(SKIP)) blocks.add(b);
+    }
+    const runStyle = (el) => {
+      const cs = getComputedStyle(el);
+      let c = parse(cs.webkitTextFillColor) || parse(cs.color) || { hex: '000000', alpha: 1 };
+      if (c.alpha === 0) c = accentColor;
+      return {
+        color: c.hex,
+        alpha: Math.round(c.alpha * 100),
+        size: Math.round(parseFloat(cs.fontSize) * scale * 100),
+        bold: parseInt(cs.fontWeight, 10) >= 600,
+        italic: cs.fontStyle === 'italic',
+        font: cs.fontFamily.split(',')[0].replace(/["']/g, '').trim(),
+        upper: cs.textTransform === 'uppercase',
+        pre: /^pre/.test(cs.whiteSpace)
+      };
+    };
+    const collect = (node, runs) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 3) {
+          const st = runStyle(child.parentElement);
+          let text = st.pre ? child.textContent : child.textContent.replace(/\s+/g, ' ');
+          if (st.upper) text = text.toUpperCase();
+          if (text) runs.push({ t: text, c: st.color, a: st.alpha, s: st.size, b: st.bold, i: st.italic, f: st.font });
+        } else if (child.nodeType === 1) {
+          if (child.tagName === 'BR') runs.push({ t: '\n', c: '000000', a: 100, s: 100, b: false, i: false, f: '' });
+          else if (isInline(child) && !child.matches(SKIP)) collect(child, runs);
+        }
+      }
+    };
+    const out = [];
+    for (const b of blocks) {
+      const cs = getComputedStyle(b);
+      if (cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) continue;
+      const rect = b.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) continue;
+      const runs = [];
+      collect(b, runs);
+      while (runs.length && !runs[0].t.trim()) runs.shift();
+      while (runs.length && !runs[runs.length - 1].t.trim()) runs.pop();
+      if (!runs.length) continue;
+      if (runs[0].t !== '\n') runs[0].t = runs[0].t.replace(/^\s+/, '');
+      const last = runs[runs.length - 1];
+      last.t = last.t.replace(/\s+$/, '');
+      const size = runs[0].s / 100;
+      const align = /center/.test(cs.textAlign) ? 'ctr' : /right|end/.test(cs.textAlign) ? 'r' : 'l';
+      // CSS line-height is a ratio of the font size; PowerPoint's 100% is the
+      // font's own spacing, which is about 1.2 times the size.
+      const lh = parseFloat(cs.lineHeight);
+      const ratio = Number.isFinite(lh) ? lh / parseFloat(cs.fontSize) : 1.2;
+      const ls = Math.round((ratio / 1.2) * 100);
+      out.push({ x: rect.left, y: rect.top, w: rect.width, h: rect.height, align, wrap: rect.height > size * 1.7, ls, runs });
+    }
+    for (const b of blocks) {
+      for (const el of [b, ...b.querySelectorAll('*')]) {
+        if (el.matches(SKIP)) continue;
+        el.style.setProperty('color', 'transparent', 'important');
+        el.style.setProperty('-webkit-text-fill-color', 'transparent', 'important');
+        el.style.setProperty('text-shadow', 'none', 'important');
+        if (/text/.test(getComputedStyle(el).webkitBackgroundClip || '')) {
+          el.style.setProperty('background-image', 'none', 'important');
+        }
+      }
+    }
+    return JSON.stringify(out);
+  } catch (error) {
+    return '[]';
+  }
+})()"#;

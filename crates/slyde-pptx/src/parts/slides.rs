@@ -1,9 +1,9 @@
 //! Slide and notes-slide parts, plus their relationship files.
 
 use super::empty_group;
-use crate::PptxSlide;
 use crate::rels::{self, Relationships};
 use crate::xml;
+use crate::{PptxAlign, PptxSlide, PptxText};
 
 /// `ppt/slides/slideN.xml`: one full-bleed picture and nothing else.
 ///
@@ -59,6 +59,9 @@ pub(crate) fn slide_xml(slide: &PptxSlide, width_emu: i64, height_emu: i64) -> S
     );
     xml::line(&mut out, 4, "</p:spPr>");
     xml::line(&mut out, 3, "</p:pic>");
+    for (index, text) in slide.texts.iter().enumerate() {
+        text_shape(&mut out, 3, index + 3, text);
+    }
     xml::line(&mut out, 2, "</p:spTree>");
     xml::line(&mut out, 1, "</p:cSld>");
     xml::line(
@@ -68,6 +71,100 @@ pub(crate) fn slide_xml(slide: &PptxSlide, width_emu: i64, height_emu: i64) -> S
     );
     xml::line(&mut out, 0, "</p:sld>");
     out
+}
+
+/// One editable text box. Shape ids start at 3: 1 is the group, 2 the picture.
+fn text_shape(out: &mut String, depth: usize, id: usize, text: &PptxText) {
+    let x = crate::px_to_emu_signed(text.x_px);
+    let y = crate::px_to_emu_signed(text.y_px);
+    let w = crate::px_to_emu(text.w_px);
+    let h = crate::px_to_emu(text.h_px);
+    let wrap = if text.wrap { "square" } else { "none" };
+    xml::line(out, depth, "<p:sp>");
+    xml::line(out, depth + 1, "<p:nvSpPr>");
+    xml::line(
+        out,
+        depth + 2,
+        &format!("<p:cNvPr id=\"{id}\" name=\"Text {}\"/>", id - 2),
+    );
+    xml::line(out, depth + 2, "<p:cNvSpPr txBox=\"1\"/>");
+    xml::line(out, depth + 2, "<p:nvPr/>");
+    xml::line(out, depth + 1, "</p:nvSpPr>");
+    xml::line(out, depth + 1, "<p:spPr>");
+    xml::line(out, depth + 2, "<a:xfrm>");
+    xml::line(out, depth + 3, &format!("<a:off x=\"{x}\" y=\"{y}\"/>"));
+    xml::line(out, depth + 3, &format!("<a:ext cx=\"{w}\" cy=\"{h}\"/>"));
+    xml::line(out, depth + 2, "</a:xfrm>");
+    xml::line(
+        out,
+        depth + 2,
+        "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>",
+    );
+    xml::line(out, depth + 2, "<a:noFill/>");
+    xml::line(out, depth + 1, "</p:spPr>");
+    xml::line(out, depth + 1, "<p:txBody>");
+    xml::line(
+        out,
+        depth + 2,
+        &format!(
+            "<a:bodyPr wrap=\"{wrap}\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" anchor=\"t\"><a:noAutofit/></a:bodyPr>"
+        ),
+    );
+    xml::line(out, depth + 2, "<a:lstStyle/>");
+    let algn = match text.align {
+        PptxAlign::Left => "l",
+        PptxAlign::Center => "ctr",
+        PptxAlign::Right => "r",
+    };
+    // Split runs into paragraphs at every newline.
+    let mut paragraphs: Vec<Vec<(&crate::PptxRun, &str)>> = vec![Vec::new()];
+    for run in &text.runs {
+        for (position, piece) in run.text.split('\n').enumerate() {
+            if position > 0 {
+                paragraphs.push(Vec::new());
+            }
+            if !piece.is_empty() {
+                if let Some(current) = paragraphs.last_mut() {
+                    current.push((run, piece));
+                }
+            }
+        }
+    }
+    for paragraph in &paragraphs {
+        let spacing = u32::from(text.line_spacing_pct.clamp(50, 300)) * 1000;
+        let mut line = format!(
+            "<a:p><a:pPr algn=\"{algn}\"><a:lnSpc><a:spcPct val=\"{spacing}\"/></a:lnSpc></a:pPr>"
+        );
+        for (run, piece) in paragraph {
+            let size = (u64::from(run.size_centipx) * 3 / 4).clamp(100, 400_000);
+            let alpha = if run.opacity < 100 {
+                format!("<a:alpha val=\"{}\"/>", u32::from(run.opacity) * 1000)
+            } else {
+                String::new()
+            };
+            line.push_str(&format!(
+                "<a:r><a:rPr lang=\"en-US\" sz=\"{size}\" b=\"{}\" i=\"{}\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"{}\">{alpha}</a:srgbClr></a:solidFill><a:latin typeface=\"{}\"/></a:rPr><a:t>{}</a:t></a:r>",
+                u8::from(run.bold),
+                u8::from(run.italic),
+                hex_or_black(&run.color),
+                xml::escape(&run.font),
+                xml::escape(piece)
+            ));
+        }
+        line.push_str("</a:p>");
+        xml::line(out, depth + 2, &line);
+    }
+    xml::line(out, depth + 1, "</p:txBody>");
+    xml::line(out, depth, "</p:sp>");
+}
+
+/// Only six hex digits may reach an attribute.
+fn hex_or_black(raw: &str) -> String {
+    if raw.len() == 6 && raw.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        raw.to_ascii_uppercase()
+    } else {
+        "000000".to_string()
+    }
 }
 
 /// `ppt/slides/_rels/slideN.xml.rels`: layout, image and optionally notes.

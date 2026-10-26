@@ -80,6 +80,10 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::copilot::routes::api_cancel),
         )
         .route(
+            "/api/copilot/revert",
+            post(crate::copilot::routes::api_revert),
+        )
+        .route(
             "/api/copilot/thread",
             get(crate::copilot::routes::api_thread).post(crate::copilot::routes::api_save_thread),
         )
@@ -101,6 +105,7 @@ pub fn sandbox_router(state: Arc<AppState>) -> Router {
         .route("/assets/{name}", get(crate::asset_api::serve_asset))
         .route("/print", get(print_document))
         .route("/s/{id}", get(sandbox_slide))
+        .route("/d/{deck_id}", get(sandbox_deck_cover))
         .with_state(state)
 }
 
@@ -261,6 +266,10 @@ async fn apply_command(
         }
         UiCommand::MoveSlide { from, to } => core.move_slide(from, to).map(|_| None),
         UiCommand::RemoveSlide { slide_id } => core.remove_slide(&slide_id).map(|_| None),
+        UiCommand::RemoveSlides { slide_ids } => core.remove_slides(&slide_ids).map(|_| None),
+        UiCommand::SetSlideCode { slide_id, code } => {
+            core.set_slide_code(&slide_id, code).map(|_| None)
+        }
         UiCommand::Undo => core.undo().map(|_| None),
         UiCommand::Redo => core.redo().map(|_| None),
         UiCommand::TriggerAnimation {
@@ -516,6 +525,48 @@ async fn sandbox_slide(
     response
 }
 
+/// First slide of any deck in the library, as a static slide document.
+///
+/// The library sheet shows one thumbnail per deck without opening it. The active
+/// deck is read from memory (its file may be a debounce behind); the others come
+/// from disk. Nothing here launches a browser.
+async fn sandbox_deck_cover(
+    State(state): State<Arc<AppState>>,
+    Path(deck_id): Path<String>,
+    Query(auth): Query<AuthQuery>,
+) -> Response {
+    if !crate::state::is_slide_authorized(&state, &auth) {
+        return unauthorized();
+    }
+    let Some(library) = state.library.clone() else {
+        return (StatusCode::NOT_FOUND, "no deck library").into_response();
+    };
+    let deck = if library.active().as_deref() == Some(deck_id.as_str()) {
+        state.core.read().await.presentation().clone()
+    } else {
+        match library.load(&deck_id) {
+            Ok(Some(deck)) => deck,
+            _ => return (StatusCode::NOT_FOUND, "deck not found").into_response(),
+        }
+    };
+    let Some(slide) = deck.slides.first() else {
+        return (StatusCode::NOT_FOUND, "this deck has no slides").into_response();
+    };
+    let html = sandbox::render_document(&deck, slide, true, false);
+    let mut response = Html(html).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(sandbox::csp_header()),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
 pub(crate) fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -614,6 +665,42 @@ mod tests {
         assert_eq!(seen[0].3, Some(0));
         assert_eq!(seen[1].0, AgentPhase::Done);
         assert_eq!(seen[1].2.as_deref(), Some("sld_a"));
+    }
+
+    #[tokio::test]
+    async fn reverting_the_copilot_turn_restores_the_deck_once_and_only_if_untouched() {
+        let state = test_state();
+        let before = state.view().await;
+        state.copilot.begin_snapshot(before.presentation.clone());
+        state
+            .core
+            .write()
+            .await
+            .upsert_slide(1, None, "<h1>AI</h1>".into(), TemplateType::Hero, vec![])
+            .unwrap();
+        let after = state.view().await;
+        assert!(
+            state
+                .copilot
+                .finish_snapshot(before.revision, after.revision)
+        );
+
+        let revert = |state: Arc<AppState>| async move {
+            app_router(state)
+                .oneshot(
+                    Request::post("/api/copilot/revert?t=tok_test")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        };
+        let res = revert(state.clone()).await;
+        assert_eq!(res.status(), 200);
+        assert_eq!(state.view().await.presentation.slides.len(), 1);
+
+        let again = revert(state.clone()).await;
+        assert_eq!(again.status(), 400, "the snapshot is single-use");
     }
 
     #[tokio::test]

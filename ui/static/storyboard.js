@@ -16,8 +16,20 @@
  * @param {object} options.actions
  *   command(action, payload), selectSlide(id), applyI18n(root)
  */
-export function createStoryboard({ root, t, escapeHtml, hash, actions }) {
+export function createStoryboard({ root, t, escapeHtml, hash, actions, bulkBar, viewToggle }) {
   if (!root) throw new Error("the storyboard needs its container");
+
+  /// Multi-selection: ctrl/cmd-click toggles, shift-click selects a range. The
+  /// primary selection (`selectedId`) is always part of it.
+  const multi = new Set();
+  let anchorId = null;
+  let knownIds = new Set();
+  let view = "list";
+  try {
+    view = localStorage.getItem("slyde.storyboardView") === "grid" ? "grid" : "list";
+  } catch {
+    /* A blocked storage only loses the remembered layout. */
+  }
 
   let key = "";
   let slides = [];
@@ -35,8 +47,116 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions }) {
     root.querySelectorAll(".thumb").forEach((element) => {
       const current = element.dataset.id === selectedId;
       element.setAttribute("aria-current", String(current));
+      element.setAttribute("aria-selected", String(multi.has(element.dataset.id) || current));
+      element.classList.toggle("is-multi", multi.size > 1 && multi.has(element.dataset.id));
       element.tabIndex = current ? 0 : -1;
     });
+    syncBulkBar();
+  }
+
+  function selectionIds() {
+    if (multi.size > 1) return slides.filter((slide) => multi.has(slide.id)).map((slide) => slide.id);
+    return selectedId ? [selectedId] : [];
+  }
+
+  function syncBulkBar() {
+    if (!bulkBar) return;
+    const count = multi.size > 1 ? multi.size : 0;
+    bulkBar.hidden = count === 0;
+    const label = bulkBar.querySelector("[data-bulk-count]");
+    if (label) label.textContent = t("storyboard.selected", { n: count });
+  }
+
+  function clearMulti() {
+    multi.clear();
+    anchorId = null;
+    syncSelection();
+  }
+
+  function applyView() {
+    root.dataset.view = view;
+    if (viewToggle) {
+      viewToggle.setAttribute("aria-pressed", String(view === "grid"));
+      viewToggle.title = t(view === "grid" ? "storyboard.viewList" : "storyboard.viewGrid");
+      viewToggle.setAttribute("aria-label", viewToggle.title);
+    }
+  }
+
+  function removeSelection() {
+    const ids = selectionIds();
+    if (!ids.length) return;
+    multi.clear();
+    if (ids.length === 1) actions.command("remove_slide", { slide_id: ids[0] });
+    else actions.command("remove_slides", { slide_ids: ids });
+  }
+
+  function duplicateSelection() {
+    selectionIds().forEach((id) => actions.command("duplicate_slide", { slide_id: id }));
+  }
+
+  if (viewToggle) {
+    viewToggle.addEventListener("click", () => {
+      view = view === "grid" ? "list" : "grid";
+      try {
+        localStorage.setItem("slyde.storyboardView", view);
+      } catch {
+        /* see above */
+      }
+      applyView();
+    });
+  }
+  if (bulkBar) {
+    bulkBar.addEventListener("click", (event) => {
+      const action = event.target.closest("[data-bulk]")?.dataset.bulk;
+      if (action === "delete") removeSelection();
+      else if (action === "duplicate") duplicateSelection();
+      else if (action === "clear") clearMulti();
+    });
+  }
+  applyView();
+
+  root.addEventListener("keydown", (event) => {
+    const mod = event.metaKey || event.ctrlKey;
+    if (event.key === "Delete" || event.key === "Backspace") {
+      if (!root.contains(document.activeElement) || event.target.closest("input, textarea")) return;
+      event.preventDefault();
+      removeSelection();
+    } else if (mod && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+      duplicateSelection();
+    } else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      const index = slides.findIndex((slide) => slide.id === selectedId);
+      const to = index + (event.key === "ArrowUp" ? -1 : 1);
+      if (index < 0 || to < 0 || to >= slides.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      actions.command("move_slide", { from: index, to });
+    } else if (event.key === "Escape" && multi.size) {
+      clearMulti();
+    }
+  });
+
+  function handleThumbClick(event, slide) {
+    const index = slides.findIndex((item) => item.id === slide.id);
+    if (event.shiftKey && anchorId) {
+      const from = slides.findIndex((item) => item.id === anchorId);
+      const [lo, hi] = from < index ? [from, index] : [index, from];
+      multi.clear();
+      slides.slice(lo, hi + 1).forEach((item) => multi.add(item.id));
+      syncSelection();
+      return;
+    }
+    if (event.metaKey || event.ctrlKey) {
+      if (!multi.size && selectedId) multi.add(selectedId);
+      if (multi.has(slide.id) && multi.size > 1) multi.delete(slide.id);
+      else multi.add(slide.id);
+      anchorId = slide.id;
+      syncSelection();
+      return;
+    }
+    multi.clear();
+    anchorId = slide.id;
+    actions.selectSlide(slide.id);
   }
 
   function focusSelected() {
@@ -83,6 +203,7 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions }) {
   function render({ slides: next, aspectRatio, selectedId: id, sandboxOrigin: origin, sourceQuery: query }) {
     slides = next || [];
     selectedId = id || null;
+    if (!slides.length) knownIds = new Set();
     sandboxOrigin = origin || "";
     sourceQuery = query || "";
 
@@ -175,11 +296,17 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions }) {
         });
       });
 
-      button.addEventListener("click", () => actions.selectSlide(slide.id));
+      button.addEventListener("click", (event) => handleThumbClick(event, slide));
+      if (knownIds.size && !knownIds.has(slide.id)) button.classList.add("is-new");
       root.append(button);
     });
 
+    knownIds = new Set(slides.map((slide) => slide.id));
+    [...multi].forEach((id) => {
+      if (!knownIds.has(id)) multi.delete(id);
+    });
     actions.applyI18n(root);
+    syncSelection();
     if (hadFocus) focusSelected();
   }
 
