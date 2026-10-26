@@ -8,6 +8,9 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# Reads the renderer's text description (`TextBlock`). Already in the tree.
+serde.workspace = true
+serde_json.workspace = true
 # The only archive dependency: deflate-capable ZIP. It is already in the
 # workspace tree through `slyde-server`, and there is no lighter maintained
 # OOXML-aware alternative, so the crate stays on plain ZIP + hand-written XML.

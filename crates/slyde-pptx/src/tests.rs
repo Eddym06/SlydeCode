@@ -11,7 +11,9 @@ use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
 use crate::xml;
-use crate::{EMU_PER_PIXEL, PptxDeck, PptxError, PptxSlide, build_package};
+use crate::{
+    EMU_PER_PIXEL, PptxDeck, PptxError, PptxSlide, TextBlock, build_package, parse_blocks,
+};
 
 #[path = "../tests/support/png.rs"]
 mod png;
@@ -24,6 +26,7 @@ fn slide(title: &str) -> PptxSlide {
         title: title.to_string(),
         png: png::solid(16, 9, [0x1F, 0x24, 0x30]),
         notes: None,
+        text: Vec::new(),
     }
 }
 
@@ -32,6 +35,7 @@ fn notes_slide(title: &str, notes: &str) -> PptxSlide {
         title: title.to_string(),
         png: png::solid(16, 9, [0xE8, 0x5D, 0x3B]),
         notes: Some(notes.to_string()),
+        text: Vec::new(),
     }
 }
 
@@ -371,6 +375,108 @@ fn utc_timestamps_use_the_w3cdtf_shape() {
 /// references, tag nesting, matching names and a single root element — enough
 /// to catch an unescaped `&`, a mismatched tag or a truncated part, which are
 /// the realistic ways hand-written XML breaks.
+fn block(json: &str) -> Vec<TextBlock> {
+    parse_blocks(json)
+}
+
+const HEADING: &str = r#"[{"x":96.5,"y":120,"w":640,"h":132,"align":"center","line_height":66,
+  "lines":[[{"text":"Q3 <results> & \"more\"","size":56,"color":"ff6b4a","bold":true,"font":"Geist"}],
+           [{"text":"second line","size":56,"color":"FFFFFF","alpha":0.5,"italic":true,"underline":true}]]}]"#;
+
+#[test]
+fn text_blocks_become_editable_text_boxes_over_the_picture() {
+    let mut with_text = slide("Text");
+    with_text.text = block(HEADING);
+    assert_eq!(with_text.text.len(), 1);
+    let parts = package(&[with_text]);
+    let slide_xml = text(&parts, "ppt/slides/slide1.xml");
+
+    assert_well_formed("slide1.xml", &slide_xml);
+    assert_entities("slide1.xml", &slide_xml);
+    assert_eq!(slide_xml.matches("<p:sp>").count(), 1, "one text box");
+    assert_eq!(slide_xml.matches("txBox=\"1\"").count(), 1);
+    assert_eq!(
+        slide_xml.matches("<a:p>").count(),
+        2,
+        "one paragraph per line"
+    );
+    assert!(slide_xml.contains("Q3 &lt;results&gt; &amp; &quot;more&quot;"));
+    assert!(slide_xml.contains("algn=\"ctr\""));
+    assert!(
+        slide_xml.contains("sz=\"4200\""),
+        "56 px is 42 pt: {slide_xml}"
+    );
+    assert!(
+        slide_xml.contains("val=\"FF6B4A\""),
+        "colour is upper-cased"
+    );
+    assert!(slide_xml.contains("<a:alpha val=\"50000\"/>"));
+    assert!(slide_xml.contains("u=\"sng\""));
+    assert!(
+        slide_xml.contains("wrap=\"none\""),
+        "lines are never re-wrapped"
+    );
+    // The picture comes first so the text sits above it.
+    assert!(slide_xml.find("<p:pic>") < slide_xml.find("<p:sp>"));
+    // 96.5 px at 9525 EMU per pixel.
+    assert!(slide_xml.contains("x=\"919163\""), "{slide_xml}");
+}
+
+#[test]
+fn shape_ids_do_not_collide_with_the_picture() {
+    let mut many = slide("Many");
+    many.text = block(
+        r#"[{"x":0,"y":0,"w":10,"h":10,"line_height":12,"lines":[[{"text":"a","size":12,"color":"000000"}]]},
+            {"x":0,"y":20,"w":10,"h":10,"line_height":12,"lines":[[{"text":"b","size":12,"color":"000000"}]]}]"#,
+    );
+    let slide_xml = text(&package(&[many]), "ppt/slides/slide1.xml");
+    for id in ["id=\"2\"", "id=\"3\"", "id=\"4\""] {
+        assert_eq!(slide_xml.matches(id).count(), 1, "{id} appears once");
+    }
+}
+
+#[test]
+fn unusable_text_descriptions_yield_no_boxes_instead_of_errors() {
+    assert!(block("not json").is_empty());
+    assert!(block("[]").is_empty());
+    // Zero-sized, non-positive line height and empty runs are all dropped.
+    assert!(
+        block(r#"[{"x":0,"y":0,"w":0,"h":10,"line_height":12,"lines":[[{"text":"a","size":12,"color":"000000"}]]}]"#)
+            .is_empty()
+    );
+    assert!(
+        block(r#"[{"x":0,"y":0,"w":10,"h":10,"line_height":0,"lines":[[{"text":"a","size":12,"color":"000000"}]]}]"#)
+            .is_empty()
+    );
+    assert!(
+        block(r#"[{"x":0,"y":0,"w":10,"h":10,"line_height":12,"lines":[[{"text":"","size":12,"color":"000000"}]]}]"#)
+            .is_empty()
+    );
+}
+
+#[test]
+fn hostile_numbers_and_colours_cannot_break_the_package() {
+    let mut hostile = slide("Hostile");
+    hostile.text = block(
+        r#"[{"x":1e30,"y":-1e30,"w":1e30,"h":10,"line_height":1e30,
+            "lines":[[{"text":"x","size":1e30,"color":"not-a-colour","font":"A\"<b>"}]]}]"#,
+    );
+    let slide_xml = text(&package(&[hostile]), "ppt/slides/slide1.xml");
+    assert_well_formed("slide1.xml", &slide_xml);
+    assert_entities("slide1.xml", &slide_xml);
+    assert!(
+        slide_xml.contains("val=\"000000\""),
+        "bad colours fall back to black"
+    );
+    assert!(slide_xml.contains("typeface=\"A&quot;&lt;b&gt;\""));
+}
+
+#[test]
+fn a_slide_without_text_has_no_text_boxes() {
+    let slide_xml = text(&package(&[slide("Plain")]), "ppt/slides/slide1.xml");
+    assert_eq!(slide_xml.matches("<p:sp>").count(), 0);
+}
+
 fn assert_well_formed(name: &str, document: &str) {
     assert_entities(name, document);
 

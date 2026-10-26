@@ -222,6 +222,9 @@ pub async fn api_export(
     // the print page's iframes need it to load at all.
     let slide_token = sandbox::percent_encode(&state.sandbox_token);
 
+    // Per-slide text descriptions, filled only by the PPTX render below.
+    let mut slide_text: Vec<Option<String>> = Vec::new();
+
     let result = match format {
         ExportFormat::Pdf => {
             let output = dir.join("deck.pdf");
@@ -245,16 +248,33 @@ pub async fn api_export(
             // One Chrome session for the whole deck. If the DevTools
             // handshake fails on an unusual Chrome build, fall back to the
             // sequential CLI path instead of failing the export.
-            match slyde_export::export_png_batch(
-                &browser.path,
-                &targets,
-                aspect_ratio,
-                &dir,
-                png_scale,
-                Some(&progress_tx),
-            )
-            .await
-            {
+            let batch = if format == ExportFormat::Pptx {
+                // PowerPoint gets the slide as a clean plate plus real text boxes.
+                slyde_export::export_slides_with_text(
+                    &browser.path,
+                    &targets,
+                    aspect_ratio,
+                    &dir,
+                    png_scale,
+                    Some(&progress_tx),
+                )
+                .await
+                .map(|rendered| {
+                    slide_text = rendered.iter().map(|r| r.text_json.clone()).collect();
+                    rendered.into_iter().map(|r| r.png).collect()
+                })
+            } else {
+                slyde_export::export_png_batch(
+                    &browser.path,
+                    &targets,
+                    aspect_ratio,
+                    &dir,
+                    png_scale,
+                    Some(&progress_tx),
+                )
+                .await
+            };
+            match batch {
                 Ok(files) => Ok(files),
                 Err(error) => {
                     tracing::warn!(%error, "batch PNG export failed; using one Chrome per slide");
@@ -304,8 +324,9 @@ pub async fn api_export(
             let files = files.clone();
             let notes = slide_notes.clone();
             let deck_title = title.clone();
+            let texts = std::mem::take(&mut slide_text);
             match tokio::task::spawn_blocking(move || {
-                bundle_pptx(&deck_title, &notes, &files, aspect_ratio)
+                bundle_pptx(&deck_title, &notes, &texts, &files, aspect_ratio)
             })
             .await
             {
@@ -359,11 +380,13 @@ fn attachment(title: &str, format: ExportFormat, body: Vec<u8>) -> Response {
 ///
 /// The deck is already rendered by Chrome, so PowerPoint gets one full-bleed
 /// picture per slide: exactly what the presenter showed, no second layout
-/// engine and no HTML-to-shape translation to get wrong. Slide notes travel as
-/// real notes, so the speaker view still works.
+/// engine. When Chrome also read the text, the picture is a plate with that text
+/// hidden and the text comes back as real, editable text boxes on top. Slide
+/// notes travel as real notes, so the speaker view still works.
 fn bundle_pptx(
     deck_title: &str,
     notes: &[Option<String>],
+    texts: &[Option<String>],
     files: &[PathBuf],
     aspect_ratio: slyde_core::AspectRatio,
 ) -> Result<Vec<u8>, String> {
@@ -379,6 +402,11 @@ fn bundle_pptx(
             title: format!("Slide {}", index + 1),
             png,
             notes: notes.get(index).and_then(|value| value.clone()),
+            text: texts
+                .get(index)
+                .and_then(|json| json.as_deref())
+                .map(slyde_pptx::parse_blocks)
+                .unwrap_or_default(),
         });
     }
 

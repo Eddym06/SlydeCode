@@ -59,6 +59,7 @@ pub(crate) fn slide_xml(slide: &PptxSlide, width_emu: i64, height_emu: i64) -> S
     );
     xml::line(&mut out, 4, "</p:spPr>");
     xml::line(&mut out, 3, "</p:pic>");
+    crate::text::shapes_xml(&slide.text, 3, &mut out, 3);
     xml::line(&mut out, 2, "</p:spTree>");
     xml::line(&mut out, 1, "</p:cSld>");
     xml::line(

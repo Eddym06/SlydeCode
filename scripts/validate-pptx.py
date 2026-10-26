@@ -50,6 +50,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="WxH",
         help="expected slide size in CSS pixels at 96 DPI (e.g. 1280x720)",
     )
+    parser.add_argument(
+        "--expect-text-shapes",
+        type=int,
+        default=None,
+        metavar="N",
+        help="expected number of editable text boxes across the whole deck",
+    )
+    parser.add_argument(
+        "--expect-text",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="text that must appear in some editable text box (repeatable)",
+    )
     return parser.parse_args(argv)
 
 
@@ -90,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"slide height is {height_emu} EMU, expected {expected_height}"
             )
 
+    text_shapes: list[str] = []
     for number, slide in enumerate(slides, start=1):
         pictures = [
             shape for shape in slide.shapes if shape.shape_type == MSO_SHAPE_TYPE.PICTURE
@@ -118,10 +133,33 @@ def main(argv: list[str] | None = None) -> int:
                 f"{args.expect_size[1]}"
             )
 
+        for shape in slide.shapes:
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE or not shape.has_text_frame:
+                continue
+            frame = shape.text_frame
+            text_shapes.append(frame.text)
+            runs = [run for paragraph in frame.paragraphs for run in paragraph.runs]
+            sizes = sorted({run.font.size.pt for run in runs if run.font.size})
+            print(
+                f"slide {number}: text box {frame.text!r} "
+                f"({len(frame.paragraphs)} lines, sizes {sizes} pt)"
+            )
+            if not runs:
+                failures.append(f"slide {number}: a text box has no runs")
+
         if slide.has_notes_slide:
             notes = slide.notes_slide.notes_text_frame.text
             first_line = notes.splitlines()[0] if notes else ""
             print(f"slide {number}: notes {len(notes)} chars, first line {first_line!r}")
+
+    if args.expect_text_shapes is not None and len(text_shapes) != args.expect_text_shapes:
+        failures.append(
+            f"expected {args.expect_text_shapes} text boxes, found {len(text_shapes)}"
+        )
+    joined = chr(10).join(text_shapes)
+    for needle in args.expect_text:
+        if needle not in joined:
+            failures.append(f"no editable text box contains {needle!r}")
 
     if failures:
         for failure in failures:
@@ -129,7 +167,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FAILED {args.path}: {len(failures)} check(s) failed", file=sys.stderr)
         return 1
 
-    print(f"OK {args.path}: {len(slides)} slides, one full-bleed PNG each")
+    print(
+        f"OK {args.path}: {len(slides)} slides, one full-bleed PNG each, "
+        f"{len(text_shapes)} editable text boxes"
+    )
     return 0
 
 

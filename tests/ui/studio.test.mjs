@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { inflateRawSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -2358,4 +2359,63 @@ test("the PNG export honours the requested quality and defaults to 2x", async ()
   assert.equal(await exportPng("&scale=1"), 1280, "standard quality is the slide size");
   assert.equal(await exportPng(""), 2560, "the default stays sharp for large screens");
   assert.equal(await exportPng("&scale=9"), 3840, "an absurd request is clamped to 3x");
+});
+
+/** Reads one entry of a ZIP (stored or deflated) through its central directory. */
+function readZipEntries(zip) {
+  let eocd = zip.length - 22;
+  while (eocd >= 0 && zip.readUInt32LE(eocd) !== 0x06054b50) eocd -= 1;
+  assert.ok(eocd >= 0, "a ZIP end-of-central-directory record");
+  const count = zip.readUInt16LE(eocd + 10);
+  let offset = zip.readUInt32LE(eocd + 16);
+  const entries = new Map();
+  for (let i = 0; i < count; i += 1) {
+    const method = zip.readUInt16LE(offset + 10);
+    const size = zip.readUInt32LE(offset + 20);
+    const nameLength = zip.readUInt16LE(offset + 28);
+    const extraLength = zip.readUInt16LE(offset + 30);
+    const commentLength = zip.readUInt16LE(offset + 32);
+    const local = zip.readUInt32LE(offset + 42);
+    const name = zip.toString("utf8", offset + 46, offset + 46 + nameLength);
+    const dataStart = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+    const raw = zip.subarray(dataStart, dataStart + size);
+    entries.set(name, method === 8 ? inflateRawSync(raw) : raw);
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+test("the PowerPoint export keeps slide text as editable text boxes", async () => {
+  const auth = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const upsert = await fetch(new URL("/api/agent", appUrl), {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      action: "upsert_slide",
+      index: 0,
+      slide_id: "sld_pptx_text",
+      html_code:
+        '<div style="padding:96px 120px"><h1 style="margin:0;font:700 64px/1.1 Geist;color:#fff">Quarterly results</h1>' +
+        '<p style="margin-top:32px;font-size:28px;color:#ddd">Revenue grew <b>40%</b> in Q3</p></div>',
+    }),
+  });
+  assert.equal(upsert.status, 200, "the slide was written");
+
+  const response = await fetch(new URL("/api/export?format=pptx", appUrl), {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(response.status, 200);
+  const entries = readZipEntries(Buffer.from(await response.arrayBuffer()));
+
+  const slideXml = [...entries]
+    .filter(([name]) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+    .map(([, data]) => data.toString("utf8"))
+    .find((xml) => xml.includes("Quarterly results"));
+  assert.ok(slideXml, "a slide carries the heading as text, not only as pixels");
+  assert.match(slideXml, /<a:t>Quarterly results<\/a:t>/);
+  assert.match(slideXml, /txBox="1"/);
+  assert.match(slideXml, /<a:t>40% ?<\/a:t>/, "the bold run keeps its own text");
+  assert.match(slideXml, /b="1"/, "bold survives");
+  assert.match(slideXml, /<p:pic>/, "the plate picture is still there");
 });

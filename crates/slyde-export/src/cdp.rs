@@ -29,6 +29,20 @@ const SLIDE_TIMEOUT: Duration = Duration::from_secs(45);
 /// One protocol command. A response that never arrives is a dead session.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Script that measures the slide's text and hides it for the next capture.
+const TEXT_EXTRACT_JS: &str = include_str!("text_extract.js");
+
+/// One rendered slide: the PNG on disk and, when text was extracted, the JSON
+/// description of every text block (see `text_extract.js`).
+#[derive(Debug, Clone)]
+pub struct RenderedSlide {
+    /// The screenshot. When `text_json` is set the text is hidden in it, so it is
+    /// a clean plate meant to sit under real text boxes.
+    pub png: PathBuf,
+    /// JSON array of text blocks, or `None` when nothing could be extracted.
+    pub text_json: Option<String>,
+}
+
 /// Renders every slide with a single Chrome session.
 pub async fn export_png_batch(
     chrome: &Path,
@@ -38,6 +52,33 @@ pub async fn export_png_batch(
     scale: u32,
     progress: Option<&tokio::sync::mpsc::UnboundedSender<ExportProgress>>,
 ) -> Result<Vec<PathBuf>, ExportError> {
+    let rendered = render_batch(chrome, slides, aspect_ratio, dir, scale, progress, false).await?;
+    Ok(rendered.into_iter().map(|slide| slide.png).collect())
+}
+
+/// Like [`export_png_batch`], but also reads each slide's text and returns the
+/// screenshot with that text hidden. Extraction is best effort: a slide whose
+/// text cannot be read comes back with `text_json: None` and a normal picture.
+pub async fn export_slides_with_text(
+    chrome: &Path,
+    slides: &[SlideTarget],
+    aspect_ratio: slyde_core::AspectRatio,
+    dir: &Path,
+    scale: u32,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ExportProgress>>,
+) -> Result<Vec<RenderedSlide>, ExportError> {
+    render_batch(chrome, slides, aspect_ratio, dir, scale, progress, true).await
+}
+
+async fn render_batch(
+    chrome: &Path,
+    slides: &[SlideTarget],
+    aspect_ratio: slyde_core::AspectRatio,
+    dir: &Path,
+    scale: u32,
+    progress: Option<&tokio::sync::mpsc::UnboundedSender<ExportProgress>>,
+    extract_text: bool,
+) -> Result<Vec<RenderedSlide>, ExportError> {
     if slides.is_empty() {
         return Err(ExportError::EmptyDeck);
     }
@@ -79,14 +120,14 @@ pub async fn export_png_batch(
         for (index, slide) in slides.iter().enumerate() {
             // A wedged DevTools session must not hang the export: every slide has
             // a hard budget, and the caller falls back to the CLI path on error.
-            let png = tokio::time::timeout(SLIDE_TIMEOUT, async {
+            let (png, text_json) = tokio::time::timeout(SLIDE_TIMEOUT, async {
                 session
                     .prepare(&format!(
                         r#"{{"width":{width},"height":{height},"deviceScaleFactor":{scale},"mobile":false}}"#
                     ))
                     .await?;
                 session
-                    .capture(&slide.url, NAVIGATION_TIMEOUT, SETTLE_TIMEOUT)
+                    .capture(&slide.url, NAVIGATION_TIMEOUT, SETTLE_TIMEOUT, extract_text)
                     .await
             })
             .await
@@ -97,7 +138,10 @@ pub async fn export_png_batch(
 
             let file = dir.join(format!("{:02}-{}.png", index + 1, safe_id(&slide.id)));
             tokio::fs::write(&file, png).await?;
-            written.push(file);
+            written.push(RenderedSlide {
+                png: file,
+                text_json,
+            });
             if let Some(tx) = progress {
                 let _ = tx.send(ExportProgress {
                     completed: index + 1,
@@ -265,13 +309,16 @@ impl Session {
         Ok(())
     }
 
-    /// Navigates to `url` and captures the visible viewport as PNG bytes.
+    /// Navigates to `url` and captures the visible viewport as PNG bytes. With
+    /// `extract_text` it first reads the slide's text and hides it, so the
+    /// screenshot is a clean plate.
     async fn capture(
         &mut self,
         url: &str,
         navigation_timeout: Duration,
         settle_timeout: Duration,
-    ) -> Result<Vec<u8>, ExportError> {
+        extract_text: bool,
+    ) -> Result<(Vec<u8>, Option<String>), ExportError> {
         self.send("Page.navigate", json!({ "url": url }), Some(&()))
             .await?;
 
@@ -302,6 +349,12 @@ impl Session {
         self.wait_for_js(&ready, settle_timeout + Duration::from_secs(2))
             .await?;
 
+        let text_json = if extract_text {
+            self.extract_text().await
+        } else {
+            None
+        };
+
         let shot = self
             .send(
                 "Page.captureScreenshot",
@@ -316,12 +369,36 @@ impl Session {
                     status: "cdp".into(),
                     details: "Page.captureScreenshot returned no data".into(),
                 })?;
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded).map_err(
-            |error| ExportError::Chrome {
+        let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+            .map_err(|error| ExportError::Chrome {
                 status: "cdp".into(),
                 details: format!("the screenshot was not valid base64: {error}"),
-            },
-        )
+            })?;
+        Ok((png, text_json))
+    }
+
+    /// Runs the text extraction script. Any failure means "no editable text for
+    /// this slide", never a failed export.
+    async fn extract_text(&mut self) -> Option<String> {
+        let result = self
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": TEXT_EXTRACT_JS,
+                    "returnByValue": true
+                }),
+                Some(&()),
+            )
+            .await
+            .ok()?;
+        if result.get("exceptionDetails").is_some() {
+            return None;
+        }
+        result
+            .get("result")?
+            .get("value")?
+            .as_str()
+            .map(str::to_string)
     }
 
     async fn wait_for_js(

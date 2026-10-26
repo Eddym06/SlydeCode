@@ -30,6 +30,7 @@
 
 mod parts;
 mod rels;
+mod text;
 mod theme;
 mod xml;
 
@@ -42,6 +43,8 @@ use std::path::Path;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
+pub use text::{TextAlign, TextBlock, TextRun, parse_blocks};
+
 /// English Metric Units per CSS pixel at the 96 DPI the renderer uses.
 pub const EMU_PER_PIXEL: u32 = 9525;
 
@@ -51,7 +54,7 @@ pub fn px_to_emu(px: u32) -> i64 {
 }
 
 /// One slide: the rendered picture plus the text that goes with it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PptxSlide {
     /// Slide title. Stored as the slide name and the picture alt text.
     pub title: String,
@@ -59,6 +62,9 @@ pub struct PptxSlide {
     pub png: Vec<u8>,
     /// Speaker notes, when the deck has them.
     pub notes: Option<String>,
+    /// Editable text boxes laid over the picture. When this is not empty the
+    /// picture is expected to be a plate with that text already hidden.
+    pub text: Vec<TextBlock>,
 }
 
 /// A whole deck, borrowed from the caller for the duration of the write.

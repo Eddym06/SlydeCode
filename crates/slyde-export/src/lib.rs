@@ -14,7 +14,7 @@
 
 mod cdp;
 
-pub use cdp::export_png_batch;
+pub use cdp::{RenderedSlide, export_png_batch, export_slides_with_text};
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
