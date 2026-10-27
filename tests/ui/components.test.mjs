@@ -496,3 +496,39 @@ test("every deck template renders in both languages without inventing data", asy
   );
   assert.ok(numbers.length > 0 && numbers.every((value) => /^0+%?$/.test(value)), `placeholders only: ${numbers}`);
 });
+
+test("L, P and C drive the laser, the pen and the eraser in the presenter", () => {
+  const press = (key) => keyToAction({ key, ctrlKey: false, metaKey: false, altKey: false });
+  assert.equal(press("l"), "laser");
+  assert.equal(press("L"), "laser");
+  assert.equal(press("p"), "pen");
+  assert.equal(press("c"), "clearDraw");
+  // The existing keys keep their meaning.
+  assert.equal(press("b"), "blackout");
+  assert.equal(press("s"), "speaker");
+  assert.equal(press("f"), "fullscreen");
+  // A browser shortcut is never captured.
+  assert.equal(keyToAction({ key: "p", ctrlKey: true, metaKey: false, altKey: false }), null);
+});
+
+test("the PNG quality falls back to 2x when storage is empty, refused or holds junk", async () => {
+  const { readPngScale } = await import("../../ui/static/inspector.js");
+  const original = globalThis.localStorage;
+  try {
+    globalThis.localStorage = { getItem: () => null };
+    assert.equal(readPngScale(), 2);
+    globalThis.localStorage = { getItem: () => "1" };
+    assert.equal(readPngScale(), 1);
+    globalThis.localStorage = { getItem: () => "7" };
+    assert.equal(readPngScale(), 2, "an unknown scale is ignored");
+    globalThis.localStorage = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    assert.equal(readPngScale(), 2, "a refusing store does not break the inspector");
+  } finally {
+    if (original === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = original;
+  }
+});

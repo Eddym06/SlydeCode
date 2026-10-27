@@ -368,7 +368,7 @@ pub fn welcome_deck() -> Presentation {
     let mut deck = Presentation::new("Untitled presentation", Theme::studio(), AspectRatio::R16x9);
     let mut slide = slyde_core::Slide::new(
         slyde_core::new_slide_id(),
-        crate::starter::default_code("hero"),
+        slyde_core::ensure_element_ids(&crate::starter::default_code("hero")),
     );
     slide.template = slyde_core::TemplateType::Hero;
     slide.animation = crate::starter::default_animation_for("hero");

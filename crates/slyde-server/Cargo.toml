@@ -27,5 +27,11 @@ getrandom.workspace = true
 # copilot can read the XML inside DOCX/PPTX attachments; PNGs stay stored.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# OS credential store for provider keys (Credential Manager / Keychain). MIT or
+# Apache-2.0, no C dependency. Linux keeps the owner-only file on purpose; see
+# `copilot/vault.rs`.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native", "apple-native"] }
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

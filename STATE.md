@@ -1,8 +1,57 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-27 12:30
+> Last updated: 2026-10-27 13:10
 
 ## Current Phase
+
+Phase 3.8 — **`feat/product-completion` integrated into the post-PR #3 `main`** (branch
+`integrate/product-completion`, not pushed). 160 server tests plus the rest of the Rust workspace,
+90 UI tests (browser/CDP + component + module) green; `cargo fmt --check` and
+`clippy -D warnings` clean on `x86_64-pc-windows-gnu`.
+
+### What the integration kept, and what it dropped
+
+Both branches had built some of the same things. Where they overlapped, `main` won (it is the
+reviewed, merged line) and only the non-overlapping parts of `feat` were re-applied.
+
+Kept from `feat`:
+
+- **Provider keys in the OS credential store** (`keyring` 3.x; owner-only file as fallback).
+- **`set_title` copilot tool**, agent title validation, EN/ES labels.
+- **PNG quality** (`scale=1..3` on `/api/export`, inspector select persisted in `localStorage`).
+- **Standalone `.html` export** (`render_standalone_presentation`, inspector tile, top-bar item).
+- **Presenter laser and pen** (`L` / `P` / `C`) in the studio overlay and `/present`, via
+  `presenter-draw.js`. Browser shortcuts (Ctrl/Cmd/Alt + letter) are no longer read as presenter
+  commands.
+- **Sandbox hardening** (`event.source === window.parent`, `findById` instead of splicing ids).
+- **Geometry edits lift `max-width`/`max-height`** so a deliberate resize is not clamped.
+- **Magic redesign** button in the inspector (with an ES/EN prompt; `feat` had no ES copy).
+- **Test harness pins Chrome to `--lang=en-US`**: three tests used to fail on a Spanish machine.
+
+Dropped from `feat` (superseded by an equivalent on `main`, or incompatible with it):
+
+- Editable PowerPoint text boxes: `main`'s `PptxText` runs implementation stays. `slyde-pptx` and
+  `slyde-export` are byte-identical to `main`.
+- PNG library covers (`/api/decks/thumbnails`): `main` renders covers as live iframes.
+- Universal canvas gizmo (8 handles, magnetic snapping): `main`'s multi-selection with
+  align/distribute stays. `feat`'s `interaction.test.mjs` went with it.
+- `app.css` split into 8 sheets and the `app.js` shell split (`presenter-overlay.js`,
+  `agent-activity-view.js`): both conflict with the layouts, wizard, versions and transitions that
+  `main` added to the same files.
+
+`feat/product-completion` itself is untouched on origin.
+
+Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
+All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
+
+### Implemented & Verified in this round:
+- **Universal Canvas Transform Gizmo & Snapping**: Any DOM block (text, cards, images, diagrams) can be freely moved and resized with 8-point handles, magnetic guide snapping, and arrow-key nudge (1px / 10px with Shift).
+- **Canvas Pan & Smooth Zoom**: Space + drag for smooth stage panning and Ctrl + mouse wheel continuous zoom.
+- **Full Keyboard Editing Suite**: `Delete`/`Backspace` slide deletion, `Cmd+D`/`Ctrl+D` slide duplication, `Cmd+C`/`Cmd+V` slide copy/paste (`UiCommand::PasteSlide`), and `F5` / `Cmd+Enter` / `Cmd+Shift+Enter` instant presenter launch.
+- **Presenter Live Laser & Pen Tools**: Puntero láser virtual (`L`) con halo de degradado de marca y lápiz de anotación en directo (`P`) con borrado instantáneo (`C`) y sincronización automática de resolución HiDPI.
+- **Standalone Web Deck Export (`.html`)**: `slyde export --format html` y botón en UI para exportar un único archivo HTML offline 100% interactivo y autocontenido sin servidor ni conexión.
+- **Copilot `set_theme` & Magic Redesign**: Nueva herramienta para cambiar paletas en caliente y botón en el inspector para rediseñar diapositivas con IA.
+- **End-to-End Real Interaction & Stability Suite (`tests/ui/interaction.test.mjs`)**: 17 tests reales con Chrome CDP cubriendo manipulación con ratón/teclado, concurrencia, prevención de fugas DOM y estabilidad del backend.
 
 Phase 3.3 — **product completion on `feat/product-completion`.** Rust 220 tests and
 55 UI tests green (41 browser/CDP + 14 component); `cargo fmt --check` and
@@ -303,13 +352,10 @@ Nothing partially implemented on the branch.
 
 ## Not Implemented Yet
 
-- `app.js` is the shell in one closure (~1,730 lines): it is now glue (topbar,
-  stage frame, chips, presenter overlay, boot), but it is still one closure with
-  shared mutable state rather than a state object with per-region render.
-- OS keychain for provider keys (the file is owner-only on Unix; Windows has no
-  DACL yet).
-- `app.js` is still one large `boot()` closure, and the presenter logic is
-  duplicated between `app.js` and `present.js`.
+- `app.js` (~1,440 lines) is still one `boot()` closure for what the shell itself owns
+  (`view`, selection, stage key, zoom, panels). A store is only worth it if that grows.
+- The overlay presenter in the studio and the standalone `/present` page share the reveal
+  state machine, but each still has its own DOM wiring.
 - A DOM component runner (the pure modules are covered; the DOM wiring is only
   covered end-to-end).
 - Deck thumbnails in the library (rows show title, slide count, age and theme).
@@ -335,10 +381,19 @@ Nothing partially implemented on the branch.
   previous session are gone by design.
 - Copilot: 40 rounds is still a budget, not a guarantee, and large decks may need
   a second "continue".
-- PNG export at 2x triples the file size; there is no user-facing 1x/2x choice.
 - Provider model lists include models that may not support tool calling; the UI
   shows metadata but does not pre-validate capability.
-- Real provider calls are still unverified with live keys.
+- Only DeepSeek has been exercised with a live key. OpenAI, Anthropic, Gemini, xAI, Groq,
+  OpenRouter and NVIDIA are still unverified.
+- A provider connection reset mid-stream (seen once with DeepSeek, `os error 10054`) ends the
+  turn with a localized network error; there is no automatic retry.
+- A first copilot turn takes 70–140 s on DeepSeek and streams ~8–10k `thinking` SSE frames.
+  Coalescing thinking deltas would cut traffic without changing the UI.
+- `studio.test.mjs` is ~2,200 lines and `interaction.test.mjs` still uses many fixed
+  `sleep()` waits; one of them already flaked. Convert them to readiness waits as they bite.
+- PowerPoint output is validated with `python-pptx` only; a missing Geist typeface makes
+  PowerPoint substitute another one (glyph widths change, line breaks do not).
+- The tests leave hundreds of `slyde-*` folders in `%TEMP%`.
 
 ## Build & Platform Status
 
@@ -358,22 +413,21 @@ Nothing partially implemented on the branch.
 
 ## Backlog (Prioritized)
 
-1. **Validate the copilot against live provider keys** (all eight).
-2. **Turn the shell into a state object**: the panels are modules, but the shell
-   still shares ~30 mutable `let`s through closures instead of one read model
-   with explicit subscriptions.
-3. **OS keychain** for provider keys (Windows has a DACL now; a real keychain is
-   next).
-4. **Deck thumbnails** in the library sheet (one PNG per deck, cached).
-5. **Editable PPTX** (text shapes) behind the current image-per-slide baseline.
+1. **Validate the remaining copilot providers** (seven left) and add one retry for a
+   connection reset that happens before the first delta.
+2. Open the exported `.pptx` in real PowerPoint/Keynote/Google Slides and compare it
+   with the presenter; tune the line spacing if the baseline sits off.
+3. Linux credential store, if a `libdbus` dependency ever becomes acceptable.
+4. Clean the test temp folders (each suite should remove its own).
+5. Editable PowerPoint shapes for diagrams and code blocks.
 6. A DOM component runner if the zero-npm rule is ever relaxed.
 7. Content-addressed assets so two decks can share one image.
 8. Token/cost estimates for copilot turns.
 
 ## Next Immediate Step
 
-- Review the branch, then run the copilot with one real key and report any
-  provider/model that fails.
+- Review the branch, open an exported deck in real PowerPoint, and run the same live
+  probe against the other seven providers.
 
 ## Completed
 

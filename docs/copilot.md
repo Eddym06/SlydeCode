@@ -25,7 +25,8 @@ extraction, the system prompt and the tool loop.
 | File | Responsibility |
 |---|---|
 | `copilot/catalog.rs` | Provider ids, names, marks, key URLs, env keys, endpoints, model-list shape. |
-| `copilot/config.rs` | `copilot.json` load/save, in-memory store for tests, owner-only Unix permissions. |
+| `copilot/config.rs` | `copilot.json` load/save (settings, plus keys when no credential store is available), key migration, owner-only permissions. |
+| `copilot/vault.rs` | `Vault` trait, the OS credential store (Windows/macOS) and an in-memory vault for tests. |
 | `copilot/mod.rs` | `CopilotState`: provider view, key validation, model discovery, last provider/model. |
 | `copilot/models.rs` | Normalizes model lists, removes non-chat models, derives free/vision/context metadata. |
 | `copilot/attachments.rs` | Base64 decode, image/document limits, PDF/DOCX/PPTX/text extraction. |
@@ -100,9 +101,13 @@ therefore consistent.
 
 ## Security and privacy
 
-- Keys are stored in `%APPDATA%\SlydeCode\copilot.json` (or the equivalent
-  app-data path), written atomically, with owner-only permissions on Unix.
-  Environment variables are the fallback when no key is stored.
+- Keys are stored in the OS credential store (Windows Credential Manager, macOS
+  Keychain) under the service `SlydeCode`. Where there is none (Linux) or when it
+  refuses a write, they fall back to `copilot.json` in the app-data directory,
+  written atomically with owner-only permissions. A key an older version left in
+  that file is moved into the credential store on the next start. A custom
+  `SLYDE_DATA_DIR` never uses the credential store, so tests and second profiles
+  stay isolated. Environment variables are the fallback when no key is stored.
 - The key is validated against the provider before it is persisted; malformed or
   absurdly long keys are rejected locally before any network call.
 - Provider error bodies are reduced to a short public message; raw bodies and

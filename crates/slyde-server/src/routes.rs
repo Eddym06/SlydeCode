@@ -273,6 +273,22 @@ async fn apply_command(
             )
             .map(|_| None)
         }
+        UiCommand::PasteSlide {
+            index,
+            code,
+            template,
+            animation,
+        } => {
+            let template_str = template.unwrap_or_else(|| "hero".to_string());
+            core.upsert_slide(
+                index,
+                None,
+                code,
+                crate::starter::template_type(&template_str),
+                animation,
+            )
+            .map(|_| None)
+        }
         UiCommand::MoveSlide { from, to } => core.move_slide(from, to).map(|_| None),
         UiCommand::RemoveSlide { slide_id } => core.remove_slide(&slide_id).map(|_| None),
         UiCommand::RemoveSlides { slide_ids } => core.remove_slides(&slide_ids).map(|_| None),

@@ -15,6 +15,7 @@ pub mod prompt;
 pub mod routes;
 pub mod tools;
 pub mod transport;
+pub mod vault;
 pub mod wire;
 
 use std::time::Duration;

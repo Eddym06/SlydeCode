@@ -160,9 +160,14 @@ export function keyToAction(event) {
   if (key === "ArrowLeft" || key === "PageUp" || key === "Backspace") return "back";
   if (key === "Home") return "first";
   if (key === "End") return "last";
+  // A browser shortcut (Ctrl+P, Ctrl+C, Cmd+F…) is never a presenter command.
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
   if (lower === "b" || key === ".") return "blackout";
   if (lower === "s") return "speaker";
   if (lower === "f") return "fullscreen";
+  if (lower === "l") return "laser";
+  if (lower === "p") return "pen";
+  if (lower === "c") return "clearDraw";
   if (key === "Escape") return "escape";
   return null;
 }

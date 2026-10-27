@@ -44,6 +44,28 @@ export const ANIMATION_KINDS = [
 
 export const DEFAULT_EASING = "cubic-bezier(.16,1,.3,1)";
 const NOTES_DEBOUNCE_MS = 450;
+const PNG_SCALE_KEY = "slyde.export.pngScale";
+const PNG_SCALES = [1, 2];
+const DEFAULT_PNG_SCALE = 2;
+
+/** The PNG quality the user last picked; 2x (sharp on a retina projector) by default. */
+export function readPngScale() {
+  try {
+    const stored = Number(localStorage.getItem(PNG_SCALE_KEY));
+    return PNG_SCALES.includes(stored) ? stored : DEFAULT_PNG_SCALE;
+  } catch {
+    return DEFAULT_PNG_SCALE;
+  }
+}
+
+function writePngScale(scale) {
+  if (!PNG_SCALES.includes(scale)) return;
+  try {
+    localStorage.setItem(PNG_SCALE_KEY, String(scale));
+  } catch {
+    // Private windows can refuse storage; the choice then lasts until reload.
+  }
+}
 
 /**
  * @param {object} options
@@ -90,6 +112,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     layout: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M10 9v11"/>',
     transition: '<rect x="3" y="5" width="10" height="14" rx="2"/><rect x="11" y="5" width="10" height="14" rx="2" opacity=".55"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+    sparkle: '<path d="M12 3c.7 5 1.9 6.3 7 7-5.1.7-6.3 2-7 7-.7-5-1.9-6.3-7-7 5.100-.7 6.300-2 7-7Z"/>',
   };
 
   function icon(name, size = 16) {
@@ -323,7 +346,15 @@ export function createInspector({ root, t, escapeHtml, actions }) {
            <button type="button" class="tile-btn tile-badge" data-badge=".pdf" id="export-pdf">${escapeHtml(t("export.pdf"))}</button>
            <button type="button" class="tile-btn tile-badge" data-badge=".zip" id="export-png">${escapeHtml(t("export.png"))}</button>
            <button type="button" class="tile-btn tile-badge" data-badge=".pptx" id="export-pptx">${escapeHtml(t("export.pptx"))}</button>
+           <button type="button" class="tile-btn tile-badge" data-badge=".html" id="export-html" style="grid-column: 1 / -1">${escapeHtml(t("export.html"))}</button>
          </div>
+         <label class="export-quality">
+           <span class="hint">${escapeHtml(t("export.quality"))}</span>
+           <select class="select" id="export-scale">
+             <option value="1"${readPngScale() === 1 ? " selected" : ""}>${escapeHtml(t("export.quality.standard"))}</option>
+             <option value="2"${readPngScale() === 2 ? " selected" : ""}>${escapeHtml(t("export.quality.high"))}</option>
+           </select>
+         </label>
          <p class="hint export-status" id="export-status" role="status" aria-live="polite">${escapeHtml(t("export.hint"))}</p>`,
         { id: "export-section", attrs: 'aria-busy="false"' }
       ),
@@ -408,6 +439,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
          <div class="slide-quick-actions">
            <button type="button" class="tile-btn" id="inspector-insert-image">${icon("image", 16)}<span>${escapeHtml(t("inspector.insertImage"))}</span></button>
            <input type="file" id="inspector-image-file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+           <button type="button" class="tile-btn" id="inspector-redesign-slide">${icon("sparkle", 16)}<span>${escapeHtml(t("action.redesign"))}</span></button>
            <button type="button" class="tile-btn" id="inspector-duplicate-slide">${icon("copy", 16)}<span>${escapeHtml(t("inspector.duplicate"))}</span></button>
            <button type="button" class="tile-btn tile-danger" id="delete-slide">${icon("trash", 16)}<span>${escapeHtml(t("action.delete"))}</span></button>
          </div>`
@@ -491,9 +523,18 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       ["export-pdf", "pdf"],
       ["export-png", "png"],
       ["export-pptx", "pptx"],
+      ["export-html", "html"],
     ]) {
       const button = root.querySelector(`#${id}`);
-      if (button) button.addEventListener("click", () => actions.exportDeck(format));
+      if (!button) continue;
+      button.addEventListener("click", () =>
+        actions.exportDeck(format, format === "png" ? { scale: readPngScale() } : {})
+      );
+    }
+
+    const scaleSelect = root.querySelector("#export-scale");
+    if (scaleSelect) {
+      scaleSelect.addEventListener("change", () => writePngScale(Number(scaleSelect.value)));
     }
 
     actions.applyI18n(root);
@@ -662,6 +703,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     bindTransition(currentSlide);
     bindLayouts(currentSlide);
     mountCodeEditor(currentSlide, editorState);
+
+    const redesign = root.querySelector("#inspector-redesign-slide");
+    if (redesign) {
+      redesign.addEventListener("click", () => {
+        if (actions.redesignSlide) actions.redesignSlide(currentSlide.id);
+      });
+    }
 
     const remove = root.querySelector("#delete-slide");
     if (remove) {
