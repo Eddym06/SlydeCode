@@ -111,7 +111,7 @@ you press Ctrl+C.
 .\scripts\package-windows.ps1
 ```
 Builds `slydecode.exe` and `slyde.exe` in release mode (with the SlydeCode icon and version info embedded; this needs
-`windres` or `rc.exe` on the machine, and the build only warns if neither is found) and writes `dist\SlydeCode\` plus a zip. The executables read
+`windres` or `rc.exe` on the machine, and the build only warns if neither is found) and writes `dist\package\SlydeCode\` plus a zip in `dist\`. The executables read
 `ui\` and `assets\` from beside themselves, so hand out the whole folder, not a single `.exe`.
 
 ---

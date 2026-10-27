@@ -3,7 +3,7 @@
 # The executables do not embed the UI: they read `ui/` and `assets/` from beside
 # themselves, so the folder is the unit to hand out, not a single .exe.
 #
-#   dist\SlydeCode\
+#   dist\package\SlydeCode\
 #     slydecode.exe   what a user double-clicks (no console window)
 #     slyde.exe       command line and MCP server
 #     ui\  assets\  LICENSE
@@ -43,7 +43,9 @@ foreach ($name in 'slydecode.exe', 'slyde.exe') {
 
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "([^"]+)"' |
     Select-Object -First 1).Matches[0].Groups[1].Value
-$out = Join-Path $root 'dist\SlydeCode'
+# Staged under dist\package so a copy of the app that is still running from an
+# earlier package (its .exe is locked) never blocks the next build.
+$out = Join-Path $root 'dist\package\SlydeCode'
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force $out | Out-Null
 
