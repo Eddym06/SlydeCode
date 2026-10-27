@@ -56,6 +56,34 @@ const SHAPES = {
     <rect x="13" y="26" width="18" height="1.8" rx=".9" fill="${c.fg}" opacity=".7"/>`,
 };
 
+SHAPES.custom = (c) => `
+    <rect x="6" y="6" width="24" height="3.4" rx="1.2" fill="${c.fg}"/>
+    <rect x="6" y="14" width="22" height="20" rx="2.5" fill="${c.accent}" opacity=".85"/>
+    <rect x="34" y="14" width="24" height="9" rx="2.5" fill="${c.fg}" opacity=".55"/>
+    <rect x="34" y="26" width="24" height="8" rx="2.5" fill="${c.fg}" opacity=".3"/>`;
+
+SHAPES.two_columns = (c) => `
+    <rect x="6" y="6" width="26" height="3.6" rx="1.2" fill="${c.fg}"/>
+    <rect x="6" y="15" width="24" height="1.8" rx=".9" fill="${c.accent}"/>
+    <rect x="6" y="20" width="24" height="2" rx="1" fill="${c.fg}" opacity=".55"/>
+    <rect x="6" y="25" width="20" height="2" rx="1" fill="${c.fg}" opacity=".55"/>
+    <rect x="34" y="15" width="24" height="1.8" rx=".9" fill="${c.accent}"/>
+    <rect x="34" y="20" width="24" height="2" rx="1" fill="${c.fg}" opacity=".55"/>
+    <rect x="34" y="25" width="18" height="2" rx="1" fill="${c.fg}" opacity=".55"/>`;
+SHAPES.quote = (c) => `
+    <text x="7" y="22" font-size="22" font-family="Georgia,serif" fill="${c.accent}">“</text>
+    <rect x="9" y="18" width="40" height="3.4" rx="1.2" fill="${c.fg}"/>
+    <rect x="9" y="24" width="32" height="3.4" rx="1.2" fill="${c.fg}"/>
+    <rect x="9" y="32" width="16" height="1.8" rx=".9" fill="${c.fg}" opacity=".5"/>`;
+SHAPES.big_number = (c) => `
+    <rect x="6" y="6" width="14" height="1.8" rx=".9" fill="${c.fg}" opacity=".5"/>
+    <rect x="6" y="13" width="34" height="14" rx="2.5" fill="${c.accent}"/>
+    <rect x="6" y="31" width="26" height="2.4" rx="1.2" fill="${c.fg}" opacity=".7"/>`;
+SHAPES.section = (c) => `
+    <rect x="6" y="12" width="12" height="1.6" rx=".8" fill="${c.fg}" opacity=".5"/>
+    <rect x="6" y="17" width="44" height="6" rx="1.6" fill="${c.fg}"/>
+    <rect x="6" y="27" width="16" height="2.6" rx="1.3" fill="${c.accent}"/>`;
+
 export function layoutPreview(layout, themeId = "studio") {
   const colors = THEME_COLORS[themeId] || THEME_COLORS.studio;
   const shapes = (SHAPES[layout] || SHAPES.hero)(colors);

@@ -1,3 +1,4 @@
+import { createTransitioner, transitionOf } from "./transitions.js";
 import { createClient, readToken } from "./api.js";
 import { apply as applyI18n, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
@@ -43,6 +44,8 @@ let sandboxOrigin = "";
 // Slide documents require their own token; it is not the session token.
 let sourceQuery = "";
 let slideKey = "";
+let prevIndex = 0;
+const transitioner = createTransitioner(frame);
 let hudTimer = null;
 const reveal = createReveal([]);
 let timerSeconds = 0;
@@ -192,10 +195,20 @@ function applyView(next) {
   const key = `${slide.id}:${slide.code.length}:${slide.animation.length}`;
   reveal.setSlides(slides);
   if (key !== slideKey) {
+    const movedSlides = slideKey !== "" && slideKey.split(":")[0] !== slide.id;
+    const direction = index < prevIndex ? -1 : 1;
     slideKey = key;
+    prevIndex = index;
     slideStartSeconds = timerSeconds;
     reveal.reload();
-    if (frame) frame.src = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}${sourceQuery}`;
+    if (frame) {
+      const target = `${sandboxOrigin}/s/${encodeURIComponent(slide.id)}?p=${index}${sourceQuery}`;
+      const swap = () => {
+        frame.src = target;
+      };
+      if (movedSlides) transitioner.go(swap, transitionOf(slide), direction);
+      else swap();
+    }
   }
 
   try {

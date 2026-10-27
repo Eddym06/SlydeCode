@@ -10,6 +10,10 @@
 // suite. What changed is who owns the markup and the event wiring.
 
 import { createCodeEditor } from "./code-editor.js";
+import { describeStructure, labelFor } from "./element-labels.js";
+import { TRANSITION_KINDS, DEFAULT_TRANSITION_MS } from "./transitions.js";
+import { LAYOUTS } from "./layouts.js";
+import { layoutPreview } from "./layout-previews.js";
 import { THEME_COLORS } from "./layout-previews.js";
 
 /** Every theme the backend accepts, with the dots the swatches show. */
@@ -83,6 +87,9 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    layout: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M10 9v11"/>',
+    transition: '<rect x="3" y="5" width="10" height="14" rx="2"/><rect x="11" y="5" width="10" height="14" rx="2" opacity=".55"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
   };
 
   function icon(name, size = 16) {
@@ -303,6 +310,13 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       ),
       card(
         3,
+        "history",
+        t("versions.title"),
+        `<div id="versions-host" class="versions-host"></div>`,
+        { id: "versions-card" }
+      ),
+      card(
+        4,
         "export",
         t("export.section"),
         `<div class="tile-row tile-row-3">
@@ -316,17 +330,66 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     ].join("");
   }
 
+  /** Which layout tile to mark: the one that wrote this slide, else its template. */
+  function activeLayoutOf(slide) {
+    const byClass = {
+      "layout-hero": "hero",
+      "layout-bullet": "bullet",
+      "layout-image": "image_layout",
+      "layout-columns": "two_columns",
+      "layout-quote": "quote",
+      "layout-number": "big_number",
+      "layout-section": "section",
+    };
+    const match = /class="slide (layout-[a-z]+)/.exec(slide.code || "");
+    if (match && byClass[match[1]]) return byClass[match[1]];
+    return ["hero", "bullet", "image_layout"].includes(slide.template) ? slide.template : null;
+  }
+
+  function layoutMarkup(slide) {
+    const themeId = (current.deck && current.deck.theme && current.deck.theme.id) || "studio";
+    const active = activeLayoutOf(slide);
+    const tiles = LAYOUTS.map(
+      (id) => `<button type="button" class="layout-tile" data-layout="${id}" role="radio" aria-checked="${id === active}">
+        <span class="layout-tile-art">${layoutPreview(id, themeId)}</span>
+        <span>${escapeHtml(t(`layout.${id}`))}</span></button>`
+    ).join("");
+    return `
+      <div class="layout-grid" role="radiogroup" aria-label="${escapeHtml(t("layout.title"))}">${tiles}</div>
+      <button type="button" class="tile-btn tile-wide" id="layout-all"${active ? "" : " disabled"}>${escapeHtml(t("layout.applyAll"))}</button>
+      <p class="hint">${escapeHtml(t("layout.hint"))}</p>`;
+  }
+
+  function transitionMarkup(slide) {
+    const current = (slide.transition && slide.transition.kind) || "none";
+    const duration = (slide.transition && slide.transition.duration_ms) || DEFAULT_TRANSITION_MS;
+    const chips = TRANSITION_KINDS.map(
+      (kind) => `<button type="button" class="transition-chip" data-transition="${kind}" role="radio"
+        aria-checked="${kind === current}"><span class="transition-demo" data-kind="${kind}" aria-hidden="true"><i></i><i></i></span>
+        <span>${escapeHtml(t(`transition.${kind}`))}</span></button>`
+    ).join("");
+    return `
+      <div class="transition-grid" role="radiogroup" aria-label="${escapeHtml(t("transition.title"))}">${chips}</div>
+      <label class="transition-duration${current === "none" ? " is-off" : ""}">
+        <span>${escapeHtml(t("transition.duration"))}</span>
+        <input type="range" id="transition-duration" min="150" max="1500" step="50" value="${duration}"
+               ${current === "none" ? "disabled" : ""} aria-label="${escapeHtml(t("transition.duration"))}">
+        <output id="transition-output">${duration} ms</output>
+      </label>
+      <button type="button" class="tile-btn tile-wide" id="transition-all">${escapeHtml(t("transition.applyAll"))}</button>`;
+  }
+
   function slideMarkup(slide, { selectedElement, structureNodes }) {
-    const tree = structureNodes.length
-      ? `<ul class="element-tree">${structureNodes
+    const described = describeStructure(structureNodes);
+    const tree = described.length
+      ? `<ul class="element-tree">${described
           .map(
-            (node) => `<li>
+            (entry) => `<li>
                     <button type="button" class="element-tree-item${
-                      selectedElement && selectedElement.id === node.id ? " is-selected" : ""
-                    }" data-tree-id="${escapeHtml(node.id)}">
-                      <span class="element-tree-tag">${escapeHtml(node.tag)}</span>
-                      <span class="element-tree-id">#${escapeHtml(node.id)}</span>
-                      ${node.text ? `<span class="element-tree-text">${escapeHtml(node.text)}</span>` : ""}
+                      selectedElement && selectedElement.id === entry.id ? " is-selected" : ""
+                    }" data-tree-id="${escapeHtml(entry.id)}">
+                      <span class="element-tree-tag">${escapeHtml(labelFor(entry, t))}</span>
+                      ${entry.text ? `<span class="element-tree-text">${escapeHtml(entry.text)}</span>` : ""}
                     </button>
                   </li>`
           )
@@ -341,7 +404,6 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         t("inspector.slide"),
         `<div class="slide-identity">
            <span class="layout-badge">${escapeHtml(t(`template.${slide.template}`))}</span>
-           <span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span>
          </div>
          <div class="slide-quick-actions">
            <button type="button" class="tile-btn" id="inspector-insert-image">${icon("image", 16)}<span>${escapeHtml(t("inspector.insertImage"))}</span></button>
@@ -350,8 +412,9 @@ export function createInspector({ root, t, escapeHtml, actions }) {
            <button type="button" class="tile-btn tile-danger" id="delete-slide">${icon("trash", 16)}<span>${escapeHtml(t("action.delete"))}</span></button>
          </div>`
       ),
+      card(1, "layout", t("layout.title"), layoutMarkup(slide)),
       card(
-        1,
+        2,
         "notes",
         t("inspector.notes"),
         `<textarea class="notes" id="notes" aria-label="${escapeHtml(t("inspector.notes"))}" placeholder="${escapeHtml(
@@ -359,18 +422,20 @@ export function createInspector({ root, t, escapeHtml, actions }) {
         )}">${escapeHtml(slide.notes || "")}</textarea>`
       ),
       card(
-        2,
+        3,
         "motion",
         t("inspector.animation"),
         renderAnimationEditor(slide),
         { extra: steps ? `<span class="card-count">${steps}</span>` : "" }
       ),
-      card(3, "elements", t("tree.title"), tree, {
-        extra: structureNodes.length ? `<span class="card-count">${structureNodes.length}</span>` : "",
+      card(4, "transition", t("transition.title"), transitionMarkup(slide)),
+      card(5, "elements", t("tree.title"), tree, {
+        extra: described.length ? `<span class="card-count">${described.length}</span>` : "",
       }),
-      `<details class="dev card" style="--i:4"${devOpen ? " open" : ""}>
+      `<details class="dev card" style="--i:6"${devOpen ? " open" : ""}>
         <summary><span class="card-icon">${icon("code", 15)}</span><span class="card-title">${escapeHtml(t("inspector.developer"))}</span></summary>
         <p class="hint">${escapeHtml(t("inspector.developerHint"))}</p>
+        <p class="hint dev-meta"><span class="mono id-chip" title="${escapeHtml(slide.id)}">${escapeHtml(slide.id)}</span></p>
         <div id="code-editor-host"></div>
       </details>`,
     ].join("");
@@ -434,6 +499,51 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     actions.applyI18n(root);
   }
 
+  function bindLayouts(slide) {
+    const grid = root.querySelector(".layout-grid");
+    if (!grid) return;
+    const all = root.querySelector("#layout-all");
+    grid.addEventListener("click", (event) => {
+      const tile = event.target.closest("[data-layout]");
+      if (!tile) return;
+      grid.querySelectorAll("[data-layout]").forEach((node) => {
+        node.setAttribute("aria-checked", String(node === tile));
+      });
+      all.disabled = false;
+      actions.applyLayout(tile.dataset.layout, false, slide.id);
+    });
+    // The layout in use is read from the markup, so the button survives the
+    // re-render that follows every change.
+    all.addEventListener("click", () => {
+      const tile = grid.querySelector('[aria-checked="true"]');
+      if (tile) actions.applyLayout(tile.dataset.layout, true, slide.id);
+    });
+  }
+
+  function bindTransition(slide) {
+    const grid = root.querySelector(".transition-grid");
+    if (!grid) return;
+    const range = root.querySelector("#transition-duration");
+    const output = root.querySelector("#transition-output");
+    const kindNow = () =>
+      (grid.querySelector('[aria-checked="true"]') || { dataset: { transition: "none" } }).dataset.transition;
+    const send = (kind, all) =>
+      actions.command("set_transition", {
+        slide_ids: all ? null : [slide.id],
+        kind,
+        duration_ms: Number(range.value),
+      });
+    grid.addEventListener("click", (event) => {
+      const chip = event.target.closest("[data-transition]");
+      if (chip) send(chip.dataset.transition, false);
+    });
+    range.addEventListener("input", () => {
+      output.textContent = `${range.value} ms`;
+    });
+    range.addEventListener("change", () => send(kindNow(), false));
+    root.querySelector("#transition-all").addEventListener("click", () => send(kindNow(), true));
+  }
+
   function mountCodeEditor(slide, editorState) {
     const host = root.querySelector("#code-editor-host");
     const details = root.querySelector("details.dev");
@@ -489,6 +599,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       root.classList.toggle("is-entering", entering);
       actions.onEmptyDeck();
       bindDeckControls();
+      mountVersions();
       return;
     }
 
@@ -508,6 +619,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     root.classList.toggle("is-entering", entering);
     actions.onSubtabs(showSlide);
     bindDeckControls();
+    mountVersions();
 
     root.querySelectorAll("[data-tree-id]").forEach((button) => {
       button.addEventListener("click", () => actions.selectElement(button.dataset.treeId));
@@ -547,6 +659,8 @@ export function createInspector({ root, t, escapeHtml, actions }) {
     }
 
     bindAnimationEditor(currentSlide);
+    bindTransition(currentSlide);
+    bindLayouts(currentSlide);
     mountCodeEditor(currentSlide, editorState);
 
     const remove = root.querySelector("#delete-slide");
@@ -566,6 +680,12 @@ export function createInspector({ root, t, escapeHtml, actions }) {
       }
     }
     actions.applyI18n(root);
+  }
+
+  /// The versions list owns its container; the panel only points it at the new one.
+  function mountVersions() {
+    const host = root.querySelector("#versions-host");
+    if (host && actions.mountVersions) actions.mountVersions(host);
   }
 
   return {

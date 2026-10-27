@@ -5,7 +5,7 @@
 //! single `Turn`, so the tool loop never branches on the vendor.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -26,6 +26,56 @@ pub struct StreamRequest<'a> {
     /// Flipped by `POST /api/copilot/cancel`; checked per chunk so cancelling
     /// drops the upstream response instead of waiting for it to finish.
     pub cancel: &'a tokio::sync::watch::Receiver<bool>,
+    /// Where finished slides of a streaming `build_deck`/`write_slides` call go,
+    /// so they can be applied while the model is still writing the rest.
+    pub partial: Option<&'a UnboundedSender<PartialSlides>>,
+}
+
+/// Slides that closed inside a tool call that is still streaming.
+#[derive(Debug)]
+pub struct PartialSlides {
+    pub tool: String,
+    pub header: Option<Value>,
+    pub slides: Vec<Value>,
+}
+
+/// The tools whose arguments are worth applying before the call ends.
+const BATCH_TOOLS: [&str; 2] = [tools::BUILD_DECK, tools::WRITE_SLIDES];
+
+/// Reasoning arrives as thousands of tiny chunks (a slow model produced ~10,000
+/// in one turn). Forwarding each one made the browser re-render a long text on
+/// every chunk, so they are merged into one event every ~120 ms.
+struct ThinkingBuffer {
+    pending: String,
+    last_flush: Instant,
+}
+
+impl ThinkingBuffer {
+    const WINDOW: Duration = Duration::from_millis(120);
+
+    fn new() -> Self {
+        Self {
+            pending: String::new(),
+            last_flush: Instant::now(),
+        }
+    }
+
+    fn push(&mut self, tx: &UnboundedSender<ChatEvent>, text: &str) -> Result<(), CopilotError> {
+        self.pending.push_str(text);
+        if self.last_flush.elapsed() >= Self::WINDOW {
+            self.flush(tx)?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, tx: &UnboundedSender<ChatEvent>) -> Result<(), CopilotError> {
+        self.last_flush = Instant::now();
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let text = std::mem::take(&mut self.pending);
+        send_thinking(tx, &text)
+    }
 }
 
 pub async fn stream(
@@ -86,6 +136,7 @@ async fn stream_openai(
         system,
         turns,
         cancel,
+        partial: _,
     } = *request;
     let body = json!({
         "model": model,
@@ -99,6 +150,8 @@ async fn stream_openai(
     let mut state = OpenAiAccum::default();
     let mut usage = TokenUsage::default();
     let mut progress = ProgressGate::default();
+    let mut thinking_buffer = ThinkingBuffer::new();
+    let mut scanner = super::partial::SlideScanner::default();
 
     consume_sse(response, tx, cancel, |data| {
         if data == "[DONE]" {
@@ -125,14 +178,18 @@ async fn stream_openai(
             send_delta(tx, &text)?;
         }
         if let Some(thinking) = state.take_thinking() {
-            send_thinking(tx, &thinking)?;
+            thinking_buffer.push(tx, &thinking)?;
         }
         if let Some((name, arguments)) = state.writing() {
             progress.report(tx, name, arguments);
         }
+        if let Some((name, arguments)) = state.writing_batch() {
+            forward_partial(request.partial, &mut scanner, name, arguments);
+        }
         Ok(())
     })
     .await?;
+    thinking_buffer.flush(tx)?;
 
     let tool_calls = state.finish()?;
     let text = if state.text.trim().is_empty()
@@ -158,6 +215,7 @@ async fn stream_anthropic(
         system,
         turns,
         cancel,
+        partial: _,
     } = *request;
     let body = json!({
         "model": model,
@@ -171,6 +229,8 @@ async fn stream_anthropic(
     let mut state = AnthropicAccum::default();
     let mut usage = TokenUsage::default();
     let mut progress = ProgressGate::default();
+    let mut thinking_buffer = ThinkingBuffer::new();
+    let mut scanner = super::partial::SlideScanner::default();
 
     consume_sse(response, tx, cancel, |data| {
         let value: Value = match serde_json::from_str(data) {
@@ -202,14 +262,18 @@ async fn stream_anthropic(
             send_delta(tx, &text)?;
         }
         if let Some(thinking) = state.take_thinking() {
-            send_thinking(tx, &thinking)?;
+            thinking_buffer.push(tx, &thinking)?;
         }
         if let Some((name, arguments)) = state.writing() {
             progress.report(tx, name, arguments);
         }
+        if let Some((name, arguments)) = state.writing_batch() {
+            forward_partial(request.partial, &mut scanner, name, arguments);
+        }
         Ok(())
     })
     .await?;
+    thinking_buffer.flush(tx)?;
 
     let tool_calls = state.finish();
     let text = if state.text.trim().is_empty()
@@ -272,8 +336,27 @@ impl ProgressGate {
             name: name.to_string(),
             chars: arguments.len(),
             items: arguments.matches("\"html_code\"").count(),
+            draft: super::partial::draft_html(arguments),
         });
     }
+}
+
+fn forward_partial(
+    sink: Option<&UnboundedSender<PartialSlides>>,
+    scanner: &mut super::partial::SlideScanner,
+    tool: &str,
+    arguments: &str,
+) {
+    let Some(sink) = sink else { return };
+    let found = scanner.feed(arguments);
+    if found.slides.is_empty() {
+        return;
+    }
+    let _ = sink.send(PartialSlides {
+        tool: tool.to_string(),
+        header: found.header,
+        slides: found.slides,
+    });
 }
 
 fn send_delta(tx: &UnboundedSender<ChatEvent>, text: &str) -> Result<(), CopilotError> {
@@ -528,6 +611,14 @@ impl OpenAiAccum {
         Ok(Some(emitted).filter(|text| !text.is_empty()))
     }
 
+    /// The first batch-tool call being written (see [`BATCH_TOOLS`]).
+    fn writing_batch(&self) -> Option<(&str, &str)> {
+        self.calls
+            .iter()
+            .find(|call| BATCH_TOOLS.contains(&call.name.as_str()) && !call.arguments.is_empty())
+            .map(|call| (call.name.as_str(), call.arguments.as_str()))
+    }
+
     /// The tool call currently being written, with its raw arguments so far.
     fn writing(&self) -> Option<(&str, &str)> {
         self.calls
@@ -672,6 +763,13 @@ impl AnthropicAccum {
         }
     }
 
+    fn writing_batch(&self) -> Option<(&str, &str)> {
+        self.partials
+            .values()
+            .find(|tool| BATCH_TOOLS.contains(&tool.name.as_str()) && !tool.arguments.is_empty())
+            .map(|tool| (tool.name.as_str(), tool.arguments.as_str()))
+    }
+
     fn writing(&self) -> Option<(&str, &str)> {
         self.partials
             .values()
@@ -723,6 +821,30 @@ fn content_text(content: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thousands_of_reasoning_chunks_become_a_handful_of_events() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut buffer = ThinkingBuffer::new();
+        let mut sent = String::new();
+        for index in 0..10_000 {
+            let chunk = format!("w{index} ");
+            sent.push_str(&chunk);
+            buffer.push(&tx, &chunk).unwrap();
+        }
+        buffer.flush(&tx).unwrap();
+        drop(tx);
+        let mut events = 0;
+        let mut received = String::new();
+        while let Ok(event) = rx.try_recv() {
+            if let ChatEvent::Thinking { text } = event {
+                events += 1;
+                received.push_str(&text);
+            }
+        }
+        assert_eq!(received, sent, "no reasoning text is lost");
+        assert!(events < 50, "10,000 chunks produced {events} events");
+    }
+
     use super::*;
 
     #[test]

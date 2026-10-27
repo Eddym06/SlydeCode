@@ -2,6 +2,8 @@
 // status. The server owns provider keys and the tool loop; this module never
 // sees a key and never renders provider-authored free text.
 
+import { recommendedModel } from "./onboarding-models.js";
+import { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } from "./copilot-work.js";
 import { lang, onLangChange, t } from "./i18n.js";
 import { createModelSheet } from "./copilot-model-sheet.js";
 import { providerIcon, providerTint } from "./provider-icons.js";
@@ -446,6 +448,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         </div>
         <div class="msg-thinking" hidden></div>
         <div class="msg-text"></div>
+        <div class="work-card" hidden></div>
         <div class="tool-list" hidden></div>
         <div class="msg-typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="msg-error" hidden></div>
@@ -474,7 +477,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         let drawer = thinkingEl.querySelector(".thinking-drawer");
         if (!drawer) {
           thinkingEl.innerHTML = `
-            <details class="thinking-drawer" ${isStreamingThinking ? "open" : ""}>
+            <details class="thinking-drawer">
               <summary class="thinking-header">
                 <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
                 <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
@@ -531,11 +534,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       if (!canRevert) actionsEl.innerHTML = "";
     }
 
-    const typing = message.el.querySelector(".msg-typing");
-    const running = message.tools.some((tool) => tool.status === "running");
-    const showTyping = message.state === "streaming" && (!message.text || running);
-    typing.hidden = !showTyping;
-    typing.classList.toggle("has-tools", running);
+    // The old three-dot indicator stays in the markup for compatibility but is
+    // never shown: the work card below says what is really happening.
+    message.el.querySelector(".msg-typing").hidden = true;
+    renderWorkCard(message);
 
     const list = message.el.querySelector(".tool-list");
     list.hidden = message.tools.length === 0;
@@ -580,7 +582,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         ? t("copilot.tool.generic")
         : t(`copilot.tool.${tool.name}`);
     const glyph =
-      tool.status === "running"
+      tool.status === "running" || tool.status === "writing"
         ? `<span class="tool-spinner" aria-hidden="true"></span>`
         : tool.status === "done"
           ? `<svg class="tool-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -590,12 +592,12 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
                stroke-width="2" stroke-linecap="round" aria-hidden="true">
                <path d="M12 7v6M12 17h.01"/></svg>`;
     let detail = "";
-    if (tool.status === "running" && tool.progress) {
+    if ((tool.status === "running" || tool.status === "writing") && tool.progress) {
       detail = tool.progress.items > 0
         ? t("copilot.progress.slides", { n: tool.progress.items })
         : t("copilot.progress.chars", { n: formatTokens(tool.progress.chars) });
     }
-    return `<div class="tool-row" data-status="${escapeHtml(tool.status)}">
+    return `<div class="tool-row" data-status="${escapeHtml(tool.status === "writing" ? "running" : tool.status)}">
       ${glyph}<span>${escapeHtml(label)}</span>${
         detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ""
       }</div>`;
@@ -733,6 +735,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       client.copilotCancel(requestId).catch(() => {});
     }
     if (controller) controller.abort();
+    document.dispatchEvent(new CustomEvent("slyde:draft-end"));
   }
 
   function send() {
@@ -795,6 +798,11 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (!assistant || assistant.role !== "assistant") return;
     const runEpoch = ++epoch;
     controller = new AbortController();
+    assistant.startedAt = Date.now();
+    assistant.writtenSlides = 0;
+    const lastUser = [...messages].reverse().find((message) => message.role === "user");
+    assistant.expected = expectedSlides(lastUser && lastUser.text);
+    startWorkClock();
     setComposerBusy(true);
     syncAssistant(assistant, true);
 
@@ -847,6 +855,8 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     } finally {
       if (runEpoch === epoch) {
         controller = null;
+        stopWorkClock();
+        publishPending(0);
         setComposerBusy(false);
         syncAssistant(assistant);
         persistThread();
@@ -864,6 +874,120 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       input: formatTokens(usage.input),
       output: formatTokens(usage.output),
     });
+  }
+
+  // ---------- the work card ----------
+
+  let workClock = null;
+  let lastPending = 0;
+
+  function startWorkClock() {
+    stopWorkClock();
+    workClock = window.setInterval(() => {
+      const current = messages[messages.length - 1];
+      if (current && current.role === "assistant" && current.state === "streaming") {
+        renderWorkCard(current, { tickOnly: true });
+      }
+    }, 1000);
+  }
+
+  function stopWorkClock() {
+    if (workClock) window.clearInterval(workClock);
+    workClock = null;
+  }
+
+  /** Tells the storyboard how many slides are still to come, for its placeholders. */
+  function publishPending(count) {
+    if (count === lastPending) return;
+    lastPending = count;
+    document.dispatchEvent(new CustomEvent("slyde:pending", { detail: { count } }));
+  }
+
+  function renderWorkCard(message, { tickOnly = false } = {}) {
+    const card = message.el && message.el.querySelector(".work-card");
+    if (!card) return;
+    const info = workPhase(message);
+    const active = message.state === "streaming" && info.phase !== "replying";
+    card.hidden = !active;
+    if (!active) {
+      if (message.state !== "streaming") publishPending(0);
+      return;
+    }
+    if (!card.firstElementChild) {
+      card.innerHTML = `
+        <div class="work-head">
+          <span class="work-orb" aria-hidden="true">${sparkSvg()}</span>
+          <span class="work-title"></span>
+          <span class="work-time" aria-hidden="true"></span>
+        </div>
+        <div class="work-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"></div>
+        <p class="work-line"></p>
+        <p class="work-hint" hidden></p>`;
+      card.querySelector(".work-track").setAttribute("aria-label", t("copilot.work.label"));
+    }
+    const elapsed = Date.now() - (message.startedAt || Date.now());
+    card.dataset.phase = info.phase;
+    card.querySelector(".work-time").textContent = formatElapsed(elapsed);
+    const hint = card.querySelector(".work-hint");
+    const slow = elapsed > 25000 && (info.phase === "waiting" || info.phase === "thinking");
+    if (hint.hidden === slow) {
+      hint.hidden = !slow;
+      if (slow) hint.textContent = t("copilot.work.hint");
+    }
+    if (tickOnly) return;
+
+    const written = message.writtenSlides || 0;
+    const title = card.querySelector(".work-title");
+    const titleText = t(`copilot.work.${info.phase}`, { n: info.slide || 1 });
+    if (title.textContent !== titleText) {
+      title.textContent = titleText;
+      title.classList.remove("is-swapping");
+      void title.offsetWidth;
+      title.classList.add("is-swapping");
+    }
+
+    const line = card.querySelector(".work-line");
+    let lineText = "";
+    if (info.phase === "thinking") lineText = lastThought(message.thinking) || t("copilot.work.words", { n: info.words });
+    else if (info.phase === "writing") lineText = t("copilot.work.chars", { n: formatTokens(info.chars) });
+    else if (info.phase === "applying") lineText = t("copilot.work.applyingLine");
+    else lineText = t("copilot.work.waitingLine");
+    if (line.textContent !== lineText) {
+      line.textContent = lineText;
+      line.classList.remove("is-swapping");
+      void line.offsetWidth;
+      line.classList.add("is-swapping");
+    }
+
+    const model = trackModel({ expected: message.expected, written, current: info.phase === "writing" });
+    const track = card.querySelector(".work-track");
+    const trackKey = `${model.segments}:${model.done}:${model.current}:${info.phase}`;
+    if (track.dataset.key !== trackKey) {
+      track.dataset.key = trackKey;
+      if (model.segments) {
+        track.innerHTML = Array.from({ length: model.segments }, (_, index) => {
+          const state = index < model.done ? "done" : index === model.done && model.current ? "current" : "todo";
+          return `<span class="work-seg" data-state="${state}"></span>`;
+        }).join("");
+        track.dataset.mode = "segments";
+        track.setAttribute("aria-valuenow", String(Math.round((model.done / model.segments) * 100)));
+        track.setAttribute(
+          "aria-valuetext",
+          t("copilot.work.slidesDone", { done: written, total: message.expected })
+        );
+      } else {
+        track.innerHTML = `<span class="work-bar"></span>`;
+        track.dataset.mode = "bar";
+        track.removeAttribute("aria-valuenow");
+        track.setAttribute("aria-valuetext", titleText);
+      }
+    }
+
+    // Placeholders in the storyboard for the slides still to come.
+    let pending = 0;
+    if (message.expected) pending = Math.max(0, Math.min(6, message.expected - written));
+    else if (info.phase === "writing") pending = 1;
+    publishPending(pending);
   }
 
   function formatTokens(n) {
@@ -887,13 +1011,22 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       const name = typeof event.name === "string" ? event.name : "";
       if (!name) return;
       if (event.status === "running") {
-        assistant.tools.push({ name, status: "running" });
+        // A call that was being written becomes the running one: same row.
+        const writing = [...assistant.tools].reverse().find((tool) => tool.name === name && tool.status === "writing");
+        if (writing) writing.status = "running";
+        else assistant.tools.push({ name, status: "running" });
         announce(toolLabel(name));
       } else {
         const index = assistant.tools
           .map((tool) => tool.name)
           .lastIndexOf(name);
-        if (index >= 0) assistant.tools[index].status = event.status;
+        if (index >= 0) {
+          assistant.tools[index].status = event.status;
+          const items = assistant.tools[index].progress && assistant.tools[index].progress.items;
+          if (items && event.status === "done") {
+            assistant.writtenSlides = Math.max(assistant.writtenSlides || 0, items);
+          }
+        }
         else assistant.tools.push({ name, status: event.status });
       }
       syncAssistant(assistant);
@@ -909,24 +1042,34 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       return;
     }
     if (event.type === "progress") {
-      const running = [...assistant.tools].reverse().find((tool) => tool.name === event.name);
-      if (running && running.status === "running") {
-        running.progress = { chars: event.chars, items: event.items };
-        syncAssistant(assistant);
+      // The call is still being written: it already has a row, with a live count.
+      let row = [...assistant.tools].reverse().find((tool) => tool.name === event.name && tool.status === "writing");
+      if (!row) {
+        row = { name: event.name, status: "writing" };
+        assistant.tools.push(row);
       }
+      row.progress = { chars: event.chars, items: event.items };
+      if (event.draft) {
+        document.dispatchEvent(new CustomEvent("slyde:draft", { detail: { html: event.draft } }));
+      }
+      assistant.writtenSlides = Math.max(assistant.writtenSlides || 0, Math.max(0, event.items - 1));
+      syncAssistant(assistant);
       return;
     }
     if (event.type === "reversible") {
       assistant.reversible = true;
+      document.dispatchEvent(new CustomEvent("slyde:versions-changed"));
       return;
     }
     if (event.type === "done") {
+      document.dispatchEvent(new CustomEvent("slyde:draft-end"));
       assistant.state = "done";
       syncAssistant(assistant);
       announce(t("copilot.announceDone"));
       return;
     }
     if (event.type === "error") {
+      document.dispatchEvent(new CustomEvent("slyde:draft-end"));
       assistant.state = "error";
       assistant.errorCode = event.code || "generic";
       assistant.errorMessage = event.message || "";
@@ -1254,6 +1397,42 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     isStreaming() {
       return streaming;
     },
+    /** True when a provider with a saved key and a chosen model is ready. */
+    isConnected() {
+      const provider = activeProvider();
+      return Boolean(provider && provider.configured && modelId);
+    },
+    /**
+     * One-step setup for the welcome wizard: saves the key, picks a model that
+     * writes slides well and makes it the active selection.
+     */
+    async connect(provider, key) {
+      const models = await client.copilotSaveKey(provider, key);
+      const model = recommendedModel(provider, models);
+      if (!model) {
+        const error = new Error("no_model");
+        error.code = "no_model";
+        throw error;
+      }
+      if (config && config.providers) {
+        config = {
+          ...config,
+          providers: config.providers.map((item) =>
+            item.id === provider ? { ...item, configured: true } : item
+          ),
+        };
+      }
+      providerId = provider;
+      modelId = model;
+      persistSelection();
+      syncHeader();
+      return { model };
+    },
+    /** Provider list for the wizard (loads the configuration when needed). */
+    async providers() {
+      if (!config) await loadConfig();
+      return config && config.providers ? config.providers : [];
+    },
   };
 }
 
@@ -1289,7 +1468,8 @@ function escapeHtml(value) {
 }
 
 function sparkSvg() {
-  return `<svg class="spark" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true"><path class="spark-main" d="M10.2 3c.7 4.7 2.5 6.5 7.2 7.2-4.7.7-6.5 2.5-7.2 7.2-.7-4.7-2.5-6.5-7.2-7.2C7.7 9.5 9.5 7.7 10.2 3Z"/><path class="spark-small" d="M18.6 13.6c.3 2 .9 2.6 2.9 2.9-2 .3-2.6.9-2.9 2.9-.3-2-.9-2.6-2.9-2.9 2-.3 2.6-.9 2.9-2.9Z"/><circle class="spark-dot" cx="19.4" cy="4.6" r="1.1" stroke="none"/></svg>`;
+  // The copilot mark: a slide with a prompt, a blinking cursor and a spark.
+  return `<svg class="spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="spark-main" d="M14.2 5.2H7A3 3 0 0 0 4 8.2v8a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V11"/><path class="spark-chev" d="M9.4 10.2 12.6 13.2 9.4 16.2"/><path class="spark-dot" d="M14.6 16.4h2.6"/><path class="spark-small" fill="currentColor" stroke-width="1" d="M18.3 1.9c.3 2.1 1 2.9 3.1 3.2-2.1.3-2.8 1.1-3.1 3.2-.3-2.1-1-2.9-3.1-3.2 2.1-.3 2.8-1.1 3.1-3.2Z"/></svg>`;
 }
 
 function userSvg() {

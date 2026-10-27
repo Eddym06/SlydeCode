@@ -6,15 +6,21 @@ import {
   tickActivity,
 } from "./agent-activity.js";
 import { mountCopilot } from "./copilot.js";
+import { mountLiveDraft } from "./live-draft.js";
+import { hasBeenWelcomed, isPristineDeck, mountWelcome } from "./welcome.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { mountMenus } from "./menus.js";
+import { createTransitioner, transitionOf } from "./transitions.js";
+import { createVersionsCard } from "./versions-card.js";
 import { mountShortcuts } from "./shortcuts.js";
-import { layoutPreview } from "./layout-previews.js";
+import { THEME_COLORS, layoutPreview } from "./layout-previews.js";
 import { createStoryboard } from "./storyboard.js";
-import { createCanvas } from "./canvas.js";
+import { canvasSize, createCanvas } from "./canvas.js";
+import { extractContent, renderLayout } from "./layouts.js";
+import { mountElementsLibrary } from "./elements-library.js";
 import { apply as applyI18n, lang, onLangChange, setLang, t } from "./i18n.js";
 import { formatClock, paceState, readingSeconds } from "./teleprompter.js";
 
@@ -41,6 +47,7 @@ function boot(sessionToken) {
   const client = createClient(sessionToken);
 
   let view = null;
+  let welcome = null;
   let sandboxOrigin = "";
   // Authorizes slide documents only. It is embedded in every iframe URL, so a
   // slide's own script can read it; the session token stays out of that document.
@@ -186,6 +193,12 @@ function boot(sessionToken) {
         label: t("action.library"),
         hint: "L",
         run: () => openLibrary(),
+      },
+      {
+        id: "deck.welcome",
+        group: t("palette.group.deck"),
+        label: t("welcome.menu"),
+        run: () => welcome?.open(),
       },
       {
         id: "deck.new",
@@ -408,6 +421,18 @@ function boot(sessionToken) {
     setDrawer(false);
   });
 
+  mountElementsLibrary({
+    trigger: $("insert-elements"),
+    t,
+    applyI18n,
+    insert: (item, place) => {
+      const slideId = selectedId;
+      if (!slideId) return;
+      const rect = place(item, canvasSize(deck() ? deck().aspect_ratio : "16:9"));
+      run("insert_block", { slide_id: slideId, html: item.html, ...rect });
+      toast(t("elements.added"));
+    },
+  });
   const shortcuts = mountShortcuts({ t, applyI18n });
   mountMenus();
   $("view-shortcuts").addEventListener("click", () => shortcuts.open());
@@ -684,6 +709,7 @@ function boot(sessionToken) {
 
     if (document.activeElement !== els.title) {
       els.title.value = d.title;
+      els.title.title = d.title;
       els.title.placeholder = t("deck.untitled");
     }
 
@@ -760,6 +786,15 @@ function boot(sessionToken) {
   }
 
   /// The storyboard is its own module; the shell only hands it the slides.
+  const versionsCard = createVersionsCard({
+    client,
+    t,
+    escapeHtml,
+    notify: toast,
+    lang,
+    applyI18n,
+  });
+
   const storyboard = createStoryboard({
     root: els.storyboard,
     bulkBar: $("bulk-bar"),
@@ -776,6 +811,10 @@ function boot(sessionToken) {
         applyView(view);
       },
     },
+  });
+
+  document.addEventListener("slyde:pending", (event) => {
+    storyboard.setPending(event.detail && event.detail.count);
   });
 
   function renderStoryboard(d) {
@@ -845,6 +884,7 @@ function boot(sessionToken) {
       notify: toast,
       currentSlideId: () => selectedId,
       aspectRatio: () => (deck() ? deck().aspect_ratio : "16:9"),
+      themeColors: () => (deck() && THEME_COLORS[deck().theme.id]) || THEME_COLORS.studio,
       openPaletteForElement: (element) => openPalette({ element }),
       onSelectedElement: () => {
         if (view) updateCopilotContext(view.presentation);
@@ -897,6 +937,20 @@ function boot(sessionToken) {
     escapeHtml,
     actions: {
       command: run,
+      mountVersions: (host) => versionsCard.mount(host),
+      applyLayout: (layout, everySlide, slideId) => {
+        const d = deck();
+        if (!d) return;
+        const size = canvasSize(d.aspect_ratio);
+        const template = { hero: "hero", bullet: "bullet", image_layout: "image_layout" }[layout] || "custom";
+        const targets = everySlide ? d.slides : d.slides.filter((slide) => slide.id === slideId);
+        const items = targets.map((slide) => ({
+          slide_id: slide.id,
+          code: renderLayout(layout, extractContent(slide.code), size),
+          template,
+        }));
+        if (items.length) run("set_slides_code", { items });
+      },
       selectElement: selectElementById,
       pickImage: (file) => canvas.insertFile(file),
       saveDeck: () => {
@@ -1495,17 +1549,37 @@ function boot(sessionToken) {
 
     const key = `${s.id}:${s.code.length}:${s.animation.length}`;
     if (key !== presentSlideKey) {
+      const movedSlides = presentSlideKey !== "" && presentSlideKey.split(":")[0] !== s.id;
+      const direction = presentIndex < presentPrevIndex ? -1 : 1;
       presentSlideKey = key;
+      presentPrevIndex = presentIndex;
       presentReveal.reload();
       presentSlideStartSeconds = presentTimerSeconds;
       if (presentEls.frame) {
-        presentEls.frame.src = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
+        const target = `${sandboxOrigin}/s/${encodeURIComponent(s.id)}?p=${presentIndex}${sourceQuery}`;
+        const swap = () => {
+          presentEls.frame.src = target;
+        };
+        // A transition only plays when the audience moves to another slide, not
+        // when the same slide is rebuilt after an edit.
+        if (movedSlides) presentTransitioner().go(swap, transitionOf(s), direction);
+        else swap();
       }
     }
 
     fitPresentFrame();
     renderPresentSpeakerConsole();
     showPresentHud();
+  }
+
+  let presentPrevIndex = 0;
+  let transitioner = null;
+  function presentTransitioner() {
+    if (!transitioner || transitioner.frame !== presentEls.frame) {
+      transitioner = createTransitioner(presentEls.frame);
+      transitioner.frame = presentEls.frame;
+    }
+    return transitioner;
   }
 
   function postPresentStep(step) {
@@ -1994,6 +2068,19 @@ function boot(sessionToken) {
         notify: toast,
         getDeckId: () => activeDeckId,
       });
+      document.getElementById("topbar-welcome")?.addEventListener("click", () => welcome?.open());
+      mountLiveDraft({
+        host: els.frameWrap,
+        t,
+        getTheme: () => (deck() ? deck().theme.id : "studio"),
+        getSize: () => canvasSize(deck() ? deck().aspect_ratio : "16:9"),
+      });
+      welcome = mountWelcome({
+        copilot,
+        getSize: () => canvasSize("16:9"),
+        applyTemplate: (template) => run("apply_template", template),
+      });
+      if (!hasBeenWelcomed() && isPristineDeck(deck())) welcome.open();
       client.connect({ onEvent: handleEvent, onStatus: setStatus });
     } catch (error) {
       showFatal(error.message);

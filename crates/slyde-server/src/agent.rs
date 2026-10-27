@@ -175,10 +175,12 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
             template,
             animation,
         } => {
-            let template = template
-                .as_deref()
-                .map(crate::starter::template_type)
-                .unwrap_or_default();
+            // No template given: read the layout from the markup instead of
+            // calling every unlabeled slide "code".
+            let template = match template.as_deref() {
+                Some(name) => crate::starter::template_type(name),
+                None => slyde_core::TemplateType::infer(&html_code),
+            };
             let outcome = core.upsert_slide(
                 index,
                 slide_id,

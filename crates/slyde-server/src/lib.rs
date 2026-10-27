@@ -25,6 +25,8 @@ pub mod sandbox;
 pub mod starter;
 pub mod state;
 pub mod storage;
+pub mod version_api;
+pub mod versions;
 pub mod ws;
 
 use std::path::PathBuf;

@@ -24,6 +24,8 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions, bulkBar, 
   const multi = new Set();
   let anchorId = null;
   let knownIds = new Set();
+  let pending = 0;
+  let lastRatio = [16, 9];
   let view = "list";
   try {
     view = localStorage.getItem("slyde.storyboardView") === "grid" ? "grid" : "list";
@@ -71,6 +73,27 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions, bulkBar, 
     multi.clear();
     anchorId = null;
     syncSelection();
+  }
+
+  /// Shimmering placeholders for slides the copilot has not finished yet. They sit
+  /// after the real thumbnails, are never focusable and disappear as slides land.
+  function paintPending() {
+    root.querySelectorAll(".thumb-skeleton").forEach((node) => node.remove());
+    if (!pending || !slides.length) return;
+    for (let index = 0; index < pending; index += 1) {
+      const card = document.createElement("div");
+      card.className = "thumb-skeleton";
+      card.setAttribute("aria-hidden", "true");
+      card.style.setProperty("--i", String(index));
+      card.innerHTML = `<span class="thumb-skeleton-media" style="aspect-ratio:${lastRatio[0]}/${lastRatio[1]}"></span>
+        <span class="thumb-skeleton-foot"><span></span><span></span></span>`;
+      root.append(card);
+    }
+  }
+
+  function setPending(count) {
+    pending = Math.max(0, Math.min(8, Number(count) || 0));
+    paintPending();
   }
 
   function applyView() {
@@ -220,6 +243,7 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions, bulkBar, 
     const ratio = String(aspectRatio || "16:9")
       .split(":")
       .map(Number);
+    lastRatio = ratio;
 
     root.innerHTML = "";
     if (!slides.length) {
@@ -307,11 +331,13 @@ export function createStoryboard({ root, t, escapeHtml, hash, actions, bulkBar, 
     });
     actions.applyI18n(root);
     syncSelection();
+    paintPending();
     if (hadFocus) focusSelected();
   }
 
   return {
     render,
+    setPending,
     invalidate,
     focusSelected,
     syncSelection,

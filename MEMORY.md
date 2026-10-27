@@ -278,3 +278,43 @@ MIT and the license is compatible with a commercial product.
 - Copilot undo is snapshot based (not history based) because coalescing and
   history trimming make "N undos" unreliable; it is only valid while the deck
   revision equals the one the turn ended on.
+
+## Copilot latency and layouts (2026-10-27)
+- Slides are applied during streaming: an incremental scanner reads finished
+  objects out of the `slides` array of a streaming `build_deck`/`write_slides`
+  call; the final call skips what was applied (`Applied` prefix). It only works
+  if the model writes `title`, `theme`, `aspect_ratio` before `slides`, so the
+  prompt says so. serde_json sorts keys: never build mock tool arguments with
+  `json!` when testing this.
+- A layout stores the slide's full content in `data-layout-content` plus a
+  signature of the visible text. Unchanged text restores everything on the next
+  switch; edited text wins and the hidden fields are filled from memory.
+- Templates: `Custom` is the default; `TemplateType::infer` guesses from markup.
+  Transitions live on `Slide.transition` (additive, skipped when absent).
+- Network gotcha: this cloud environment blocks `api.deepseek.com` (proxy 403).
+  Provider keys are never written to the repo or to test fixtures.
+
+## First run and live draft (2026-10-27)
+
+- The live draft is a *sketch*, not the slide: it renders model markup in
+  `<iframe sandbox="">` with a `default-src 'none'` CSP, so a half-written
+  `<script>` or remote URL cannot run or load. The real slide still goes through
+  the sandbox origin. Do not "upgrade" it to `allow-scripts` for fidelity.
+- `draft_html` cuts a trailing half-written tag (`<div cla`); without that the
+  preview flashes raw tag text on every chunk.
+- Templates carry `00%` placeholders on purpose; a template that ships plausible
+  fake metrics gets presented as real.
+- Tests that open the studio must not see the wizard: `cdp.newPage` pre-sets
+  `slyde.welcomed`. A new E2E suite that fails everywhere at once is usually
+  this overlay or a missing `SLYDE_BROWSER` in that shell.
+
+## Brand mark (2026-10-27)
+
+- The product logo is the stacked-slides mark with `</>` in the violet-to-coral
+  gradient: `assets/brand/slydecode-mark.svg` (app icon, favicon, README). The
+  user likes it; do not replace it. PNG/ICO are rendered from the SVG with a
+  Chromium screenshot. README uses a light/dark `<picture>` pair because the
+  wordmark is transparent.
+- Only the copilot glyph (`sparkSvg()` in `copilot.js` and the static copies in
+  `ui/index.html`) uses the separate "slide + prompt + spark" drawing; keep those
+  copies in sync.

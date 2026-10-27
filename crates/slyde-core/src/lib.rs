@@ -13,10 +13,10 @@ pub use error::CoreError;
 pub use html::ensure_element_ids;
 pub use model::{
     ANIMATION_KIND_IDS, AnimationKind, AnimationStep, AspectRatio, Author, ImageRect, Presentation,
-    Slide, SlideId, StateView, THEME_IDS, TemplateType, Theme,
+    Slide, SlideId, StateView, THEME_IDS, TemplateType, Theme, Transition, TransitionKind,
 };
 pub use project::{FILE_EXTENSION, FORMAT_ID, FORMAT_VERSION, ProjectFile};
 pub use state::{
     DEFAULT_COALESCE_WINDOW_MS, DEFAULT_MAX_CODE_BYTES, DEFAULT_MAX_HISTORY, DEFAULT_MAX_SLIDES,
-    HistoryEntry, Limits, PresentationState, UpsertOutcome, new_slide_id,
+    HistoryEntry, Limits, PresentationState, TemplateSlide, UpsertOutcome, new_slide_id,
 };

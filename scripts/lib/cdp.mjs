@@ -160,15 +160,26 @@ export async function launchChrome({
 
   return {
     origin,
-    async newPage(url) {
+    /**
+     * Opens `url` in a new tab. Unless `welcomed: false` is passed the
+     * first-run wizard is marked as seen beforehand, so it never covers the
+     * studio in tests that are not about onboarding.
+     */
+    async newPage(url, { welcomed = true } = {}) {
       const target = await fetch(
-        `${origin}/json/new?${encodeURIComponent(url)}`,
+        `${origin}/json/new?${encodeURIComponent("about:blank")}`,
         { method: "PUT" }
       ).then((response) => response.json());
       const cdp = connectCdp(target.webSocketDebuggerUrl);
       await cdp.ready;
       await cdp.send("Runtime.enable");
       await cdp.send("Page.enable");
+      if (welcomed) {
+        await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+          source: `try { localStorage.setItem("slyde.welcomed", "1"); } catch {}`,
+        });
+      }
+      await cdp.send("Page.navigate", { url });
 
       if (viewport && viewport.width > 0) {
         await cdp.send("Emulation.setDeviceMetricsOverride", {

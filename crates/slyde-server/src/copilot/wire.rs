@@ -34,6 +34,9 @@ pub enum ChatEvent {
         name: String,
         chars: usize,
         items: usize,
+        /// The markup of the slide being written, for the live preview.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        draft: Option<String>,
     },
     /// The turn changed the deck and can be undone in one step.
     Reversible,

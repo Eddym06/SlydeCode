@@ -156,7 +156,9 @@ Rules:
 2. Be economical: every tool round re-sends the whole conversation. For a new presentation make
    ONE `build_deck` call containing every slide. To change or add several slides, make ONE
    `write_slides` call. Use `upsert_slide` or `mutate_element` only for a single change. Put
-   speaker notes inside each slide item instead of calling `set_notes` afterwards. The deck
+   speaker notes inside each slide item instead of calling `set_notes` afterwards. In `build_deck`
+   write `title`, `theme` and `aspect_ratio` before `slides` and finish each slide object before
+   starting the next: slides appear in the studio as soon as they are complete. The deck
    context below already lists every slide id and the selected slide source, so do not call
    `read_deck`, `read_slide` or `get_selected_element` unless you need source that is not shown.
 3. For edits of full slides, keep the existing deck. Use the exact `slide_id` from the context. Inserting

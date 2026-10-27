@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" alt="SlydeCode Logo" width="320">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/slydecode-logo-dark.png">
+    <img src="assets/brand/slydecode-logo.png" alt="SlydeCode" width="520">
+  </picture>
 </p>
 
 <p align="center">

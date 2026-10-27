@@ -324,3 +324,175 @@ test("every theme has colors for the layout previews and every layout has a shap
   }
   assert.ok(layoutPreview("hero", "no-such-theme").includes(THEME_COLORS.studio.bg), "unknown theme falls back");
 });
+
+test("the element list speaks plain language and hides tags and handles", async () => {
+  const { describeStructure, labelFor } = await import("../../ui/static/element-labels.js");
+  const nodes = [
+    { id: "a", tag: "DIV", text: "wrapper text" },
+    { id: "b", tag: "H1", text: "Welcome" },
+    { id: "c", tag: "UL", text: "" },
+    { id: "d", tag: "LI", text: "one" },
+    { id: "e", tag: "LI", text: "two" },
+    { id: "f", tag: "LI", text: "three" },
+    { id: "g", tag: "P", text: "Closing line" },
+    { id: "h", tag: "STYLE", text: ".x{}" },
+    { id: "i", tag: "BR", text: "" },
+  ];
+  const entries = describeStructure(nodes);
+  const t = (key, vars = {}) => `${key}${vars.n === undefined ? "" : `:${vars.n}`}`;
+  assert.deepEqual(
+    entries.map((entry) => labelFor(entry, t)),
+    ["element.text", "element.title", "element.list:3", "element.paragraph"]
+  );
+  assert.ok(entries.every((entry) => !/^(li|br|style)$/i.test(entry.tag)));
+});
+
+test("the work card reports real phases, never invented progress", async () => {
+  const { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } = await import(
+    "../../ui/static/copilot-work.js"
+  );
+  assert.equal(expectedSlides("Make a 6 slide pitch"), 6);
+  assert.equal(expectedSlides("hazme 8 diapositivas sobre clima"), 8);
+  assert.equal(expectedSlides("make it better"), null);
+  assert.equal(expectedSlides("500 slides"), null, "absurd counts are ignored");
+  assert.equal(formatElapsed(83_000), "1:23");
+  assert.equal(formatElapsed(-5), "0:00");
+
+  assert.equal(workPhase({ text: "", thinking: "", tools: [] }).phase, "waiting");
+  assert.equal(workPhase({ text: "", thinking: "Let me plan the deck", tools: [] }).phase, "thinking");
+  const writing = workPhase({
+    text: "",
+    thinking: "x",
+    tools: [{ name: "build_deck", status: "writing", progress: { items: 3, chars: 4200 } }],
+  });
+  assert.deepEqual([writing.phase, writing.slide], ["writing", 3]);
+  assert.equal(workPhase({ text: "", tools: [{ name: "build_deck", status: "running" }] }).phase, "applying");
+  assert.equal(workPhase({ text: "Done!", tools: [] }).phase, "replying");
+
+  assert.equal(
+    lastThought("First I will outline the story. Then I pick a palette that feels calm and confident for the audience."),
+    "Then I pick a palette that feels calm and confident for the audience."
+  );
+  assert.ok(lastThought("a ".repeat(200) + "word").length <= 93);
+
+  assert.deepEqual(trackModel({ expected: null, written: 2, current: true }), { segments: 0, done: 2, current: false });
+  assert.deepEqual(trackModel({ expected: 6, written: 2, current: true }), { segments: 6, done: 2, current: true });
+  assert.equal(trackModel({ expected: 6, written: 6, current: true }).current, false);
+});
+
+test("transitions have keyframes for every kind, mirror by direction and cut cleanly", async () => {
+  const { keyframesFor, transitionOf, TRANSITION_KINDS } = await import("../../ui/static/transitions.js");
+  assert.equal(keyframesFor("none"), null);
+  assert.equal(keyframesFor("unknown"), null);
+  for (const kind of TRANSITION_KINDS.filter((kind) => kind !== "none")) {
+    const frames = keyframesFor(kind, 1);
+    assert.ok(frames.leave.length === 2 && frames.enter.length === 2, `${kind} has two halves`);
+  }
+  const forward = keyframesFor("push", 1);
+  const back = keyframesFor("push", -1);
+  assert.equal(forward.enter[0].transform, "translateX(100%)");
+  assert.equal(back.enter[0].transform, "translateX(-100%)", "going back mirrors the motion");
+
+  assert.equal(transitionOf({}), null);
+  assert.equal(transitionOf({ transition: { kind: "none", duration_ms: 400 } }), null);
+  assert.deepEqual(transitionOf({ transition: { kind: "fade", duration_ms: 50 } }), { kind: "fade", duration: 120 });
+  assert.equal(transitionOf({ transition: { kind: "zoom", duration_ms: 99999 } }).duration, 2000);
+  assert.equal(transitionOf({ transition: { kind: "spin", duration_ms: 400 } }), null);
+});
+
+test("the elements catalog is safe, unique and fits the canvas", async () => {
+  const { CATALOG, CATEGORIES, centeredPlacement } = await import("../../ui/static/elements-catalog.js");
+  const keys = CATALOG.map((item) => `${item.category}/${item.id}`);
+  assert.equal(new Set(keys).size, keys.length, "no duplicate ids per category");
+  for (const category of CATEGORIES) {
+    assert.ok(CATALOG.some((item) => item.category === category), `${category} has items`);
+  }
+  for (const item of CATALOG) {
+    assert.ok(!/<script|javascript:|\son\w+\s*=/i.test(item.html), `${item.category}/${item.id} is plain markup`);
+    assert.ok(item.w > 0 && item.h > 0);
+  }
+  const big = CATALOG.find((item) => item.id === "4x4");
+  const place = centeredPlacement(big, { w: 1280, h: 720 });
+  assert.ok(place.x >= 0 && place.y >= 0 && place.x + place.w <= 1280 && place.y + place.h <= 720);
+  const tiny = centeredPlacement({ w: 100, h: 50 }, { w: 1280, h: 720 });
+  assert.deepEqual([tiny.w, tiny.h], [100, 50], "small blocks keep their size");
+  assert.equal(tiny.x, 590);
+});
+
+test("align and distribute keep every block inside the canvas", async () => {
+  const { arrangeBoxes } = await import("../../ui/static/canvas.js");
+  const canvas = { w: 1280, h: 720 };
+  const boxes = [
+    { id: "a", x: 100, y: 50, w: 200, h: 100 },
+    { id: "b", x: 400, y: 300, w: 100, h: 60 },
+    { id: "c", x: 900, y: 500, w: 300, h: 120 },
+  ];
+  const at = (rows, id) => rows.find((row) => row.id === id);
+  const left = arrangeBoxes("arrange-left", boxes, canvas);
+  assert.deepEqual(left.map((row) => row.x), [100, 100, 100]);
+  const right = arrangeBoxes("arrange-right", boxes, canvas);
+  assert.deepEqual(right.map((row) => row.x + row.w), [1200, 1200, 1200]);
+  const center = arrangeBoxes("arrange-center", boxes, canvas);
+  assert.equal(at(center, "a").x + 100, 650, "centered on the middle of the union");
+  assert.deepEqual(arrangeBoxes("arrange-top", boxes, canvas).map((row) => row.y), [50, 50, 50]);
+
+  const spread = arrangeBoxes("distribute-h", boxes, canvas);
+  const gapAB = at(spread, "b").x - (at(spread, "a").x + at(spread, "a").w);
+  const gapBC = at(spread, "c").x - (at(spread, "b").x + at(spread, "b").w);
+  assert.ok(Math.abs(gapAB - gapBC) <= 1, `equal gaps: ${gapAB} vs ${gapBC}`);
+  assert.equal(at(spread, "a").x, 100);
+  assert.equal(at(spread, "c").x, 900, "the outer blocks stay put");
+
+  const outside = arrangeBoxes("arrange-right", [{ id: "x", x: 1200, y: 10, w: 200, h: 20 }, { id: "y", x: 0, y: 0, w: 50, h: 50 }], canvas);
+  assert.ok(outside.every((row) => row.x >= 0 && row.x + row.w <= 1280), "clamped to the canvas");
+  assert.equal(arrangeBoxes("spin", boxes, canvas), null);
+});
+
+test("the wizard picks a writing model and never an embedding or audio one", async () => {
+  const { recommendedModel } = await import("../../ui/static/onboarding-models.js");
+  const ids = (...list) => list.map((id) => ({ id }));
+  assert.equal(recommendedModel("deepseek", ids("deepseek-reasoner", "deepseek-chat")), "deepseek-chat");
+  assert.equal(
+    recommendedModel("openai", ids("text-embedding-3-large", "gpt-4o-mini", "gpt-4o", "whisper-1", "gpt-4.1")),
+    "gpt-4.1"
+  );
+  assert.equal(
+    recommendedModel("anthropic", ids("claude-3-5-haiku-latest", "claude-sonnet-4-20250514", "claude-sonnet-4-5")),
+    "claude-sonnet-4-5",
+    "the newest of the preferred family"
+  );
+  assert.equal(recommendedModel("gemini", ids("gemini-2.0-flash", "gemini-2.5-flash", "embedding-001")), "gemini-2.5-flash");
+  assert.equal(recommendedModel("openrouter", ids("a/b", "vendor/model:free")), "vendor/model:free");
+  assert.equal(recommendedModel("unknown", ids("tts-1", "some-model", "other")), "some-model");
+  assert.equal(recommendedModel("openai", []), "");
+  assert.equal(recommendedModel("openai", ids("whisper-1", "tts-1")), "", "nothing suitable means no pick");
+});
+
+test("every deck template renders in both languages without inventing data", async () => {
+  const { TEMPLATES, buildTemplate } = await import("../../ui/static/deck-templates.js");
+  const { THEME_COLORS } = await import("../../ui/static/layout-previews.js");
+  const { LAYOUTS } = await import("../../ui/static/layouts.js");
+  assert.ok(TEMPLATES.length >= 5);
+  for (const template of TEMPLATES) {
+    assert.ok(THEME_COLORS[template.theme], `${template.id} uses a known theme`);
+    for (const lang of ["en", "es"]) {
+      const built = buildTemplate(template, lang, { w: 1280, h: 720 });
+      assert.ok(built.slides.length >= 6, `${template.id} tells a story in ${built.slides.length} slides`);
+      for (const slide of built.slides) {
+        assert.ok(slide.code.includes("slide layout-"), "rendered through a layout");
+        assert.ok(slide.notes && slide.notes.length > 10, `${template.id} has speaker guidance`);
+        assert.ok(!/<script|javascript:|\son\w+=/i.test(slide.code));
+      }
+      assert.ok(built.title.length > 2);
+    }
+    for (const item of template.slides) {
+      assert.ok(LAYOUTS.includes(item.layout), `${template.id} uses a real layout`);
+      assert.ok(item.content.en.title && item.content.es.title, "both languages carry a title");
+    }
+  }
+  // Placeholders, never fake figures.
+  const numbers = TEMPLATES.flatMap((template) =>
+    template.slides.flatMap((item) => item.content.en.paragraphs.filter((text) => /^\d/.test(text)))
+  );
+  assert.ok(numbers.length > 0 && numbers.every((value) => /^0+%?$/.test(value)), `placeholders only: ${numbers}`);
+});

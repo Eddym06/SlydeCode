@@ -29,6 +29,9 @@ pub enum CoreError {
     #[error("invalid theme: {0}")]
     InvalidTheme(String),
 
+    #[error("invalid block: {0}")]
+    InvalidBlock(String),
+
     #[error("invalid aspect ratio: {0}")]
     InvalidAspectRatio(String),
 
