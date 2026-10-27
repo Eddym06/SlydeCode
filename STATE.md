@@ -41,6 +41,15 @@ Dropped from `feat` (superseded by an equivalent on `main`, or incompatible with
 
 `feat/product-completion` itself is untouched on origin.
 
+### Release binary check (2026-10-27)
+
+`cargo build --release` (GNU target) gives a 21 MB `slyde.exe`. It does **not** embed the UI: it
+reads `ui/` and `assets/` from beside the executable (`resolve_ui_dir`, `resolve_assets_dir`), so a
+distributable is the folder `slyde.exe` + `ui/` + `assets/` (built under `dist/`, git-ignored).
+Started from an unrelated working directory with an isolated `SLYDE_DATA_DIR`, it served 50 files
+(`/`, `/present`, 41 under `/static`, the fonts) byte-identical to the repo, and the full UI suite
+(90 tests) passed with `SLYDE_BIN` pointing at it. Embedding the UI in the binary is still open.
+
 Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
 All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
 
