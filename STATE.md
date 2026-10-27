@@ -52,6 +52,33 @@ edges and centres of the other blocks; holding Alt turns snapping off. A block c
 drags a handle with real mouse events and checks that the edge lands exactly on the stage centre
 and that the minimum size holds. Not done: aspect-ratio lock (Shift) and rotation.
 
+### The review loop: the model sees what it drew (2026-10-27)
+
+A model that writes slide code works blind. After any tool round that changed slide code, the changed
+slides are opened in one headless Chrome (the same CDP session code the exports use) and measured; the
+findings come back to the model **inside the tool result it reads next** (`review` field), so it fixes
+them in its next round.
+
+- **What is measured** (`slyde-export/src/audit.js`, in stage pixels, in the rendered slide): text off the
+  canvas (which side, by how many px), text cut off by its own box, text blocks on top of each other, type
+  under the readable floor (14 px, 12 px in code and diagrams; the message asks for 18 px), contrast against
+  the color behind it (skipped over gradients and pictures; 4.5:1, or 3:1 for large text), crowded slides
+  (over 120 words), empty slides, broken images, and text closer than 24 px to the edge. Worst first, at most
+  12 per slide and 6 shown.
+- **Budget:** two reviews per turn. The message tells the model to fix everything in one call, change only
+  what is listed and stop; a clean review says "do not call more tools".
+- **Never a gate:** a missing browser, a timeout (90 s) or a page that does not answer means no review and the
+  turn continues as before. An unreadable audit counts as a clean slide.
+- **Visible:** a "Checking the slides on screen" row and a "Checking the result" phase in the progress card.
+- **Switch:** `CopilotState::review_enabled`, on for the real app and off for `in_memory()` states, so tests
+  that script a provider never start a browser unless they enable it.
+- **Tests:** the audit against real Chrome (a clean slide, one with overflow, clipping, overlap, contrast and
+  tiny type, an empty one); the whole loop with a real studio server, real Chrome and a scripted provider
+  that writes an off-canvas headline (`the_model_is_told_what_its_slide_looks_like`).
+
+Not done: a screenshot for vision models, and a check of the review's real effect on deck quality with live
+models. The prompt rule and the tool result are the only changes to what the model is told.
+
 ### Provider rejections and the report (2026-10-27)
 
 Groq, NVIDIA and OpenRouter were refusing requests. Reproducing against the real services needs the

@@ -7,7 +7,7 @@
 // timer pretends progress that has not happened.
 
 /** Phases in the order a turn normally goes through them. */
-export const PHASES = ["waiting", "thinking", "writing", "applying", "replying"];
+export const PHASES = ["waiting", "thinking", "writing", "applying", "reviewing", "replying"];
 
 /**
  * How many slides the user asked for, when they said so ("6 slides", "8 diapositivas").
@@ -67,6 +67,8 @@ export function workPhase(message) {
   if (writing && writing.progress && writing.status === "writing") {
     return { phase: "writing", slide: Math.max(1, writing.progress.items), chars: writing.progress.chars };
   }
+  // The review opens the slides in a browser and measures them: a phase of its own.
+  if (running && running.name === "review_slides") return { phase: "reviewing" };
   if (running) return { phase: "applying", tool: running.name };
   if (message.thinking && message.thinking.trim()) {
     return { phase: "thinking", words: message.thinking.trim().split(/\s+/).length };

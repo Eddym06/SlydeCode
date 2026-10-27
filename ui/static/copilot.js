@@ -1037,6 +1037,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (info.phase === "thinking") lineText = recentThinking(message.thinking) || t("copilot.work.words", { n: info.words });
     else if (info.phase === "writing") lineText = t("copilot.work.chars", { n: formatTokens(info.chars) });
     else if (info.phase === "applying") lineText = t("copilot.work.applyingLine");
+    else if (info.phase === "reviewing") lineText = t("copilot.work.reviewingLine");
     else lineText = t("copilot.work.waitingLine");
     if (line.textContent !== lineText) {
       line.textContent = lineText;

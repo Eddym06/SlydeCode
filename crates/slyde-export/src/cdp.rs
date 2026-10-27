@@ -19,6 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::audit::{AUDIT_JS, SlideAudit};
 use crate::{CapturedSlide, ExportError, ExportProgress, SlideTarget, TextBlock, png_dimensions};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(25);
@@ -129,6 +130,67 @@ pub async fn export_slides_batch(
         let _ = session.close().await;
         let _ = child.kill().await;
         Ok::<_, ExportError>(written)
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&profile);
+    outcome
+}
+
+/// Opens every slide in one headless Chrome and measures its layout.
+///
+/// The result has one entry per target, in order. A slide that cannot be audited
+/// (a navigation that times out, a page that does not answer) yields a clean
+/// [`SlideAudit`] instead of failing the whole run: the audit is advice for a
+/// model, never a gate on the deck.
+pub async fn audit_slides(
+    chrome: &Path,
+    slides: &[SlideTarget],
+    aspect_ratio: slyde_core::AspectRatio,
+) -> Result<Vec<SlideAudit>, ExportError> {
+    if slides.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (width, height) = png_dimensions(aspect_ratio);
+    let profile = crate::export_profile_dir("audit");
+
+    let outcome = async {
+        let mut command = tokio::process::Command::new(chrome);
+        command
+            .arg("--headless=new")
+            .arg("--disable-gpu")
+            .arg("--hide-scrollbars")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--remote-debugging-port=0")
+            .arg(format!("--user-data-dir={}", profile.display()))
+            .arg("about:blank")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let mut child = command.spawn()?;
+        let port = wait_for_port(&profile).await?;
+        let ws_url = browser_ws_url(port).await?;
+        let mut session = Session::connect(&ws_url).await?;
+        // 1x on purpose: the audit reports stage pixels, so the viewport is the stage.
+        session
+            .prepare(&format!(
+                r#"{{"width":{width},"height":{height},"deviceScaleFactor":1,"mobile":false}}"#
+            ))
+            .await?;
+
+        let mut audits = Vec::with_capacity(slides.len());
+        for slide in slides {
+            let audit = tokio::time::timeout(SLIDE_TIMEOUT, session.audit(&slide.url))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_else(SlideAudit::unavailable);
+            audits.push(audit);
+        }
+        let _ = session.close().await;
+        let _ = child.kill().await;
+        Ok::<_, ExportError>(audits)
     }
     .await;
 
@@ -285,14 +347,14 @@ impl Session {
         Ok(())
     }
 
-    /// Navigates to `url` and captures the visible viewport as PNG bytes.
-    async fn capture(
+    /// Navigates to `url` and waits until the slide is ready: loaded, fonts in, and
+    /// the technical renderers (KaTeX, highlight.js, Mermaid) finished.
+    async fn open_ready(
         &mut self,
         url: &str,
         navigation_timeout: Duration,
         settle_timeout: Duration,
-        extract_text: bool,
-    ) -> Result<(Vec<u8>, Vec<TextBlock>), ExportError> {
+    ) -> Result<(), ExportError> {
         self.send("Page.navigate", json!({ "url": url }), Some(&()))
             .await?;
 
@@ -321,6 +383,27 @@ impl Session {
             settle_timeout.as_millis()
         );
         self.wait_for_js(&ready, settle_timeout + Duration::from_secs(2))
+            .await?;
+        Ok(())
+    }
+
+    /// Opens a slide and runs the layout audit in it.
+    async fn audit(&mut self, url: &str) -> Result<SlideAudit, ExportError> {
+        self.open_ready(url, NAVIGATION_TIMEOUT, SETTLE_TIMEOUT)
+            .await?;
+        let raw = self.eval_string(AUDIT_JS).await?;
+        Ok(SlideAudit::parse(&raw))
+    }
+
+    /// Navigates to `url` and captures the visible viewport as PNG bytes.
+    async fn capture(
+        &mut self,
+        url: &str,
+        navigation_timeout: Duration,
+        settle_timeout: Duration,
+        extract_text: bool,
+    ) -> Result<(Vec<u8>, Vec<TextBlock>), ExportError> {
+        self.open_ready(url, navigation_timeout, settle_timeout)
             .await?;
 
         // Reading the text (and hiding it) must happen after the slide settled and

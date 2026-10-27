@@ -567,3 +567,19 @@ test("the reasoning viewport shows the tail of the thought on whole words", asyn
   assert.ok(tail.length <= 125);
   assert.match(tail.slice(1), /^word\d+/, "never starts mid-word");
 });
+
+test("the review is a phase of its own while the slides are being measured", async () => {
+  const { PHASES, workPhase } = await import("../../ui/static/copilot-work.js");
+  assert.ok(PHASES.includes("reviewing"));
+  assert.deepEqual(workPhase({ text: "", tools: [{ name: "review_slides", status: "running" }] }), {
+    phase: "reviewing",
+  });
+  assert.deepEqual(workPhase({ text: "", tools: [{ name: "upsert_slide", status: "running" }] }), {
+    phase: "applying",
+    tool: "upsert_slide",
+  });
+  // Once the reply starts, the review is over.
+  assert.deepEqual(workPhase({ text: "Done.", tools: [{ name: "review_slides", status: "done" }] }), {
+    phase: "replying",
+  });
+});

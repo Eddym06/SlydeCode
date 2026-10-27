@@ -12,6 +12,7 @@ pub mod error;
 pub mod models;
 pub mod partial;
 pub mod prompt;
+pub mod review;
 pub mod routes;
 pub mod tools;
 pub mod transport;
@@ -127,6 +128,10 @@ pub struct CopilotState {
     /// be reverted in one step. It is only valid while the deck is still exactly
     /// as that turn left it.
     last_turn: std::sync::Mutex<Option<TurnSnapshot>>,
+    /// Whether slides the model writes are opened in a browser and measured (see
+    /// `review`). On for the real app; off for in-memory states, so tests that
+    /// script a provider never start a browser unless they ask to.
+    review: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -186,14 +191,23 @@ impl CopilotState {
     pub fn persistent() -> Self {
         let store = ConfigStore::persistent();
         let config = store.load();
-        Self::with_store(store, config)
+        Self::with_store(store, config, true)
     }
 
     pub fn in_memory() -> Self {
-        Self::with_store(ConfigStore::in_memory(), CopilotConfig::default())
+        Self::with_store(ConfigStore::in_memory(), CopilotConfig::default(), false)
     }
 
-    fn with_store(store: ConfigStore, config: CopilotConfig) -> Self {
+    pub(crate) fn review_enabled(&self) -> bool {
+        self.review.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_review(&self, on: bool) {
+        self.review.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn with_store(store: ConfigStore, config: CopilotConfig, review: bool) -> Self {
         let thread_path = store
             .path()
             .map(|path| path.with_file_name("copilot-threads.json"));
@@ -211,6 +225,7 @@ impl CopilotState {
             cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             threads: std::sync::Mutex::new(threads),
             last_turn: std::sync::Mutex::new(None),
+            review: std::sync::atomic::AtomicBool::new(review),
         }
     }
 

@@ -14,5 +14,6 @@ tokio.workspace = true
 # alternative (one process per slide) took over a minute for a 50-slide deck.
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true

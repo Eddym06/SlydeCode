@@ -190,6 +190,11 @@ Rules:
    `read_deck` just to confirm a change that the tool already confirmed.
 8. If a tool returns an error, correct the arguments and try once; if it still fails, explain
    the specific problem in plain language.
+9. After you write slides you receive an automatic `review` inside the tool result: the slides
+   were opened in a real browser and measured (text off the canvas, cut off or overlapping,
+   type under 18 px, low contrast, crowded or empty slides). Fix every listed problem in ONE
+   call, changing only what is listed, then stop. If the review says there are no problems, do
+   not call more tools.
 "#,
         language = language,
         aspect = deck.aspect_ratio.as_str(),
@@ -235,7 +240,8 @@ Design: one idea per slide, one focal point, large type with a clear hierarchy, 
 text that fits the canvas and stays legible. Concrete copy, no lorem ipsum. A deck is a story of
 5-9 slides unless asked otherwise. Animation kinds: `{kinds}`.
 
-Tools: `build_deck` creates a deck with all its slides in ONE call; `write_slides` changes several
+Tools: after you write slides, the result carries a `review` measured in a real render; fix every
+listed problem in one call, then stop. `build_deck` creates a deck with all its slides in ONE call; `write_slides` changes several
 slides in one call; `upsert_slide` or `mutate_element` for a single change; `set_theme` and
 `set_title` for the palette and name. Every round resends the conversation, so be economical, and
 stop calling tools once the work is done.

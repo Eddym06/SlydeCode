@@ -12,9 +12,11 @@
 //! That keeps it usable from the running server (the UI export buttons) and
 //! from the `slyde export` command alike.
 
+mod audit;
 mod cdp;
 
-pub use cdp::{export_png_batch, export_slides_batch};
+pub use audit::{AuditIssue, SlideAudit};
+pub use cdp::{audit_slides, export_png_batch, export_slides_batch};
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

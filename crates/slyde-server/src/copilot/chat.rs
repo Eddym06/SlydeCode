@@ -17,8 +17,8 @@ use super::catalog;
 use super::error::CopilotError;
 use super::prompt;
 use super::tools;
-use super::transport;
 use super::wire::{ChatEvent, ImagePart, TokenUsage, Turn};
+use super::{review, transport};
 
 const MAX_MESSAGES: usize = 40;
 const MAX_TEXT_CHARS: usize = 80_000;
@@ -154,6 +154,9 @@ async fn run_inner(
     // Set when a provider says the request is too big: the next attempt carries a
     // shorter prompt and plainer tool schemas.
     let mut lean = false;
+    // Rounds so far that ended with the slides being measured and the findings
+    // handed back to the model.
+    let mut reviews = 0usize;
 
     for round in 0..MAX_TOOL_ROUNDS {
         if tx.is_closed() || crate::copilot::CopilotState::was_cancelled(&cancel) {
@@ -165,6 +168,12 @@ async fn run_inner(
         // through the step budget.
         let view = state.view().await;
         let deck = &view.presentation;
+        // What each slide looked like before this round, to know which ones it wrote.
+        let code_before: std::collections::HashMap<String, String> = deck
+            .slides
+            .iter()
+            .map(|slide| (slide.id.clone(), slide.code.clone()))
+            .collect();
         let selected = request
             .selected_slide_id
             .as_deref()
@@ -335,6 +344,28 @@ async fn run_inner(
                 name: call.name,
                 content,
             });
+        }
+        // The model wrote blind: open what it wrote, measure it, and hand the
+        // findings back inside the last tool result.
+        if reviews < review::MAX_REVIEWS_PER_TURN && state.copilot.review_enabled() {
+            let changed = review::changed_slides(&code_before, &state.view().await.presentation);
+            if !changed.is_empty() {
+                let _ = tx.send(ChatEvent::Tool {
+                    name: review::TOOL_NAME.to_string(),
+                    status: "running".into(),
+                });
+                let outcome = review::review_slides(state, &changed).await;
+                let _ = tx.send(ChatEvent::Tool {
+                    name: review::TOOL_NAME.to_string(),
+                    status: "done".into(),
+                });
+                if let Some(found) = outcome {
+                    reviews += 1;
+                    if let Some(Turn::Tool { content, .. }) = turns.last_mut() {
+                        *content = review::attach(content, &found.text);
+                    }
+                }
+            }
         }
         // The model is between tool execution and its next visible token.
         state.broadcast(activity(AgentPhase::Thinking));
@@ -854,5 +885,149 @@ mod tests {
             seen[2].get("tool_choice").is_none(),
             "tool_choice is never sent"
         );
+    }
+
+    /// The whole loop with nothing faked but the provider: the model writes a
+    /// slide whose headline runs off the canvas, the slide is opened in a real
+    /// browser, and the next request the model receives carries what was measured.
+    #[tokio::test]
+    async fn the_model_is_told_what_its_slide_looks_like() {
+        use axum::{Json, Router, extract::State, routing::post};
+        use std::sync::{Arc, Mutex};
+
+        if crate::chrome::discover_browser().is_err() {
+            eprintln!("no Chromium found; skipping the review integration test");
+            return;
+        }
+
+        #[derive(Clone, Default)]
+        struct Seen(Arc<Mutex<Vec<serde_json::Value>>>);
+
+        async fn completions(
+            State(seen): State<Seen>,
+            Json(body): Json<serde_json::Value>,
+        ) -> axum::response::Response {
+            let has_tool_result = body["messages"]
+                .as_array()
+                .is_some_and(|messages| messages.iter().any(|m| m["role"] == "tool"));
+            seen.0.lock().unwrap().push(body);
+            let chunk = if has_tool_result {
+                json!({ "choices": [{ "delta": { "content": "Fixed." } }] })
+            } else {
+                let arguments = json!({
+                    "index": 0,
+                    "html_code": "<h1 style=\"position:absolute;left:1000px;top:200px;margin:0;white-space:nowrap;font-size:90px\">Overflowing headline</h1>",
+                    "template": "custom"
+                })
+                .to_string();
+                json!({ "choices": [{ "delta": { "tool_calls": [{
+                    "index": 0,
+                    "id": "call_1",
+                    "type": "function",
+                    "function": { "name": "upsert_slide", "arguments": arguments }
+                }] } }] })
+            };
+            let sse = format!("data: {chunk}\n\ndata: [DONE]\n\n");
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from(sse))
+                .unwrap()
+        }
+
+        let seen = Seen::default();
+        let app = Router::new()
+            .route("/chat/completions", post(completions))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        catalog::tests_support::register_mock_as("mock-review", &base);
+
+        // A real studio server, so the slide can be opened like the browser does.
+        let deck = slyde_core::PresentationState::new(
+            "Deck",
+            slyde_core::Theme::studio(),
+            slyde_core::AspectRatio::R16x9,
+        );
+        let server = crate::start(crate::ServerConfig::new(std::env::temp_dir(), deck))
+            .await
+            .unwrap();
+        let state = server.state.clone();
+        state.copilot.set_review(true);
+        state
+            .copilot
+            .config
+            .write()
+            .await
+            .keys
+            .insert("mock-review".into(), "k".into());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        run(
+            state.clone(),
+            ChatRequest {
+                provider: "mock-review".into(),
+                model: "m".into(),
+                messages: vec![message("user", "Make a title slide")],
+                selected_slide_id: None,
+                selected_element_id: None,
+                language: Some("en".into()),
+                request_id: None,
+            },
+            tx,
+        )
+        .await;
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        server.shutdown().await;
+
+        assert!(
+            events.iter().any(|event| matches!(event, ChatEvent::Done)),
+            "{events:?}"
+        );
+        let reviewing: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                ChatEvent::Tool { name, status } if name == "review_slides" => {
+                    Some(status.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reviewing,
+            vec!["running", "done"],
+            "the user can see the review happen"
+        );
+
+        let seen = seen.0.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            2,
+            "one request that writes, one that reads the review"
+        );
+        let result = seen[1]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .expect("the second request carries the tool result");
+        let content: serde_json::Value =
+            serde_json::from_str(result["content"].as_str().unwrap()).unwrap();
+        let review = content["review"]
+            .as_str()
+            .expect("the review rides in the tool result");
+        assert!(review.contains("Slide 1"), "{review}");
+        assert!(
+            review.contains("overflow"),
+            "the off-canvas headline is named: {review}"
+        );
+        assert!(
+            review.contains("right by"),
+            "with the measurement: {review}"
+        );
+        assert!(review.contains("ONE call"), "{review}");
     }
 }

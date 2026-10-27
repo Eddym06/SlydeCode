@@ -1862,6 +1862,16 @@ test("the reasoning drawer follows the stream, scrolls and expands", async () =>
       { timeout: 8000 }
     );
 
+    // `<details>` fires its toggle event asynchronously, and the stream pins itself
+    // to the tail from that handler: wait for the state instead of racing it.
+    await page.waitFor(
+      `(() => {
+        const stream = document.querySelector(".thinking-stream");
+        return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 8;
+      })()`,
+      { timeout: 4000 }
+    );
+
     const stuck = await page.evaluate(`(() => {
       const stream = document.querySelector(".thinking-stream");
       const box = stream.getBoundingClientRect();
