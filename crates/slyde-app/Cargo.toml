@@ -28,3 +28,9 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[build-dependencies]
+# Embeds the Windows icon and version info. MIT/Apache-2.0, tiny, maintained; it is
+# only used when the target is Windows and degrades to a warning without a resource
+# compiler.
+embed-resource = "3"
