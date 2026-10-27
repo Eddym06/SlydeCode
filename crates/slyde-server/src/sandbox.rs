@@ -441,6 +441,21 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
     var editingNode = null;
     var outlines = [];
 
+    // Direct manipulation: eight resize handles around the selected block and
+    // magnetic guides while a block moves or resizes. All maths run in stage
+    // pixels (the document is CSS-scaled to fit the iframe).
+    var HANDLES = {
+      nw: [0, 0, 'nwse-resize'], n: [50, 0, 'ns-resize'], ne: [100, 0, 'nesw-resize'],
+      e: [100, 50, 'ew-resize'], se: [100, 100, 'nwse-resize'], s: [50, 100, 'ns-resize'],
+      sw: [0, 100, 'nesw-resize'], w: [0, 50, 'ew-resize']
+    };
+    var SNAP_PX = 6;       // snap distance, in stage pixels
+    var SAFE_MARGIN = 64;  // safe-area guide, in stage pixels
+    var MIN_SIZE = 16;
+    var handleNodes = null;
+    var guideNodes = null;
+    var snapTargets = null;
+
     var post = function (message) {
       if (window.parent === window) return;
       message.__slyde = true;
@@ -490,6 +505,107 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         layer.style.boxShadow = shown.length > 1 && el !== selection
           ? '0 0 0 1.5px #7C3AED' : '0 0 0 2px #FF6B4A, 0 0 0 3px rgba(255,107,74,.22)';
       }
+      paintHandles();
+    }
+
+    function ensureHandles() {
+      if (handleNodes) return handleNodes;
+      handleNodes = {};
+      Object.keys(HANDLES).forEach(function (name) {
+        var node = document.createElement('div');
+        node.setAttribute('data-slyde-ui', '1');
+        node.setAttribute('data-slyde-handle', name);
+        node.style.cssText = 'position:fixed;left:0;top:0;width:10px;height:10px;margin:-5px 0 0 -5px;' +
+          'display:none;z-index:2147483647;box-sizing:border-box;border-radius:3px;' +
+          'background:#fff;border:2px solid #FF6B4A;touch-action:none;cursor:' + HANDLES[name][2] + ';';
+        document.body.appendChild(node);
+        handleNodes[name] = node;
+      });
+      return handleNodes;
+    }
+
+    // Handles belong to a single selected block; a multi-selection moves as a
+    // group and has no handles.
+    function paintHandles() {
+      var nodes = ensureHandles();
+      var el = group.length <= 1 ? selection : null;
+      var rect = el && !editingNode ? el.getBoundingClientRect() : null;
+      var visible = rect && (rect.width || rect.height);
+      Object.keys(nodes).forEach(function (name) {
+        var node = nodes[name];
+        if (!visible) { node.style.display = 'none'; return; }
+        var spec = HANDLES[name];
+        node.style.display = 'block';
+        node.style.transform = 'translate(' + Math.round(rect.left + rect.width * spec[0] / 100) + 'px,' +
+          Math.round(rect.top + rect.height * spec[1] / 100) + 'px)';
+      });
+    }
+
+    function ensureGuides() {
+      if (guideNodes) return guideNodes;
+      guideNodes = ['x', 'y'].map(function () {
+        var node = document.createElement('div');
+        node.setAttribute('data-slyde-ui', '1');
+        node.style.cssText = 'position:fixed;left:0;top:0;display:none;pointer-events:none;' +
+          'z-index:2147483645;background:#FF6B4A;opacity:.85;';
+        document.body.appendChild(node);
+        return node;
+      });
+      return guideNodes;
+    }
+
+    function showGuides(gx, gy) {
+      var nodes = ensureGuides();
+      var box = stage.getBoundingClientRect();
+      var scale = box.width ? box.width / W : 1;
+      if (gx === null) nodes[0].style.display = 'none';
+      else {
+        nodes[0].style.display = 'block';
+        nodes[0].style.transform = 'translate(' + Math.round(box.left + gx * scale) + 'px,' + Math.round(box.top) + 'px)';
+        nodes[0].style.width = '1px';
+        nodes[0].style.height = Math.round(box.height) + 'px';
+      }
+      if (gy === null) nodes[1].style.display = 'none';
+      else {
+        nodes[1].style.display = 'block';
+        nodes[1].style.transform = 'translate(' + Math.round(box.left) + 'px,' + Math.round(box.top + gy * scale) + 'px)';
+        nodes[1].style.width = Math.round(box.width) + 'px';
+        nodes[1].style.height = '1px';
+      }
+    }
+
+    // Where a moving edge may snap: the stage edges and centre, the safe-area
+    // margins and the edges and centres of every other visible block.
+    function collectSnapTargets(skip) {
+      var xs = [0, W / 2, W, SAFE_MARGIN, W - SAFE_MARGIN];
+      var ys = [0, H / 2, H, SAFE_MARGIN, H - SAFE_MARGIN];
+      var nodes = stage.querySelectorAll('[data-slyde-id]');
+      var seen = 0;
+      for (var i = 0; i < nodes.length && seen < 80; i += 1) {
+        var node = nodes[i];
+        if (node === skip || skip.contains(node) || node.contains(skip)) continue;
+        if (node.tagName === 'STYLE' || node.tagName === 'SCRIPT' || node.tagName === 'BR') continue;
+        var g = stageGeometry(node);
+        if (g.w < 4 || g.h < 4) continue;
+        xs.push(g.x, g.x + g.w / 2, g.x + g.w);
+        ys.push(g.y, g.y + g.h / 2, g.y + g.h);
+        seen += 1;
+      }
+      return { xs: xs, ys: ys };
+    }
+
+    // Smallest correction that pulls any of `values` onto a target, or null.
+    function snapDelta(values, targets) {
+      var best = null;
+      for (var i = 0; i < values.length; i += 1) {
+        for (var j = 0; j < targets.length; j += 1) {
+          var delta = targets[j] - values[i];
+          if (Math.abs(delta) <= SNAP_PX && (best === null || Math.abs(delta) < Math.abs(best.delta))) {
+            best = { delta: delta, at: targets[j] };
+          }
+        }
+      }
+      return best;
     }
 
     function toHex(color) {
@@ -613,9 +729,30 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
       if (isImage) beginDrag();
     }, true);
 
+    document.addEventListener('pointerdown', function (event) {
+      var name = event.target && event.target.getAttribute && event.target.getAttribute('data-slyde-handle');
+      if (!name || !selection || editingNode || event.button !== 0) return;
+      event.preventDefault();
+      // The stage prevents the default focus change, so without this the frame
+      // never receives keydown and the arrow-key nudge would be dead.
+      try { window.focus(); } catch (e) {}
+      drag = {
+        el: selection,
+        id: selection.getAttribute('data-slyde-id'),
+        mode: 'resize',
+        handle: name,
+        startX: event.clientX,
+        startY: event.clientY,
+        geometry: stageGeometry(selection),
+        started: false,
+        pointerId: event.pointerId
+      };
+    }, true);
+
     function beginDrag() {
       var d = drag;
       d.started = true;
+      snapTargets = collectSnapTargets(d.el);
       // Freeze the element where it is so it can move without reflowing the slide.
       applyGeometry(d.el, d.geometry);
       select(d.el);
@@ -644,13 +781,49 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         w: drag.geometry.w,
         h: drag.geometry.h
       };
+      var guideX = null;
+      var guideY = null;
+      var snapping = snapTargets && !event.altKey;
+      var g0 = drag.geometry;
       if (drag.mode === 'resize') {
-        next.w = Math.max(16, Math.round(drag.geometry.w + dx));
-        next.h = Math.max(16, Math.round(drag.geometry.h + dy));
+        // A picture grabbed with Shift resizes from its corner, like a handle.
+        var handle = drag.handle || 'se';
+        var west = handle.indexOf('w') >= 0, east = handle.indexOf('e') >= 0;
+        var north = handle.indexOf('n') >= 0, south = handle.indexOf('s') >= 0;
+        var x1 = g0.x, y1 = g0.y, x2 = g0.x + g0.w, y2 = g0.y + g0.h;
+        if (west) x1 = g0.x + dx;
+        if (east) x2 = g0.x + g0.w + dx;
+        if (north) y1 = g0.y + dy;
+        if (south) y2 = g0.y + g0.h + dy;
+        if (snapping) {
+          if (west || east) {
+            var sx = snapDelta([west ? x1 : x2], snapTargets.xs);
+            if (sx) { if (west) x1 += sx.delta; else x2 += sx.delta; guideX = sx.at; }
+          }
+          if (north || south) {
+            var sy = snapDelta([north ? y1 : y2], snapTargets.ys);
+            if (sy) { if (north) y1 += sy.delta; else y2 += sy.delta; guideY = sy.at; }
+          }
+        }
+        if (x2 - x1 < MIN_SIZE) { if (west) x1 = x2 - MIN_SIZE; else x2 = x1 + MIN_SIZE; }
+        if (y2 - y1 < MIN_SIZE) { if (north) y1 = y2 - MIN_SIZE; else y2 = y1 + MIN_SIZE; }
+        next.x = Math.round(x1);
+        next.y = Math.round(y1);
+        next.w = Math.round(x2 - x1);
+        next.h = Math.round(y2 - y1);
       } else {
-        next.x = Math.round(drag.geometry.x + dx);
-        next.y = Math.round(drag.geometry.y + dy);
+        var nx = g0.x + dx;
+        var ny = g0.y + dy;
+        if (snapping) {
+          var mx = snapDelta([nx, nx + g0.w / 2, nx + g0.w], snapTargets.xs);
+          if (mx) { nx += mx.delta; guideX = mx.at; }
+          var my = snapDelta([ny, ny + g0.h / 2, ny + g0.h], snapTargets.ys);
+          if (my) { ny += my.delta; guideY = my.at; }
+        }
+        next.x = Math.round(nx);
+        next.y = Math.round(ny);
       }
+      showGuides(guideX, guideY);
       applyGeometry(drag.el, next);
     });
 
@@ -658,6 +831,8 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
 
     function endDrag() {
       if (!drag) return;
+      showGuides(null, null);
+      snapTargets = null;
       if (!drag.started) { drag = null; return; }
       justDragged = true;
       setTimeout(function () { justDragged = false; }, 0);
@@ -1262,6 +1437,26 @@ mod tests {
         assert!(html.contains("font-src 'self' data:"));
         assert!(html.contains("@font-face"));
         assert!(html.contains("/fonts/Geist-Variable.woff2"));
+    }
+
+    #[test]
+    fn edit_mode_ships_resize_handles_and_snapping_but_static_mode_does_not() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let editing = render_document(&deck, &slide, true, true);
+        for needle in [
+            "data-slyde-handle",
+            "nesw-resize",
+            "collectSnapTargets",
+            "snapDelta",
+            "SAFE_MARGIN",
+        ] {
+            assert!(editing.contains(needle), "edit layer is missing {needle}");
+        }
+        assert!(editing.contains("EDIT = true"));
+        // Presenting and exporting ship the same script with the layer switched off.
+        let presenting = render_document(&deck, &slide, true, false);
+        assert!(presenting.contains("EDIT = false"));
     }
 
     #[test]

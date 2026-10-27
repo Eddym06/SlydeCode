@@ -33,13 +33,24 @@ Dropped from `feat` (superseded by an equivalent on `main`, or incompatible with
 - Editable PowerPoint text boxes: `main`'s `PptxText` runs implementation stays. `slyde-pptx` and
   `slyde-export` are byte-identical to `main`.
 - PNG library covers (`/api/decks/thumbnails`): `main` renders covers as live iframes.
-- Universal canvas gizmo (8 handles, magnetic snapping): `main`'s multi-selection with
-  align/distribute stays. `feat`'s `interaction.test.mjs` went with it.
+- Universal canvas gizmo: re-done on top of `main`'s canvas (see "Canvas handles" below)
+  instead of taking `feat`'s version, so multi-selection and align/distribute are untouched.
 - `app.css` split into 8 sheets and the `app.js` shell split (`presenter-overlay.js`,
   `agent-activity-view.js`): both conflict with the layouts, wizard, versions and transitions that
   `main` added to the same files.
 
 `feat/product-completion` itself is untouched on origin.
+
+### Canvas handles (2026-10-27)
+
+Eight resize handles around a single selected block, plus magnetic guides while moving or
+resizing. Lives in the slide runtime (`sandbox.rs`) and reuses `main`'s drag (4 px threshold,
+freeze to absolute, `image-geometry` to the studio), so no new message type and no change to
+`canvas.js`. Snaps within 6 stage px to the stage edges and centre, a 64 px safe margin and the
+edges and centres of the other blocks; holding Alt turns snapping off. A block cannot shrink below
+16 px. A multi-selection has no handles and still moves as a group. `tests/ui/canvas-handles.test.mjs`
+drags a handle with real mouse events and checks that the edge lands exactly on the stage centre
+and that the minimum size holds. Not done: aspect-ratio lock (Shift) and rotation.
 
 ### Release binary check (2026-10-27)
 
