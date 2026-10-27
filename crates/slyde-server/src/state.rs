@@ -41,6 +41,9 @@ pub struct AppState {
     pub copilot: Arc<CopilotState>,
     /// Named and automatic checkpoints of the deck.
     pub versions: crate::versions::Versions,
+    /// Connected studio windows; the windowless launcher stops the server when
+    /// the last one closes.
+    pub presence: crate::presence::Presence,
 }
 
 /// The on-disk half of the server: which decks exist, where autosave writes and
@@ -143,6 +146,7 @@ impl AppState {
         };
         Arc::new(Self {
             versions,
+            presence: crate::presence::Presence::default(),
             core: RwLock::new(core),
             events,
             token,

@@ -35,3 +35,5 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

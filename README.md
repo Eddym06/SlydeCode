@@ -96,9 +96,22 @@ cargo +stable-x86_64-pc-windows-gnu build --workspace
 
 ### 2. Start the Studio
 ```powershell
-target\debug\slyde.exe app
+target\debug\slydecode.exe
 ```
-The studio will automatically open in an isolated Google Chrome application window.
+The studio opens in an isolated Google Chrome application window. `slydecode.exe` has no console window, and the
+server stops by itself a few seconds after the last window is closed. Its log is `slydecode.log` in the app-data
+folder (`%APPDATA%\SlydeCode`), and a dialog explains it when the app cannot start (for example, no Chrome, Edge,
+Chromium or Brave installed).
+
+`slyde.exe` is the console build, for the command line and for MCP clients: the server it starts keeps running until
+you press Ctrl+C.
+
+### 3. Package a Windows folder
+```powershell
+.\scripts\package-windows.ps1
+```
+Builds `slydecode.exe` and `slyde.exe` in release mode and writes `dist\SlydeCode\` plus a zip. The executables read
+`ui\` and `assets\` from beside themselves, so hand out the whole folder, not a single `.exe`.
 
 ---
 
@@ -106,7 +119,8 @@ The studio will automatically open in an isolated Google Chrome application wind
 
 | Command | Purpose |
 |---|---|
-| `slyde` or `slyde app` | Launch the presentation studio and open Chrome. |
+| `slyde` or `slyde app` | Launch the presentation studio and open Chrome (console build; stays up until Ctrl+C). |
+| `slydecode` | Same, with no console window; stops when the last window is closed. |
 | `slyde app --present` | Launch directly in kiosk presenter mode. |
 | `slyde app --no-open` | Start the local server without launching Chrome (prints session URL). |
 | `slyde mcp` | Start the stdio MCP server for external agent integration. |

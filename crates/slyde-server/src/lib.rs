@@ -19,6 +19,7 @@ pub mod error;
 pub mod export_api;
 pub mod http;
 pub mod library;
+pub mod presence;
 pub mod rendezvous;
 pub mod routes;
 pub mod sandbox;

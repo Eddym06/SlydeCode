@@ -25,6 +25,8 @@ pub async fn upgrade(
 }
 
 async fn session(mut socket: WebSocket, state: Arc<AppState>) {
+    // Counted as an open window until this function returns, however it ends.
+    let _window = state.presence.join();
     let mut events = state.events.subscribe();
 
     let initial = ServerEvent::StateChanged {
@@ -76,4 +78,58 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
 async fn send(socket: &mut WebSocket, event: &ServerEvent) -> Result<(), axum::Error> {
     let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
     socket.send(Message::Text(payload.into())).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use futures_util::StreamExt;
+    use slyde_core::{AspectRatio, PresentationState, Theme};
+
+    use crate::{ServerConfig, start};
+
+    async fn until(mut condition: impl FnMut() -> bool) -> bool {
+        for _ in 0..100 {
+            if condition() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        condition()
+    }
+
+    #[tokio::test]
+    async fn each_open_socket_counts_as_one_window_until_it_closes() {
+        let state = PresentationState::new("Untitled", Theme::studio(), AspectRatio::R16x9);
+        let ui = std::env::temp_dir();
+        let server = start(ServerConfig::new(ui, state)).await.unwrap();
+        let url = format!("ws://127.0.0.1:{}/ws?t={}", server.port, server.token);
+
+        assert_eq!(server.state.presence.connected(), 0);
+        let (mut editor, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        // The first frame is the full state, so the session is live once it arrives.
+        editor.next().await.unwrap().unwrap();
+        let (mut presenter, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+        presenter.next().await.unwrap().unwrap();
+        assert_eq!(server.state.presence.connected(), 2);
+
+        drop(editor);
+        assert!(until(|| server.state.presence.connected() == 1).await);
+        drop(presenter);
+        assert!(until(|| server.state.presence.connected() == 0).await);
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_rejected_handshake_is_not_a_window() {
+        let state = PresentationState::new("Untitled", Theme::studio(), AspectRatio::R16x9);
+        let server = start(ServerConfig::new(std::env::temp_dir(), state))
+            .await
+            .unwrap();
+        let url = format!("ws://127.0.0.1:{}/ws?t=wrong", server.port);
+        assert!(tokio_tungstenite::connect_async(&url).await.is_err());
+        assert_eq!(server.state.presence.connected(), 0);
+        server.shutdown().await;
+    }
 }

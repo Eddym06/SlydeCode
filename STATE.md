@@ -52,6 +52,28 @@ edges and centres of the other blocks; holding Alt turns snapping off. A block c
 drags a handle with real mouse events and checks that the edge lands exactly on the stage centre
 and that the minimum size holds. Not done: aspect-ratio lock (Shift) and rotation.
 
+### Windowless launcher (2026-10-27)
+
+Double-clicking used to open a terminal that also *was* the server. Now two executables share the
+`slyde-app` crate (lib + two bins):
+
+- `slyde.exe` (console): CLI and MCP, unchanged; the server it starts runs until Ctrl+C.
+- `slydecode.exe` (GUI subsystem, no console): what a user opens. It passes `--exit-when-closed`.
+  The server counts connected windows through the WebSocket (`slyde_server::presence`) and stops
+  8 s after the last one disconnects, or 45 s after start if no window ever connected. A reload or a
+  switch between editor and presenter reconnects inside the 8 s. It logs to
+  `<app-data>\slydecode.log` (trimmed past 512 KiB) and shows a message box when it cannot start
+  (no browser, panic).
+
+Verified on the real binaries from the unzipped package: no `conhost` child, the app window opens,
+a second launch reuses the running server and exits, closing the window stops the server in 8 s and
+clears `runtime.json`, and `slyde.exe mcp` still answers `initialize` and `tools/list` (11 tools).
+`scripts/package-windows.ps1` builds both and writes `dist\SlydeCode\` plus a zip.
+
+Still open: an icon for `slydecode.exe` (needs a resource compiler at build time and a larger icon
+than the 32 px `favicon.ico`), code signing, and an installer. Without a signature Windows
+SmartScreen warns on first run.
+
 ### Release binary check (2026-10-27)
 
 `cargo build --release` (GNU target) gives a 21 MB `slyde.exe`. It does **not** embed the UI: it

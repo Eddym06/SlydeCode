@@ -6,9 +6,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "slyde_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "slyde"
 path = "src/main.rs"
+
+[[bin]]
+name = "slydecode"
+path = "src/bin/slydecode.rs"
 
 [dependencies]
 slyde-core.workspace = true
