@@ -29,6 +29,8 @@ pub const MUTATE_ELEMENT: &str = "mutate_element";
 pub const GET_SELECTED_ELEMENT: &str = "get_selected_element";
 pub const WRITE_SLIDES: &str = "write_slides";
 pub const BUILD_DECK: &str = "build_deck";
+pub const SET_THEME: &str = "set_theme";
+pub const SET_TITLE: &str = "set_title";
 /// Most slides one batch call may carry; keeps a single tool call reviewable
 /// and bounded even when a model gets carried away.
 const MAX_BATCH_SLIDES: usize = 16;
@@ -239,6 +241,38 @@ pub fn definitions() -> Vec<ToolDef> {
             },
         },
         ToolDef {
+            name: SET_THEME,
+            description: "Change the presentation theme palette in real time. Can switch to a base theme preset (studio, paper, night, terminal, academic, pitch) and optionally customize background, foreground, accent, muted colors, or font family.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "theme_id": { "type": "string", "enum": slyde_core::THEME_IDS, "description": "Base theme identifier" },
+                        "background": { "type": "string", "description": "Hex or CSS color for background" },
+                        "foreground": { "type": "string", "description": "Hex or CSS color for primary text" },
+                        "accent": { "type": "string", "description": "Hex or CSS color for accent highlight" },
+                        "muted": { "type": "string", "description": "Hex or CSS color for secondary text" },
+                        "font_family": { "type": "string", "description": "CSS font-family string" }
+                    },
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
+            name: SET_TITLE,
+            description: "Rename the current deck without touching its slides. Use it to give an existing deck a meaningful title; create_presentation would reset the slides.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "Deck title, sentence case, at most 120 characters." }
+                    },
+                    "required": ["title"],
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
             name: GET_SELECTED_ELEMENT,
             description: "Read properties, tag name and text of the element the user has currently focused or selected in the canvas.",
             schema: || {
@@ -367,7 +401,9 @@ pub async fn execute_with(
         BUILD_DECK => build_deck(state, arguments, applied).await,
         WRITE_SLIDES => write_slides(state, &arguments, applied).await,
         CREATE_PRESENTATION | UPSERT_SLIDE | REMOVE_SLIDE | MOVE_SLIDE | TRIGGER_ANIMATION
-        | SET_NOTES | MUTATE_ELEMENT => mutate(state, name, arguments).await,
+        | SET_NOTES | MUTATE_ELEMENT | SET_THEME | SET_TITLE => {
+            mutate(state, name, arguments).await
+        }
         _ => Err(format!("unknown tool: {name}")),
     }
 }
@@ -785,6 +821,20 @@ mod tests {
         let schema = (create.schema)();
         let themes = schema["properties"]["theme"]["enum"].as_array().unwrap();
         assert_eq!(themes.len(), slyde_core::THEME_IDS.len());
+
+        let set_theme = definitions()
+            .into_iter()
+            .find(|tool| tool.name == SET_THEME)
+            .unwrap();
+        let set_theme_schema = (set_theme.schema)();
+        assert!(set_theme_schema["properties"]["theme_id"]["enum"].is_array());
+
+        let set_title = definitions()
+            .into_iter()
+            .find(|tool| tool.name == SET_TITLE)
+            .unwrap();
+        let set_title_schema = (set_title.schema)();
+        assert_eq!(set_title_schema["required"][0], "title");
 
         let mutate = definitions()
             .into_iter()

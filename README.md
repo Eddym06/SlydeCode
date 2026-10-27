@@ -38,10 +38,10 @@
   - **8 Authentic Provider Logos:** DeepSeek, OpenAI (ChatGPT), Anthropic (Claude), Google Gemini, xAI (Grok), Groq, OpenRouter, and NVIDIA NIM with official SVG brand marks.
   - **Sub-300ms Live Thinking Stream (`ChatEvent::Thinking`):** Reasoning models like `deepseek-flash` stream their internal thinking process live in a downward collapsible mono drawer with markdown previews.
   - **Direct Upstream Error Transparency:** Never masks errors behind generic alerts; surfaces exact provider feedback and details.
-  - **Full Deck Tools Loop:** The copilot autonomously inspects and modifies the deck using structured tools (`read_deck`, `read_slide`, `create_presentation`, `upsert_slide`, `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`).
+  - **Full Deck Tools Loop:** The copilot autonomously inspects and modifies the deck using structured tools (`read_deck`, `read_slide`, `create_presentation`, `upsert_slide`, `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`, `set_theme`, `set_title`).
   - **Contextual Prompt Suggestions:** Instant suggestion pills tailored to the active slide or deck state.
   - **Multimodal File Attachments:** Attach images (PNG, JPEG, WebP), PDFs, DOCX, PPTX, or code/text files with server-side extraction.
-  - **Zero-Friction Key Management:** Keys stay on your machine in `%APPDATA%\SlydeCode\copilot.json` (or environment variables) and are never exposed to the browser.
+  - **Zero-Friction Key Management:** Keys stay on your machine, in the Windows Credential Manager or the macOS Keychain (an owner-only file on Linux), or in environment variables, and are never exposed to the browser.
 
 - **Native Motion & Animation Engine:**
   - **Continuous CSS Motion Graphics:** Copilot writes hardware-accelerated CSS `@keyframes` in `<style>` for living graphics (rotating rings, pulsing glowing nodes, radar sweeps, SVG stroke drawings).
@@ -112,7 +112,7 @@ The studio will automatically open in an isolated Google Chrome application wind
 | `slyde mcp` | Start the stdio MCP server for external agent integration. |
 | `slyde export --format pdf --out deck.pdf` | Render and export the active deck as an exact 16:9 PDF. |
 | `slyde export --format png --out exports/` | Export each slide as a PNG (2560×1440, one Chrome session). |
-| `slyde export --format pptx --out deck.pptx` | Export a PowerPoint file with one full-bleed picture per slide and the speaker notes. |
+| `slyde export --format pptx --out deck.pptx` | Export a PowerPoint file: a clean picture of each slide with its text as editable text boxes on top, plus the speaker notes. |
 | `slyde version` | Show version information. |
 | `slyde help` | Show command usage. |
 
@@ -181,7 +181,8 @@ SlydeCode/
   Images live in an asset store and travel with the deck: a `.slyde` file becomes
   a ZIP bundle (`deck.json` + `assets/`) as soon as a slide uses one.
 - **Exports.** PDF (exact 16:9), PNG (2560×1440, one Chrome session for the whole
-  deck) and PPTX (one full-bleed picture per slide, notes preserved).
+  deck, 1x or 2x from the inspector) and PPTX (the slide as a picture without its text,
+  with that text as real, editable text boxes on top; notes preserved).
 - **Copilot memory.** The conversation is stored per deck and comes back after a
   reload or a deck switch; "New chat" clears it.
 
@@ -232,8 +233,9 @@ node --test "tests/ui/*.test.mjs"
   - the **sandbox token** authorizes slide documents (`/s/{id}`) only. It is
     embedded in every iframe URL, so a slide's own script can read it; it opens
     no deck API.
-- Provider keys live on disk in the app-data directory (`copilot.json`, mode
-  `0600` on Unix) and are never returned to the browser.
+- Provider keys live in the OS credential store on Windows and macOS. Linux keeps
+  them in the app-data directory (`copilot.json`, mode `0600`), as does any machine
+  whose credential store refuses the write. Keys are never returned to the browser.
 
 ---
 

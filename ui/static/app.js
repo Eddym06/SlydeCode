@@ -11,6 +11,7 @@ import { hasBeenWelcomed, isPristineDeck, mountWelcome } from "./welcome.js";
 import { mountCommandPalette } from "./command-palette.js";
 import { mountDeckLibrary } from "./deck-library.js";
 import { createReveal, keyToAction, progressPercent } from "./presenter-core.js";
+import { mountPresenterDraw } from "./presenter-draw.js";
 import { ANIMATION_KINDS, DEFAULT_EASING, THEME_CHOICES, createInspector } from "./inspector.js";
 import { mountMenus } from "./menus.js";
 import { createTransitioner, transitionOf } from "./transitions.js";
@@ -88,6 +89,7 @@ function boot(sessionToken) {
     topbarExportPdf: $("topbar-export-pdf"),
     topbarExportPng: $("topbar-export-png"),
     topbarExportPptx: $("topbar-export-pptx"),
+    topbarExportHtml: $("topbar-export-html"),
     topbarSaveDeck: $("topbar-save-deck"),
     topbarNewDeck: $("topbar-new-deck"),
     topbarLibrary: $("topbar-library"),
@@ -974,7 +976,10 @@ function boot(sessionToken) {
           toast(`${t("toast.error")} — ${error.message}`);
         }
       },
-      exportDeck: (format) => startExport(format),
+      exportDeck: (format, options) => startExport(format, options),
+      redesignSlide: () => {
+        askCopilotForElement(t("copilot.prompt.redesign"));
+      },
       removeSlide: async (slideId) => {
         const ok = await run("remove_slide", { slide_id: slideId }, { silent: true });
         if (ok) {
@@ -1026,27 +1031,35 @@ function boot(sessionToken) {
 
   /// Renders and packages the deck with headless Chrome. The HTTP call only
   /// resolves when the file is ready; progress events keep the label honest.
-  async function startExport(format) {
+  async function startExport(format, options = {}) {
     if (exportJob) return;
     const slides = deck();
     exportJob = {
       format,
       completed: 0,
-      total: format === "pdf" ? 1 : slides ? slides.slides.length : 0,
+      total: format === "pdf" || format === "html" ? 1 : slides ? slides.slides.length : 0,
     };
     syncExportUi();
 
     try {
-      const { blob, filename } = await client.exportDeck(format);
+      const { blob, filename } = await client.exportDeck(format, options);
       const fallbackName =
-        format === "pdf" ? "deck.pdf" : format === "pptx" ? "deck.pptx" : "deck.zip";
+        format === "pdf"
+          ? "deck.pdf"
+          : format === "pptx"
+            ? "deck.pptx"
+            : format === "html"
+              ? "deck.html"
+              : "deck.zip";
       saveBlob(blob, filename || fallbackName);
       const readyKey =
         format === "pdf"
           ? "toast.exportedPdf"
           : format === "pptx"
             ? "toast.exportedPptx"
-            : "toast.exportedPng";
+            : format === "html"
+              ? "toast.exportedHtml"
+              : "toast.exportedPng";
       toast(t(readyKey));
     } catch (error) {
       console.error("export failed", error);
@@ -1342,6 +1355,12 @@ function boot(sessionToken) {
         startExport("pptx");
       });
     }
+    if (els.topbarExportHtml) {
+      els.topbarExportHtml.addEventListener("click", () => {
+        els.exportMenu.hidden = true;
+        startExport("html");
+      });
+    }
     if (els.topbarSaveDeck) {
       els.topbarSaveDeck.addEventListener("click", () => {
         els.exportMenu.hidden = true;
@@ -1413,6 +1432,7 @@ function boot(sessionToken) {
     notesUp: $("notes-font-up"),
     notesPace: $("notes-pace"),
   };
+  const presenterDraw = mountPresenterDraw(presentEls.frameWrap);
 
   function formatPresentTime(sec) {
     const m = Math.floor(sec / 60);
@@ -1663,6 +1683,15 @@ function boot(sessionToken) {
       case "fullscreen":
         togglePresentFullscreen();
         break;
+      case "laser":
+        presenterDraw.toggle("laser");
+        break;
+      case "pen":
+        presenterDraw.toggle("pen");
+        break;
+      case "clearDraw":
+        presenterDraw.clear();
+        break;
       case "escape":
         if (presentBlackout) {
           togglePresentBlackout();
@@ -1753,6 +1782,7 @@ function boot(sessionToken) {
       document.exitFullscreen().catch(() => {});
     }
     if (presentEls.overlay) presentEls.overlay.hidden = true;
+    presenterDraw.clear();
 
     document.removeEventListener("keydown", handlePresentKeydown);
     document.removeEventListener("click", handlePresentClick);

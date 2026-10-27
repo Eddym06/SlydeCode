@@ -66,6 +66,19 @@ export function connectCdp(wsUrl) {
     }
   });
 
+  socket.addEventListener("close", () => {
+    for (const { reject } of pending.values()) {
+      reject(new Error("CDP socket closed"));
+    }
+    pending.clear();
+  });
+  socket.addEventListener("error", (err) => {
+    for (const { reject } of pending.values()) {
+      reject(err instanceof Error ? err : new Error("CDP socket error"));
+    }
+    pending.clear();
+  });
+
   const ready = new Promise((resolve, reject) => {
     socket.addEventListener("open", resolve, { once: true });
     socket.addEventListener("error", reject, { once: true });
@@ -149,6 +162,10 @@ export async function launchChrome({
         : []),
       "--remote-debugging-port=0",
       `--user-data-dir=${profile}`,
+      // The suite asserts English copy, and the studio follows `navigator.language`.
+      // Pin the browser language so the result never depends on the machine's locale.
+      "--lang=en-US",
+      "--accept-lang=en-US",
       ...args,
       "about:blank",
     ],
@@ -236,7 +253,11 @@ export async function launchChrome({
     },
     close() {
       try {
-        child.kill();
+        if (process.platform === "win32" && child.pid) {
+          spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+        } else {
+          child.kill();
+        }
       } catch {
         /* already gone */
       }

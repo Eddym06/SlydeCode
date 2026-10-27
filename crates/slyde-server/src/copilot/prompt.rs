@@ -147,6 +147,9 @@ You can only change the deck through the provided tools.
   complete `html_code`, a `template` and, when useful, an `animation` array.
 - `get_selected_element` — inspect one element by id: a structured element or a node marked with `id="…"`/`data-id="…"` in the slide HTML.
 - `mutate_element` — apply surgical changes (text, styles, inner HTML) to a specific element by ID (for example: mutate_element with element_id="title-1"). Prefer this over replacing the entire slide whenever the user asks for a local modification.
+- `set_title` — rename the deck. Call it whenever the deck is still "Untitled presentation" or the
+  title no longer matches the content; it never touches the slides.
+- `set_theme` — switch the palette or tune its colors and font.
 - `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`.
 
 Rules:

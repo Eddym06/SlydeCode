@@ -408,6 +408,7 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
   }
 
   window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
     var data = event.data;
     if (!data || data.__slyde !== true) return;
     if (data.type === 'animate') play(data.step);
@@ -843,11 +844,22 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
     window.addEventListener('resize', paint);
     window.addEventListener('scroll', paint, true);
 
+    // Looks a block up by comparing the attribute instead of splicing the id
+    // into a selector, so a hostile id can never change what the query means.
+    function findById(id) {
+      var all = stage.querySelectorAll('[data-slyde-id]');
+      for (var i = 0; i < all.length; i += 1) {
+        if (all[i].getAttribute('data-slyde-id') === id) return all[i];
+      }
+      return null;
+    }
+
     window.addEventListener('message', function (event) {
+      if (event.source !== window.parent) return;
       var data = event.data;
       if (!data || data.__slyde !== true) return;
       if (data.type === 'select-by-id') {
-        select(data.id ? stage.querySelector('[data-slyde-id="' + data.id + '"]') : null);
+        select(typeof data.id === 'string' && data.id ? findById(data.id) : null);
       } else if (data.type === 'clear-selection') {
         select(null);
       } else if (data.type === 'select-step') {
@@ -897,6 +909,252 @@ fn runtime_script(width: u32, height: u32, static_mode: bool, edit_mode: bool) -
         .replace("__H__", &height.to_string())
         .replace("__STATIC__", if static_mode { "true" } else { "false" })
         .replace("__EDIT__", if edit_mode { "true" } else { "false" })
+}
+
+/// Renders a single self-contained interactive HTML document for the whole deck.
+///
+/// Works without any server or network: double-clicking opens an interactive
+/// presentation with slide navigation, fragments, fullscreen and the laser pointer.
+pub fn render_standalone_presentation(deck: &Presentation) -> String {
+    let (width, height) = deck.aspect_ratio.size_px();
+    let title = escape_html(&deck.title);
+    let theme = &deck.theme;
+    let base_css = crate::starter::base_css();
+
+    let slides_html: String = deck
+        .slides
+        .iter()
+        .enumerate()
+        .map(|(index, slide)| {
+            let steps_json = serde_json::to_string(&slide.animation)
+                .unwrap_or_else(|_| "[]".to_string())
+                .replace("</", "<\\/");
+            format!(
+                r#"<section class="slyde-offline-slide" data-index="{index}" data-id="{id}" style="display: {display}">
+  <div class="slyde-slide-content">{code}</div>
+  <script type="application/json" class="slyde-slide-steps">{steps}</script>
+</section>"#,
+                index = index,
+                id = escape_html(&slide.id),
+                display = if index == 0 { "block" } else { "none" },
+                code = slide.code,
+                steps = steps_json,
+            )
+        })
+        .collect();
+
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>
+  :root {{
+    --slyde-bg: {bg};
+    --slyde-fg: {fg};
+    --slyde-muted: {muted};
+    --slyde-accent: {accent};
+    --slyde-font: {font};
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{
+    margin: 0;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #000;
+    color: var(--slyde-fg);
+    font-family: var(--slyde-font), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }}
+  #slyde-viewport {{
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }}
+  #slyde-stage {{
+    position: relative;
+    width: {width}px;
+    height: {height}px;
+    background: var(--slyde-bg);
+    overflow: hidden;
+    transform-origin: center center;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }}
+  .slyde-offline-slide {{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }}
+  .slyde-slide-content {{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }}
+  #slyde-hud {{
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(18,18,20,0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 999px;
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: #F4F3F1;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 220ms ease;
+    user-select: none;
+  }}
+  body:hover #slyde-hud, body.hud-visible #slyde-hud {{ opacity: 1; }}
+  #slyde-progress {{
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, #7C3AED, #FF6B4A);
+    transition: width 240ms cubic-bezier(.16,1,.3,1);
+    z-index: 1001;
+  }}
+  #slyde-laser {{
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff 20%, #FF6B4A 60%, rgba(124,58,237,0) 100%);
+    box-shadow: 0 0 12px #FF6B4A;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    display: none;
+    z-index: 999;
+  }}
+  {base_css}
+</style>
+</head>
+<body>
+<div id="slyde-viewport">
+  <main id="slyde-stage">
+    {slides}
+    <div id="slyde-laser"></div>
+  </main>
+</div>
+<div id="slyde-hud">
+  <span id="slyde-count">1 / {total}</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>?</kbd><kbd>?</kbd> navigate</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>F</kbd> fullscreen</span>
+  <span style="opacity:.4">?</span>
+  <span><kbd>L</kbd> laser</span>
+</div>
+<div id="slyde-progress" style="width: {initial_pct}%"></div>
+
+<script>
+(function() {{
+  var W = {width}, H = {height}, total = {total};
+  var current = 0;
+  var laserActive = false;
+  var stage = document.getElementById('slyde-stage');
+  var slides = document.querySelectorAll('.slyde-offline-slide');
+  var countEl = document.getElementById('slyde-count');
+  var progressEl = document.getElementById('slyde-progress');
+  var laserEl = document.getElementById('slyde-laser');
+  var hud = document.getElementById('slyde-hud');
+  var hudTimer = null;
+
+  function fit() {{
+    var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    stage.style.transform = 'scale(' + s + ')';
+  }}
+  window.addEventListener('resize', fit);
+  fit();
+
+  function showHud() {{
+    document.body.classList.add('hud-visible');
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(function() {{ document.body.classList.remove('hud-visible'); }}, 2500);
+  }}
+  window.addEventListener('mousemove', showHud);
+
+  function showSlide(idx) {{
+    if (idx < 0 || idx >= total) return;
+    current = idx;
+    for (var i = 0; i < slides.length; i++) {{
+      slides[i].style.display = i === current ? 'block' : 'none';
+    }}
+    countEl.textContent = (current + 1) + ' / ' + total;
+    progressEl.style.width = Math.round(((current + 1) / total) * 100) + '%';
+    location.hash = '#' + (current + 1);
+  }}
+
+  var initial = parseInt(location.hash.replace('#', ''), 10);
+  if (!isNaN(initial) && initial >= 1 && initial <= total) showSlide(initial - 1);
+
+  window.addEventListener('keydown', function(e) {{
+    var k = e.key;
+    if (k === 'ArrowRight' || k === ' ' || k === 'PageDown' || k === 'Enter') {{
+      e.preventDefault();
+      showSlide(current + 1);
+    }} else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') {{
+      e.preventDefault();
+      showSlide(current - 1);
+    }} else if (k === 'Home') {{
+      e.preventDefault();
+      showSlide(0);
+    }} else if (k === 'End') {{
+      e.preventDefault();
+      showSlide(total - 1);
+    }} else if (k === 'f' || k === 'F') {{
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(function(){{}});
+      else document.exitFullscreen().catch(function(){{}});
+    }} else if (k === 'l' || k === 'L') {{
+      laserActive = !laserActive;
+      laserEl.style.display = laserActive ? 'block' : 'none';
+      stage.style.cursor = laserActive ? 'none' : '';
+    }}
+  }});
+
+  stage.addEventListener('mousemove', function(e) {{
+    if (!laserActive) return;
+    var r = stage.getBoundingClientRect();
+    var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (e.clientX - r.left) / s;
+    var y = (e.clientY - r.top) / s;
+    laserEl.style.left = x + 'px';
+    laserEl.style.top = y + 'px';
+  }});
+}})();
+</script>
+</body>
+</html>"#,
+        title = title,
+        bg = theme.background,
+        fg = theme.foreground,
+        muted = theme.muted,
+        accent = theme.accent,
+        font = theme.font_family,
+        width = width,
+        height = height,
+        base_css = base_css,
+        slides = slides_html,
+        total = deck.slides.len(),
+        initial_pct = if deck.slides.is_empty() {
+            0
+        } else {
+            100 / deck.slides.len()
+        },
+    )
 }
 
 /// One document, one page per slide, each slide in its own iframe so slide CSS
@@ -1007,6 +1265,16 @@ mod tests {
     }
 
     #[test]
+    fn runtime_only_trusts_its_parent_and_never_splices_ids_into_selectors() {
+        let slide = Slide::new("a".into(), "<p>x</p>".into());
+        let deck = deck_with(slide.clone());
+        let html = render_document(&deck, &slide, false, true);
+        assert_eq!(html.matches("event.source !== window.parent").count(), 2);
+        assert!(html.contains("function findById"));
+        assert!(!html.contains("'[data-slyde-id=\"' + data.id"));
+    }
+
+    #[test]
     fn title_is_escaped() {
         let slide = Slide::new("a".into(), "<p>x</p>".into());
         let deck = deck_with(slide.clone());
@@ -1059,5 +1327,19 @@ mod tests {
         let html = render_document(&deck, &slide, true, false);
         assert!(html.contains("width: 720px"));
         assert!(html.contains("height: 1280px"));
+    }
+
+    #[test]
+    fn standalone_presentation_embeds_all_slides_and_laser() {
+        let slide1 = Slide::new("s1".into(), "<h1>First</h1>".into());
+        let slide2 = Slide::new("s2".into(), "<p>Second</p>".into());
+        let mut deck = deck_with(slide1);
+        deck.slides.push(slide2);
+        let html = render_standalone_presentation(&deck);
+        assert!(html.contains("<h1>First</h1>"));
+        assert!(html.contains("<p>Second</p>"));
+        assert!(html.contains("slyde-laser"));
+        assert!(html.contains("slyde-offline-slide"));
+        assert!(html.contains("1 / 2"));
     }
 }
