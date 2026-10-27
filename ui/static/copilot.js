@@ -3,11 +3,12 @@
 // sees a key and never renders provider-authored free text.
 
 import { recommendedModel } from "./onboarding-models.js";
-import { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } from "./copilot-work.js";
+import { expectedSlides, formatElapsed, lastThought, recentThinking, trackModel, workPhase } from "./copilot-work.js";
 import { lang, onLangChange, t } from "./i18n.js";
 import { createModelSheet } from "./copilot-model-sheet.js";
 import { providerIcon, providerTint } from "./provider-icons.js";
 import { mountComposerMenus } from "./composer-menus.js";
+import { mountReport } from "./copilot-report.js";
 
 const SELECTION_KEY = "slyde.copilot.selection";
 const MAX_ATTACHMENTS = 4;
@@ -577,14 +578,23 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       const detail = showDetail
         ? `<div class="msg-error-detail">${escapeHtml(message.errorMessage)}</div>`
         : "";
+      const retryButton = canRetry
+        ? `<button type="button" class="msg-retry" data-retry>${rerunSvg()}<span>${escapeHtml(
+            t("copilot.retryAction")
+          )}</span></button>`
+        : "";
+      // The report is only offered when the provider said something to report.
+      const reportButton = message.errorDetail
+        ? `<button type="button" class="msg-report" data-report>${reportSvg()}<span>${escapeHtml(
+            t("copilot.report")
+          )}</span></button>`
+        : "";
       error.innerHTML = `
         <p>${escapeHtml(generic)}</p>
         ${detail}
         ${
-          canRetry
-            ? `<button type="button" class="msg-retry" data-retry>${escapeHtml(
-                t("copilot.retryAction")
-              )}</button>`
+          retryButton || reportButton
+            ? `<div class="msg-error-actions">${retryButton}${reportButton}</div>`
             : ""
         }`;
     }
@@ -1020,15 +1030,22 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
     const line = card.querySelector(".work-line");
     let lineText = "";
-    if (info.phase === "thinking") lineText = lastThought(message.thinking) || t("copilot.work.words", { n: info.words });
+    // While the model reasons, the line is a small viewport onto its latest words:
+    // new text arrives at the bottom and the older lines roll up and out.
+    const thinkingNow = info.phase === "thinking" && Boolean(recentThinking(message.thinking));
+    line.classList.toggle("is-thought", thinkingNow);
+    if (info.phase === "thinking") lineText = recentThinking(message.thinking) || t("copilot.work.words", { n: info.words });
     else if (info.phase === "writing") lineText = t("copilot.work.chars", { n: formatTokens(info.chars) });
     else if (info.phase === "applying") lineText = t("copilot.work.applyingLine");
     else lineText = t("copilot.work.waitingLine");
     if (line.textContent !== lineText) {
       line.textContent = lineText;
-      line.classList.remove("is-swapping");
-      void line.offsetWidth;
-      line.classList.add("is-swapping");
+      // A thought changes with every few words; animating each change would flicker.
+      if (!thinkingNow) {
+        line.classList.remove("is-swapping");
+        void line.offsetWidth;
+        line.classList.add("is-swapping");
+      }
     }
 
     const model = trackModel({ expected: message.expected, written, current: info.phase === "writing" });
@@ -1145,6 +1162,13 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       assistant.state = "error";
       assistant.errorCode = event.code || "generic";
       assistant.errorMessage = event.message || "";
+      // What the provider actually replied, for the report. It is never shown in
+      // the thread itself.
+      assistant.errorDetail = event.detail || "";
+      assistant.errorStatus = event.status || null;
+      assistant.errorProvider = (activeProvider() || {}).name || providerId || "";
+      assistant.errorModel = modelId;
+      assistant.errorAt = new Date().toISOString();
       syncAssistant(assistant);
       announce(t("copilot.errorTitle"));
     }
@@ -1166,9 +1190,32 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     message.thinking = "";
     message.tools = [];
     message.errorCode = null;
+    message.errorDetail = "";
+    message.errorStatus = null;
     message.state = "streaming";
     syncAssistant(message, true);
     startStream(buildHistory());
+  }
+
+  const report = mountReport({ host: els.panel, t, escapeHtml });
+
+  function openReport(message, trigger) {
+    const code = message.errorCode || "generic";
+    const hintKey = `copilot.report.hint.${code}`;
+    const hint = t(hintKey);
+    report.open(
+      {
+        provider: message.errorProvider,
+        model: message.errorModel,
+        status: message.errorStatus,
+        code,
+        summary: errorText(code),
+        hint: hint === hintKey ? "" : hint,
+        detail: message.errorDetail,
+        when: message.errorAt ? new Date(message.errorAt).toLocaleString() : "",
+      },
+      trigger
+    );
   }
 
   /** Sends the same prompt again: everything after it is dropped and answered anew. */
@@ -1446,6 +1493,12 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   });
   els.newChat.addEventListener("click", newChat);
   els.thread.addEventListener("click", async (event) => {
+    const reportButton = event.target.closest("[data-report]");
+    if (reportButton) {
+      const message = messages.find((item) => item.el === reportButton.closest(".msg"));
+      if (message) openReport(message, reportButton);
+      return;
+    }
     const toolButton = event.target.closest("[data-rerun], [data-edit]");
     if (toolButton) {
       const message = messages.find((item) => item.el === toolButton.closest(".msg"));
@@ -1634,6 +1687,10 @@ function rerunSvg() {
 
 function editSvg() {
   return svg('<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="m14.5 7.5 3 3"/>', 16);
+}
+
+function reportSvg() {
+  return svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>', 15);
 }
 
 function usageSvg(kind) {

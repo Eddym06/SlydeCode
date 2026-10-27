@@ -52,6 +52,36 @@ edges and centres of the other blocks; holding Alt turns snapping off. A block c
 drags a handle with real mouse events and checks that the edge lands exactly on the stage centre
 and that the minimum size holds. Not done: aspect-ratio lock (Shift) and rotation.
 
+### Provider rejections and the report (2026-10-27)
+
+Groq, NVIDIA and OpenRouter were refusing requests. Reproducing against the real services needs the
+user's keys, which this work does not touch; the causes were found from the request the app builds and
+confirmed with a scripted provider that rejects the same ways
+(`a_too_large_request_is_retried_lean_and_an_unknown_field_is_dropped`).
+
+- **Weight of every request.** The system prompt plus the tool schemas are ~5,000 tokens before the user
+  says a word, and every tool round resends them. Free plans cap tokens per minute (Groq 6k-12k) and some
+  models have small contexts, so the first call alone is refused (HTTP 413, or a 429 naming "tokens per
+  minute"). On such a refusal the turn now retries once with a lean prompt and plain tool schemas
+  (~2k tokens); the user only sees a failure if that is refused too.
+- **Wrongly classified errors.** Any 4xx mentioning "tool" became "this model can't use tools", which hid
+  size limits, invalid tool calls (Groq `tool_use_failed`), retired models (OpenRouter 404 "no endpoints
+  found") and missing credits. These are now `too_large`, `bad_tool_call`, `model_unavailable` and
+  `no_credits`, each with its own sentence and advice.
+- **Request fields some servers refuse.** `tool_choice: "auto"` is no longer sent (it is the default), an
+  assistant turn without text carries an empty string instead of `null`, and a refused `stream_options` is
+  dropped and retried (usage is then estimated).
+- **Models that cannot work.** OpenRouter models whose `supported_parameters` lack `tools` are no longer
+  listed; Groq/NVIDIA guard, speech, compound and retrieval models are filtered too.
+- **Report.** An error event now carries the provider's reply (redacted of the key and bearer tokens, 4,000
+  characters at most) and the HTTP status. The thread still shows one localized sentence; Retry and Report
+  sit side by side, and Report opens a panel with provider, model, status, type, a plain explanation and
+  the reply pretty-printed, with a Copy button in the corner of the block.
+- **UI:** the stop button is red with a larger square; the reasoning in the progress card is a three-line
+  viewport that rolls upward instead of one line clipped at the side.
+
+Not verified against the live providers. If a refusal persists, the report shows the exact words.
+
 ### Studio and copilot polish pass (2026-10-27)
 
 Driven by a review of the running app, with the design skills found on this machine

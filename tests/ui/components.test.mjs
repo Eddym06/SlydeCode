@@ -532,3 +532,38 @@ test("the PNG quality falls back to 2x when storage is empty, refused or holds j
     else globalThis.localStorage = original;
   }
 });
+
+test("the report formats a JSON reply, keeps other text verbatim and never injects markup", async () => {
+  const { formatReply, reportText } = await import("../../ui/static/copilot-report.js");
+  const escape = (value) => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const json = formatReply('{"error":{"message":"too <big>","code":429,"retry":true}}', escape);
+  assert.match(json, /<span class="rp-key">"error"<\/span>:/);
+  assert.match(json, /<span class="rp-num">429<\/span>/);
+  assert.match(json, /<span class="rp-lit">true<\/span>/);
+  assert.ok(!json.includes("<big>"), "the provider's markup is escaped");
+  assert.ok(json.includes("&lt;big&gt;"));
+
+  assert.equal(formatReply("<b>gateway timeout</b>", escape), "&lt;b&gt;gateway timeout&lt;/b&gt;");
+  assert.equal(formatReply("", escape), "");
+
+  const text = reportText(
+    { provider: "Groq", model: "m", status: 413, code: "too_large", summary: "Too big", detail: "{}", when: "now" },
+    (key) => key
+  );
+  assert.match(text, /^SlydeCode copilot report/);
+  assert.match(text, /copilot\.report\.status: HTTP 413/);
+  assert.match(text, /Too big/);
+});
+
+test("the reasoning viewport shows the tail of the thought on whole words", async () => {
+  const { recentThinking } = await import("../../ui/static/copilot-work.js");
+  assert.equal(recentThinking(""), "");
+  assert.equal(recentThinking("  short   thought  "), "short thought");
+  const long = Array.from({ length: 200 }, (_, index) => `word${index}`).join(" ");
+  const tail = recentThinking(long, 120);
+  assert.ok(tail.startsWith("…"), "marks that earlier text rolled out");
+  assert.ok(tail.endsWith("word199"), "ends with the newest words");
+  assert.ok(tail.length <= 125);
+  assert.match(tail.slice(1), /^word\d+/, "never starts mid-word");
+});

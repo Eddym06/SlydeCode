@@ -290,6 +290,39 @@ pub fn definitions() -> Vec<ToolDef> {
     ]
 }
 
+/// The same tools with the per-field descriptions removed, for providers whose
+/// plan or context cannot take the full schemas. The model still sees every tool,
+/// its purpose and the shape of its arguments.
+pub fn openai_tools_lean() -> Value {
+    fn strip(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::Object(properties)) = map.get_mut("properties") {
+                    for property in properties.values_mut() {
+                        if let Value::Object(fields) = property {
+                            fields.remove("description");
+                        }
+                    }
+                }
+                for child in map.values_mut() {
+                    strip(child);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut tools = openai_tools();
+    if let Value::Array(items) = &mut tools {
+        for item in items {
+            if let Some(parameters) = item.pointer_mut("/function/parameters") {
+                strip(parameters);
+            }
+        }
+    }
+    tools
+}
+
 pub fn openai_tools() -> Value {
     Value::Array(
         definitions()

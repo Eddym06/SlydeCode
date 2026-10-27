@@ -59,6 +59,15 @@ fn openai_model(item: &Value) -> Option<ModelInfo> {
     let name = string_at(item, "name")
         .or_else(|| string_at(item, "display_name"))
         .unwrap_or_else(|| id.clone());
+    // OpenRouter lists the request fields each model honors. A model without
+    // `tools` cannot drive the copilot, and choosing it only produces a rejection.
+    if let Some(supported) = item.get("supported_parameters").and_then(Value::as_array)
+        && !supported
+            .iter()
+            .any(|param| param.as_str() == Some("tools"))
+    {
+        return None;
+    }
     let free = is_free_model(item, &id);
     let context_window = number_at(item, "context_window")
         .or_else(|| number_at(item, "context_length"))
@@ -206,6 +215,16 @@ fn is_non_chat(id: &str) -> bool {
         "gpt-image",
         "-image",
         "sora",
+        // Groq and NVIDIA list safety, speech and retrieval models next to chat ones.
+        "guard",
+        "playai",
+        "orpheus",
+        "compound",
+        "retriever",
+        "nvclip",
+        "reward",
+        "safety",
+        "parse",
     ];
     let lower = id.to_ascii_lowercase();
     BLOCKED.iter().any(|needle| lower.contains(needle))

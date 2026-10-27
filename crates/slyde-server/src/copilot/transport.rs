@@ -29,6 +29,9 @@ pub struct StreamRequest<'a> {
     /// Where finished slides of a streaming `build_deck`/`write_slides` call go,
     /// so they can be applied while the model is still writing the rest.
     pub partial: Option<&'a UnboundedSender<PartialSlides>>,
+    /// Send the short prompt's plainer tool schemas: for providers whose plan or
+    /// context cannot take the full ones.
+    pub lean: bool,
 }
 
 /// Slides that closed inside a tool call that is still streaming.
@@ -119,7 +122,7 @@ async fn post(
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
-        return Err(CopilotError::from_status(status, &body));
+        return Err(CopilotError::from_status_redacting(status, &body, key));
     }
     Ok(response)
 }
@@ -137,16 +140,27 @@ async fn stream_openai(
         turns,
         cancel,
         partial: _,
+        lean,
     } = *request;
-    let body = json!({
+    // `tool_choice` is left out: "auto" is the default whenever tools are sent, and
+    // several OpenAI-compatible servers (vLLM-backed ones among them) refuse the field.
+    let mut body = json!({
         "model": model,
         "messages": openai_messages(system, turns),
-        "tools": tools::openai_tools(),
-        "tool_choice": "auto",
+        "tools": if lean { tools::openai_tools_lean() } else { tools::openai_tools() },
         "stream": true,
         "stream_options": { "include_usage": true }
     });
-    let response = post(client, provider, key, &body).await?;
+    let response = match post(client, provider, key, &body).await {
+        // Not every compatible server knows `stream_options`; usage is then estimated.
+        Err(error) if error.rejects_param("stream_options") => {
+            if let Some(fields) = body.as_object_mut() {
+                fields.remove("stream_options");
+            }
+            post(client, provider, key, &body).await?
+        }
+        other => other?,
+    };
     let mut state = OpenAiAccum::default();
     let mut usage = TokenUsage::default();
     let mut progress = ProgressGate::default();
@@ -216,6 +230,7 @@ async fn stream_anthropic(
         turns,
         cancel,
         partial: _,
+        lean: _,
     } = *request;
     let body = json!({
         "model": model,
@@ -417,9 +432,11 @@ fn openai_messages(system: &str, turns: &[Turn]) -> Vec<Value> {
                 }
             }
             Turn::Assistant { text, tool_calls } => {
+                // An empty string, not null: several compatible servers reject a null
+                // content even when the message carries tool calls.
                 let mut message = json!({
                     "role": "assistant",
-                    "content": if text.is_empty() { Value::Null } else { Value::String(text.clone()) }
+                    "content": text
                 });
                 if !tool_calls.is_empty() {
                     message["tool_calls"] = Value::Array(
@@ -901,6 +918,21 @@ mod tests {
                 .unwrap()
                 .starts_with("data:image/png;base64,")
         );
+    }
+
+    #[test]
+    fn an_assistant_turn_without_text_carries_empty_content_never_null() {
+        let turns = vec![Turn::Assistant {
+            text: String::new(),
+            tool_calls: vec![ToolCall {
+                id: "c1".into(),
+                name: "read_deck".into(),
+                arguments: json!({}),
+            }],
+        }];
+        let messages = openai_messages("system", &turns);
+        assert_eq!(messages[1]["content"], "");
+        assert!(messages[1]["tool_calls"].is_array());
     }
 
     #[test]

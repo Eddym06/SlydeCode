@@ -44,6 +44,12 @@ pub enum ChatEvent {
     Error {
         code: String,
         message: String,
+        /// What the provider replied, redacted and bounded; opens the report.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+        /// The HTTP status the provider answered with.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
     },
 }
 

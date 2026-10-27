@@ -141,7 +141,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
 
 pub fn find(id: &str) -> Option<&'static ProviderDef> {
     #[cfg(test)]
-    if let Some(mock) = tests_support::MOCK.get().filter(|mock| mock.id == id) {
+    if let Some(mock) = tests_support::lookup(id) {
         return Some(mock);
     }
     PROVIDERS.iter().find(|provider| provider.id == id)
@@ -216,14 +216,27 @@ mod tests {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use super::*;
-    use std::sync::OnceLock;
+    use std::sync::Mutex;
 
-    pub static MOCK: OnceLock<ProviderDef> = OnceLock::new();
+    static MOCKS: Mutex<Vec<&'static ProviderDef>> = Mutex::new(Vec::new());
 
+    pub fn lookup(id: &str) -> Option<&'static ProviderDef> {
+        let mocks = MOCKS.lock().ok()?;
+        mocks.iter().copied().find(|mock| mock.id == id)
+    }
+
+    /// Registers the scripted provider `mock`.
     pub fn register_mock(base: &str) {
+        register_mock_as("mock", base);
+    }
+
+    /// Registers a scripted provider under its own id, so tests that script
+    /// different behaviors can run side by side.
+    pub fn register_mock_as(id: &str, base: &str) {
         let base: &'static str = Box::leak(base.to_string().into_boxed_str());
-        let _ = MOCK.set(ProviderDef {
-            id: "mock",
+        let id: &'static str = Box::leak(id.to_string().into_boxed_str());
+        let def: &'static ProviderDef = Box::leak(Box::new(ProviderDef {
+            id,
             name: "Mock",
             company: "Mock",
             icon: "mock",
@@ -233,6 +246,10 @@ pub(crate) mod tests_support {
             chat_base: base,
             models_url: base,
             model_shape: ModelShape::OpenAi,
-        });
+        }));
+        if let Ok(mut mocks) = MOCKS.lock() {
+            mocks.retain(|mock| mock.id != id);
+            mocks.push(def);
+        }
     }
 }

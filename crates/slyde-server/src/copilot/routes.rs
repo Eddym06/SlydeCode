@@ -192,7 +192,11 @@ pub async fn api_fetch_url(
 }
 
 fn error_response(error: CopilotError) -> Response {
-    let status = match error {
+    let status = match error.kind() {
+        CopilotError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+        CopilotError::BadToolCall(_) | CopilotError::ModelUnavailable(_) => StatusCode::BAD_GATEWAY,
+        CopilotError::NoCredits => StatusCode::PAYMENT_REQUIRED,
+        CopilotError::Detailed { .. } => StatusCode::BAD_GATEWAY,
         CopilotError::MissingKey => StatusCode::BAD_REQUEST,
         CopilotError::InvalidKey => StatusCode::UNAUTHORIZED,
         CopilotError::RateLimited => StatusCode::TOO_MANY_REQUESTS,

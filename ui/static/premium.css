@@ -576,8 +576,8 @@
 
 /* Send and stop: one round button, two honest states. */
 .copilot-panel .send-btn {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   color: #fff;
   background: var(--gradient-action);
@@ -1104,5 +1104,329 @@
 
   .copilot-panel .msg-tools {
     transition: none;
+  }
+}
+
+/* ---------- stop: larger, and red ---------- */
+
+.copilot-panel .send-btn.is-stopping {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.copilot-panel .send-btn.is-stopping:hover {
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface));
+}
+
+.copilot-panel .send-btn.is-stopping .stop-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.copilot-panel .send-btn.is-stopping::after {
+  border-top-color: var(--danger);
+  border-right-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+/* ---------- the reasoning rolls upward ---------- */
+
+/* A few lines tall: new words arrive at the bottom and the older lines roll up
+   and fade out, instead of one line cut off at the side. */
+.copilot-panel .work-line.is-thought {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 4.7em;
+  white-space: normal;
+  overflow: hidden;
+  font-style: normal;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-muted);
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  -webkit-box-orient: unset;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 46%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 46%);
+}
+
+/* The full reasoning keeps its own vertical scroll, wrapped, with a soft top edge. */
+.copilot-panel .thinking-stream {
+  overflow-x: hidden;
+  word-break: break-word;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+/* ---------- retry and report ---------- */
+
+.copilot-panel .msg-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.copilot-panel .msg-retry,
+.copilot-panel .msg-report {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .msg-retry:hover,
+.copilot-panel .msg-report:hover {
+  background: var(--surface-sunken);
+}
+
+.copilot-panel .msg-retry:active,
+.copilot-panel .msg-report:active {
+  transform: scale(0.97);
+}
+
+.copilot-panel .msg-report {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+}
+
+.copilot-panel .msg-report:hover {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+}
+
+/* ---------- the report ---------- */
+
+.report-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  align-items: end;
+  padding: 10px;
+}
+
+.report-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+  backdrop-filter: blur(3px);
+  animation: report-fade 160ms var(--ease-out) both;
+}
+
+.report {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  max-height: 100%;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  overflow: auto;
+  animation: report-rise 220ms var(--ease-out) both;
+}
+
+@keyframes report-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes report-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+}
+
+.report-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.report-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+}
+
+.report-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.report-title h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.report-title p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+
+.report-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink-subtle);
+}
+
+.report-close:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.report-meta > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-sunken);
+}
+
+.report-meta dt {
+  font-size: 11px;
+  color: var(--ink-subtle);
+}
+
+.report-meta dd {
+  margin: 0;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.report-hint {
+  margin: 0;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.report-code {
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.report-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.report-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.report-copy:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.report-copy[data-state="done"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+
+.report-copy[data-state="failed"] {
+  color: var(--danger);
+}
+
+.report-code pre {
+  margin: 0;
+  max-height: 260px;
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ink);
+}
+
+.rp-key {
+  color: var(--brand);
+}
+
+.rp-str {
+  color: var(--success);
+}
+
+.rp-num {
+  color: var(--warning);
+}
+
+.rp-lit {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .report,
+  .report-backdrop {
+    animation: none;
   }
 }

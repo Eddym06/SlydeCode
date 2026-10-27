@@ -107,6 +107,8 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
             let _ = tx.send(ChatEvent::Error {
                 code: error.code().to_string(),
                 message: error.public_message(),
+                detail: error.detail().map(str::to_string),
+                status: error.status(),
             });
             state.broadcast(activity(AgentPhase::Error));
         }
@@ -149,6 +151,9 @@ async fn run_inner(
     let mut all_reported = true;
     let mut last_signature: Option<String> = None;
     let mut repeats: u32 = 0;
+    // Set when a provider says the request is too big: the next attempt carries a
+    // shorter prompt and plainer tool schemas.
+    let mut lean = false;
 
     for round in 0..MAX_TOOL_ROUNDS {
         if tx.is_closed() || crate::copilot::CopilotState::was_cancelled(&cancel) {
@@ -164,12 +169,21 @@ async fn run_inner(
             .selected_slide_id
             .as_deref()
             .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
-        let system = prompt::system_prompt(
-            deck,
-            selected,
-            request.selected_element_id.as_deref(),
-            language,
-        );
+        let system = if lean {
+            prompt::system_prompt_lean(
+                deck,
+                selected,
+                request.selected_element_id.as_deref(),
+                language,
+            )
+        } else {
+            prompt::system_prompt(
+                deck,
+                selected,
+                request.selected_element_id.as_deref(),
+                language,
+            )
+        };
         compact_history(&mut turns);
         input_chars += (system.len() + turns.iter().map(Turn::chars).sum::<usize>()) as u64;
         // Slides the model finishes while it is still writing the call are
@@ -204,12 +218,23 @@ async fn run_inner(
                 turns: &turns,
                 cancel: &cancel,
                 partial: Some(&partial_tx),
+                lean,
             },
             tx,
         )
         .await;
         drop(partial_tx);
         let (applied_tool, applied) = applier.await.unwrap_or_default();
+        if let Err(error) = &streamed
+            && error.is_too_large()
+            && !lean
+        {
+            tracing::info!(
+                "provider refused the request as too large; retrying with the lean prompt"
+            );
+            lean = true;
+            continue;
+        }
         let (assistant, round_usage) = streamed?;
         let mut applied =
             Some(applied).filter(|applied| applied.created || !applied.slides.is_empty());
@@ -704,5 +729,130 @@ mod tests {
             .collect();
         let error = build_turns(&[many]).unwrap_err();
         assert_eq!(error.code(), "invalid_request");
+    }
+
+    /// A provider that rejects what the app sends in the ways real ones do:
+    /// a size limit on the full prompt, then a field it does not know.
+    #[tokio::test]
+    async fn a_too_large_request_is_retried_lean_and_an_unknown_field_is_dropped() {
+        use axum::{
+            Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post,
+        };
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Seen(Arc<Mutex<Vec<serde_json::Value>>>);
+
+        async fn completions(
+            State(seen): State<Seen>,
+            Json(body): Json<serde_json::Value>,
+        ) -> axum::response::Response {
+            let system_len = body["messages"][0]["content"].as_str().unwrap_or("").len();
+            let has_stream_options = body.get("stream_options").is_some();
+            seen.0.lock().unwrap().push(body);
+            if system_len > 6_000 {
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    r#"{"error":{"message":"Request too large for model on tokens per minute (TPM): Limit 6000, Requested 9000"}}"#,
+                )
+                    .into_response();
+            }
+            if has_stream_options {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    r#"{"detail":"Extra inputs are not permitted: stream_options"}"#,
+                )
+                    .into_response();
+            }
+            let sse = format!(
+                "data: {}\n\ndata: [DONE]\n\n",
+                json!({ "choices": [{ "delta": { "content": "Done." } }] })
+            );
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(axum::body::Body::from(sse))
+                .unwrap()
+        }
+
+        let seen = Seen::default();
+        let app = Router::new()
+            .route("/chat/completions", post(completions))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        catalog::tests_support::register_mock_as("mock-strict", &base);
+
+        let state = AppState::new(
+            slyde_core::PresentationState::new(
+                "Deck",
+                slyde_core::Theme::studio(),
+                slyde_core::AspectRatio::R16x9,
+            ),
+            "tok".into(),
+            std::path::PathBuf::from("ui"),
+            vec![],
+            "http://127.0.0.1:1".into(),
+        );
+        state
+            .copilot
+            .config
+            .write()
+            .await
+            .keys
+            .insert("mock-strict".into(), "k".into());
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        run(
+            state.clone(),
+            ChatRequest {
+                provider: "mock-strict".into(),
+                model: "m".into(),
+                messages: vec![message("user", "Say hello")],
+                selected_slide_id: None,
+                selected_element_id: None,
+                language: Some("en".into()),
+                request_id: None,
+            },
+            tx,
+        )
+        .await;
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        assert!(
+            events.iter().any(|event| matches!(event, ChatEvent::Done)),
+            "the turn recovers on its own: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ChatEvent::Error { .. })),
+            "the user never sees the two refusals: {events:?}"
+        );
+
+        let seen = seen.0.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            3,
+            "full, then lean with stream_options, then lean without"
+        );
+        let system =
+            |body: &serde_json::Value| body["messages"][0]["content"].as_str().unwrap().len();
+        assert!(system(&seen[0]) > 6_000);
+        assert!(
+            system(&seen[1]) < 6_000,
+            "the retry carries the lean prompt"
+        );
+        assert!(seen[1].get("stream_options").is_some());
+        assert!(
+            seen[2].get("stream_options").is_none(),
+            "the unknown field is dropped"
+        );
+        assert!(
+            seen[2].get("tool_choice").is_none(),
+            "tool_choice is never sent"
+        );
     }
 }

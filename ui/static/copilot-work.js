@@ -40,6 +40,22 @@ export function lastThought(thinking, limit = 92) {
 }
 
 /**
+ * The tail of the reasoning as plain, wrapped text: what the model is working on
+ * right now. The card shows it a few lines tall and lets it roll upward as it grows.
+ */
+export function recentThinking(thinking, limit = 360) {
+  const text = String(thinking || "")
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= limit) return text;
+  const tail = text.slice(-limit);
+  // Start on a word boundary so the first visible line is not cut mid-word.
+  const space = tail.indexOf(" ");
+  return `…${(space >= 0 && space < 40 ? tail.slice(space + 1) : tail).trimStart()}`;
+}
+
+/**
  * The phase of a streaming assistant message.
  * @param {{text?: string, thinking?: string, tools?: {name: string, status: string, progress?: {items: number, chars: number}}[]}} message
  */

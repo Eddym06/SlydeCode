@@ -199,6 +199,60 @@ Rules:
     )
 }
 
+/// A short prompt for providers whose plan or context cannot take the full one.
+///
+/// It keeps what decides whether a slide works at all (the canvas contract, the
+/// theme variables, the tools and how to use them) and drops the long design
+/// essay, so the deck is plainer but still valid. The caller falls back to it
+/// only after a provider refused the full prompt as too large.
+pub fn system_prompt_lean(
+    deck: &Presentation,
+    selected_id: Option<&str>,
+    selected_element: Option<&str>,
+    language: &str,
+) -> String {
+    let language = if language == "es" {
+        "Spanish"
+    } else {
+        "English"
+    };
+    let summary = deck_summary(deck, selected_id);
+    let kinds = slyde_core::ANIMATION_KIND_IDS.join("`, `");
+    let selection = match selected_element.filter(|id| !id.trim().is_empty()) {
+        Some(id) => format!("Selected element: `{id}`. Prefer `mutate_element` for this request."),
+        None => "No element is selected.".to_string(),
+    };
+    format!(
+        r#"You design presentation slides as real HTML and CSS. Reply in {language}, in 1-3 short
+sentences, and never paste code into the chat. Change the deck only through the tools.
+
+Canvas: each slide is the inner HTML (plus an optional <style>) of a {aspect} stage. No doctype,
+html, head, body or script; no external URLs, web fonts or network requests; inline SVG is fine.
+Use `var(--slyde-bg)`, `var(--slyde-fg)`, `var(--slyde-muted)`, `var(--slyde-accent)` and
+`var(--slyde-font)` for every theme color and the font, never literal theme colors.
+
+Design: one idea per slide, one focal point, large type with a clear hierarchy, generous space,
+text that fits the canvas and stays legible. Concrete copy, no lorem ipsum. A deck is a story of
+5-9 slides unless asked otherwise. Animation kinds: `{kinds}`.
+
+Tools: `build_deck` creates a deck with all its slides in ONE call; `write_slides` changes several
+slides in one call; `upsert_slide` or `mutate_element` for a single change; `set_theme` and
+`set_title` for the palette and name. Every round resends the conversation, so be economical, and
+stop calling tools once the work is done.
+
+Deck:
+{summary}
+
+{selection}
+"#,
+        language = language,
+        aspect = deck.aspect_ratio.as_str(),
+        kinds = kinds,
+        summary = summary,
+        selection = selection,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +297,78 @@ mod tests {
         for theme in slyde_core::THEME_IDS {
             assert!(prompt.contains(theme), "prompt is missing theme {theme}");
         }
+    }
+
+    /// Every request carries the system prompt and the tool schemas before the
+    /// user says a word. Free plans cap tokens per minute and some models only
+    /// have a few thousand tokens of context, so this overhead is a budget.
+    #[test]
+    fn the_fixed_overhead_is_bounded_and_the_lean_one_is_much_smaller() {
+        let deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
+        let full = system_prompt(&deck, None, None, "en");
+        let lean = system_prompt_lean(&deck, None, None, "en");
+        let full_tools = crate::copilot::tools::openai_tools().to_string();
+        let lean_tools = crate::copilot::tools::openai_tools_lean().to_string();
+        // About four characters per token.
+        let full_tokens = (full.len() + full_tools.len()) / 4;
+        let lean_tokens = (lean.len() + lean_tools.len()) / 4;
+        assert!(
+            full_tokens < 6_500,
+            "full overhead grew to ~{full_tokens} tokens"
+        );
+        assert!(
+            lean_tokens < 2_800,
+            "lean overhead is ~{lean_tokens} tokens"
+        );
+        assert!(
+            lean_tokens * 2 < full_tokens,
+            "lean {lean_tokens} vs full {full_tokens}"
+        );
+    }
+
+    #[test]
+    fn the_lean_prompt_keeps_the_contract_the_model_cannot_work_without() {
+        let mut deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
+        deck.slides
+            .push(Slide::new("sld_a".into(), "<h1>Hello</h1>".into()));
+        let lean = system_prompt_lean(&deck, Some("sld_a"), None, "es");
+        for needle in [
+            "Spanish",
+            "16:9",
+            "sld_a",
+            "var(--slyde-bg)",
+            "build_deck",
+            "mutate_element",
+        ] {
+            assert!(lean.contains(needle), "lean prompt is missing {needle}");
+        }
+        for kind in slyde_core::ANIMATION_KIND_IDS {
+            assert!(lean.contains(kind), "lean prompt is missing kind {kind}");
+        }
+    }
+
+    #[test]
+    fn lean_tool_schemas_keep_every_tool_and_its_required_fields() {
+        let full = crate::copilot::tools::openai_tools();
+        let lean = crate::copilot::tools::openai_tools_lean();
+        let names = |tools: &serde_json::Value| -> Vec<String> {
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(names(&full), names(&lean));
+        let build = |tools: &serde_json::Value| {
+            tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tool| tool["function"]["name"] == "upsert_slide")
+                .unwrap()["function"]["parameters"]["required"]
+                .clone()
+        };
+        assert_eq!(build(&full), build(&lean), "required fields survive");
     }
 }
