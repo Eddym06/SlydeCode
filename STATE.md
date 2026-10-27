@@ -50,6 +50,12 @@ Started from an unrelated working directory with an isolated `SLYDE_DATA_DIR`, i
 (`/`, `/present`, 41 under `/static`, the fonts) byte-identical to the repo, and the full UI suite
 (90 tests) passed with `SLYDE_BIN` pointing at it. Embedding the UI in the binary is still open.
 
+**Double-click bug (found 2026-10-27):** `slyde.exe` with no arguments panicked at `&args[1..]`
+on an empty list, so the release binary never opened when launched like a user would. Every test
+passed `app` explicitly, which is why nothing caught it. `split_command` now treats a bare launch
+and a leading option (`slyde --no-open`) as `app`, and has unit tests. Re-checked by launching
+the release binary with no arguments: the server stays up, answers 200, and Chrome opens the app.
+
 Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
 All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
 

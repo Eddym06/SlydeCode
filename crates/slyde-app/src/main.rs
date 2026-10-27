@@ -32,7 +32,7 @@ fn main() -> ExitCode {
     init_tracing();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let command = args.first().map(String::as_str).unwrap_or("app");
+    let (command, rest) = split_command(&args);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -47,11 +47,11 @@ fn main() -> ExitCode {
     };
 
     let result = match command {
-        "app" | "studio" => runtime.block_on(run_app(&args[1..])),
+        "app" | "studio" => runtime.block_on(run_app(rest)),
         "mcp" => {
             runtime.block_on(async { slyde_mcp::run_stdio().await.map_err(|err| err.to_string()) })
         }
-        "export" => runtime.block_on(export_cli::run(&args[1..])),
+        "export" => runtime.block_on(export_cli::run(rest)),
         "version" | "--version" | "-V" => {
             println!("slyde {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -69,6 +69,20 @@ fn main() -> ExitCode {
             eprintln!("slyde: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Splits the command line into the command and its own arguments.
+///
+/// A bare launch (double-clicking `slyde.exe`) has no arguments, and
+/// `slyde --no-open` starts with an option: both mean "open the studio", as the
+/// help text promises. Only `--version`/`-V` and `--help`/`-h` stay commands.
+fn split_command(args: &[String]) -> (&str, &[String]) {
+    match args.first().map(String::as_str) {
+        None => ("app", args),
+        Some(first @ ("--version" | "-V" | "--help" | "-h")) => (first, &args[1..]),
+        Some(first) if first.starts_with('-') => ("app", args),
+        Some(first) => (first, &args[1..]),
     }
 }
 
@@ -300,4 +314,45 @@ pub fn runtime_info_for(port: u16, sandbox_port: u16, token: String) -> RuntimeI
 /// Reserved for the `--port` flow: verifies a port is free before starting.
 pub async fn port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).await.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_command;
+
+    fn words(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn a_bare_launch_opens_the_studio() {
+        let args = words(&[]);
+        assert_eq!(split_command(&args), ("app", &args[..]));
+    }
+
+    #[test]
+    fn an_option_without_a_command_opens_the_studio_with_that_option() {
+        let args = words(&["--no-open", "--port", "0"]);
+        let (command, rest) = split_command(&args);
+        assert_eq!(command, "app");
+        assert_eq!(rest, &args[..]);
+    }
+
+    #[test]
+    fn an_explicit_command_keeps_its_own_arguments() {
+        let args = words(&["export", "--format", "pdf"]);
+        let (command, rest) = split_command(&args);
+        assert_eq!(command, "export");
+        assert_eq!(rest, &args[1..]);
+        let args = words(&["app", "--present"]);
+        assert_eq!(split_command(&args), ("app", &args[1..]));
+    }
+
+    #[test]
+    fn version_and_help_flags_stay_commands() {
+        for flag in ["--version", "-V", "--help", "-h"] {
+            let args = words(&[flag]);
+            assert_eq!(split_command(&args).0, flag);
+        }
+    }
 }
