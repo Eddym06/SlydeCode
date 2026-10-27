@@ -52,6 +52,37 @@ edges and centres of the other blocks; holding Alt turns snapping off. A block c
 drags a handle with real mouse events and checks that the edge lands exactly on the stage centre
 and that the minimum size holds. Not done: aspect-ratio lock (Shift) and rotation.
 
+### Studio and copilot polish pass (2026-10-27)
+
+Driven by a review of the running app, with the design skills found on this machine
+(`frontend-design`, `ui-ux-pro-max`, `senior-frontend`) as the checklist.
+
+- **Layer:** `ui/static/premium.css` is linked last and refines the Design | Copilot switch (taller, 14.5 px,
+  19 px icons), the provider card, the thread, the composer and its menus. Tokens only.
+- **Send / stop:** one round button, two honest states. Stop used a dark icon on a dark fill (invisible) and the
+  disabled opacity applied while streaming; it is now a brand-ringed stop square with a progress arc.
+- **Reasoning and progress:** the reasoning is an unboxed inline disclosure (shimmering "Thinking" while live);
+  the work card is the one live island, and the tool list appears only once the turn settles, as a summary.
+  Previously a card, a drawer and a list were all visible at once.
+- **Usage:** calls, input and output tokens are three quiet figures under the reply (icons, labels for screen
+  readers), not text beside the name. The reply's mark moved into its header line, away from the tool rows.
+- **User message:** hover (or focus) shows run again and edit. Run again resends the prompt and drops what
+  followed; edit puts the prompt and its files back in the composer.
+- **Attach menu** (opens upward): Documents, Images, Web link. Files can also be pasted into the composer or
+  dropped on the panel. A link goes through `POST /api/copilot/fetch-url`, which reads a page as text or an
+  image as an attachment (see MEMORY.md for what it refuses).
+- **Model menu:** provider mark, search, a scrolling list with free/context badges, and a **Configure model**
+  button that opens the full sheet. Models are cached per provider for the session.
+- **Provider marks** are the official logos (lobe-icons, MIT), not hand-drawn approximations.
+- **Palettes:** `original` replaces `terminal` (the old id still resolves to it). `set_theme` accepts a `name`
+  and a palette the copilot designs is stored as `custom` and shown with its own swatch. A theme change rewrites
+  literal colors of the outgoing theme in slide code into `var(--slyde-*)`, so slides written with hard-coded
+  colors follow later palette changes; the prompt now forbids hard-coded theme colors.
+- **Removed:** the `fade_up · .title` animation chips next to Insert. Animation steps live in the Design panel.
+- **Undo / redo:** redrawn as two matching curved arrows.
+
+Not verified: dark mode was not re-captured after the polish (tokens carry it), and macOS / Linux.
+
 ### Windowless launcher (2026-10-27)
 
 Double-clicking used to open a terminal that also *was* the server. Now two executables share the

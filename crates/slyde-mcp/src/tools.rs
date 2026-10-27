@@ -25,7 +25,7 @@ pub fn definitions() -> Value {
                     "theme": {
                         "type": "string",
                         "enum": slyde_core::THEME_IDS,
-                        "description": "Visual theme id. studio = warm dark, paper = warm light, night = deep indigo, terminal = dark mono, academic = light serif, pitch = deep blue."
+                        "description": "Visual theme id. studio = warm dark, paper = warm light, night = deep indigo, original = soft lavender light, academic = light serif, pitch = deep blue."
                     },
                     "aspect_ratio": {
                         "type": "string",

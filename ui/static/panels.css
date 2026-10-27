@@ -2667,7 +2667,7 @@
   transform: rotate(135deg);
 }
 
-.stage-bar .chips {
+.stage-bar .stage-spacer {
   flex: 1;
   min-width: 0;
 }

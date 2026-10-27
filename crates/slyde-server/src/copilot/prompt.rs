@@ -72,7 +72,15 @@ deck aspect ratio and scaled to the viewport. You write only the inner HTML and 
 - Inline SVG is welcome for diagrams, icons and data marks.
 - The deck theme exposes `--slyde-bg`, `--slyde-fg`, `--slyde-muted`, `--slyde-accent` and
   `--slyde-font`. Use these variables first; they are what makes a slide belong to the deck.
+- Never write the theme's own colors as literals. Use `var(--slyde-bg)`, `var(--slyde-fg)`,
+  `var(--slyde-muted)` and `var(--slyde-accent)` everywhere, and tints through
+  `color-mix(in srgb, var(--slyde-accent) 18%, transparent)`. A slide with a hard-coded color
+  ignores every palette change the user makes afterwards.
 - The available theme ids are `{themes}`. The existing deck theme is in the context below.
+- Design the palette yourself when the topic has a mood (a coffee brand, a legal brief, a
+  night-sky talk): call `set_theme` with your own `background`, `foreground`, `muted` and
+  `accent`, give it a short `name`, and check the contrast. Reach for a preset only when it
+  genuinely fits.
 - The slide root should fill the stage: `position:absolute; inset:0;` with internal padding.
   The canvas is {aspect}. Do not rely on the browser window size.
 - Keep every piece of text inside the canvas. Large type must wrap deliberately; never use
@@ -149,7 +157,7 @@ You can only change the deck through the provided tools.
 - `mutate_element` — apply surgical changes (text, styles, inner HTML) to a specific element by ID (for example: mutate_element with element_id="title-1"). Prefer this over replacing the entire slide whenever the user asks for a local modification.
 - `set_title` — rename the deck. Call it whenever the deck is still "Untitled presentation" or the
   title no longer matches the content; it never touches the slides.
-- `set_theme` — switch the palette or tune its colors and font.
+- `set_theme` — switch to a preset, or design a palette (background, foreground, muted, accent, name) and set its font.
 - `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`.
 
 Rules:

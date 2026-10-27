@@ -225,6 +225,14 @@ impl PresentationState {
     pub fn set_theme(&mut self, theme: Theme) -> Result<(), CoreError> {
         theme.validate()?;
         let mut next = self.presentation().clone();
+        // Slides that hard-coded the outgoing palette would keep its colors; make
+        // them follow the theme variables so this change (and the next) reaches them.
+        let previous = next.theme.clone();
+        if previous != theme {
+            for slide in &mut next.slides {
+                slide.code = previous.adopt_variables(&slide.code);
+            }
+        }
         next.theme = theme;
         self.commit("theme", next);
         Ok(())
@@ -2379,5 +2387,52 @@ mod tests {
             s.apply_template("X", Theme::studio(), AspectRatio::R16x9, vec![])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn changing_the_theme_makes_hard_coded_palette_colors_follow_the_new_theme() {
+        let mut s = PresentationState::new("T", Theme::studio(), AspectRatio::R16x9);
+        // Studio's own background and accent, written as literals (any case).
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            "<div style=\"background:#17161a;color:#FF6B4A;border:1px solid #123456\">x</div>"
+                .into(),
+            TemplateType::Custom,
+            vec![],
+        )
+        .unwrap();
+
+        s.set_theme(Theme::paper()).unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(code.contains("background:var(--slyde-bg)"), "{code}");
+        assert!(code.contains("color:var(--slyde-accent)"), "{code}");
+        assert!(
+            code.contains("#123456"),
+            "an unrelated color is left alone: {code}"
+        );
+
+        // One undo restores both the theme and the slide code.
+        s.undo().unwrap();
+        assert_eq!(s.presentation().theme.id, "studio");
+        assert!(s.presentation().slides[0].code.contains("#17161a"));
+    }
+
+    #[test]
+    fn setting_the_same_theme_does_not_rewrite_slides() {
+        let mut s = PresentationState::new("T", Theme::studio(), AspectRatio::R16x9);
+        let code = "<p style=\"color:#FF6B4A\">x</p>";
+        s.upsert_slide(
+            0,
+            Some("a".into()),
+            code.into(),
+            TemplateType::Custom,
+            vec![],
+        )
+        .unwrap();
+        // The store adds element handles, so compare against what it kept.
+        let stored = s.presentation().slides[0].code.clone();
+        s.set_theme(Theme::studio()).unwrap();
+        assert_eq!(s.presentation().slides[0].code, stored);
     }
 }

@@ -1,0 +1,1108 @@
+/* Studio polish pass: the Design | Copilot switch, the copilot thread, the
+   composer and its two menus. Linked after panels.css and present.css, so these
+   rules refine what those sheets declare. Tokens only: no raw colors.
+
+   Design intent: quiet surfaces, one accent, and motion that only answers an
+   action or reports real progress. The brand gradient appears on the one
+   primary control (send) and on the live progress, nowhere else. */
+
+/* ---------- the Design | Copilot switch ---------- */
+
+.panel-tabs.panel-switch {
+  margin: 14px 14px 6px;
+  padding: 4px;
+  border-radius: 16px;
+}
+
+.panel-tabs.panel-switch .switch-thumb {
+  border-radius: 12px;
+}
+
+.panel-tabs.panel-switch .panel-tab {
+  height: 40px;
+  gap: 9px;
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.panel-tabs.panel-switch .panel-tab .switch-icon,
+.panel-tabs.panel-switch .spark-glyph svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* ---------- undo and redo ---------- */
+
+#undo svg,
+#redo svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 1.8;
+}
+
+/* ---------- the connected provider ---------- */
+
+.copilot-panel .provider-trigger {
+  min-height: 56px;
+  gap: 12px;
+}
+
+.copilot-panel .provider-avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.copilot-panel .provider-avatar svg {
+  width: 21px;
+  height: 21px;
+}
+
+.copilot-panel .provider-name {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.copilot-panel .provider-model {
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+/* ---------- the thread ---------- */
+
+.copilot-panel .msg {
+  gap: 0;
+}
+
+.copilot-panel .msg-text {
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+/* The user's message: a bubble on the right, its actions appear on hover. */
+.copilot-panel .msg-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.copilot-panel .msg-user .msg-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 92%;
+  min-width: 0;
+}
+
+.copilot-panel .msg-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.copilot-panel .msg-tools {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transform: translateX(4px);
+  transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .msg-user:hover .msg-tools,
+.copilot-panel .msg-user:focus-within .msg-tools {
+  opacity: 1;
+  transform: none;
+}
+
+@media (hover: none) {
+  .copilot-panel .msg-tools {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.copilot-panel .msg-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-subtle);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .msg-tool:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.copilot-panel .msg-tool:active {
+  transform: scale(0.92);
+}
+
+/* The reply: the mark sits in the header line, with air before whatever follows. */
+.copilot-panel .msg-assistant {
+  display: block;
+}
+
+.copilot-panel .msg-assistant .msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.copilot-panel .msg-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--gradient-signature);
+  color: #fff;
+}
+
+.copilot-panel .msg-mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+.copilot-panel .msg-who {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.copilot-panel .msg-assistant .msg-body {
+  max-width: none;
+  width: 100%;
+}
+
+.copilot-panel .copilot-thread {
+  padding-top: 14px;
+}
+
+.copilot-panel .msg-assistant .tool-list,
+.copilot-panel .msg-assistant .work-card,
+.copilot-panel .msg-assistant .msg-actions {
+  margin-top: 14px;
+}
+
+/* Calls and tokens: three small figures under the reply, quiet until looked at. */
+.copilot-panel .msg-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--ink-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.copilot-panel .usage-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+
+.copilot-panel .usage-item svg {
+  flex: none;
+  opacity: 0.85;
+}
+
+.copilot-panel .msg-usage:hover .usage-item {
+  color: var(--ink-muted);
+}
+
+/* ---------- the reasoning: an inline disclosure, not a card ---------- */
+
+.copilot-panel .msg-thinking {
+  margin: 0 0 6px;
+}
+
+.copilot-panel .thinking-drawer {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.copilot-panel .thinking-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  min-height: 28px;
+  padding: 3px 8px 3px 4px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 13px;
+  list-style: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .thinking-header::-webkit-details-marker {
+  display: none;
+}
+
+.copilot-panel .thinking-header:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.copilot-panel .thinking-spark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  background: none;
+  color: var(--brand);
+}
+
+.copilot-panel .thinking-spark svg {
+  width: 15px;
+  height: 15px;
+}
+
+.copilot-panel .thinking-title {
+  font-weight: 550;
+}
+
+/* The badge is plain text now ("reasoning" / "done"); live, it shimmers. */
+.copilot-panel .thinking-badge {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+.copilot-panel .thinking-badge.is-live {
+  background: linear-gradient(90deg, var(--ink-subtle) 30%, var(--brand) 50%, var(--ink-subtle) 70%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: think-shimmer 1.8s linear infinite;
+}
+
+@keyframes think-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+.copilot-panel .thinking-arrow {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-subtle);
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.copilot-panel .thinking-drawer[open] .thinking-arrow {
+  transform: rotate(180deg);
+}
+
+.copilot-panel .thinking-expand {
+  opacity: 0;
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-subtle);
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .thinking-header:hover .thinking-expand,
+.copilot-panel .thinking-drawer[open] .thinking-expand,
+.copilot-panel .thinking-expand:focus-visible {
+  opacity: 1;
+}
+
+.copilot-panel .thinking-body {
+  margin: 4px 0 6px 11px;
+  padding: 2px 0 2px 14px;
+  border: 0;
+  border-left: 2px solid var(--border-strong);
+  background: none;
+}
+
+.copilot-panel .thinking-stream {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  overscroll-behavior: contain;
+}
+
+/* ---------- the live progress island ---------- */
+
+.copilot-panel .work-card {
+  padding: 14px 16px 15px;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--border));
+  border-radius: 16px;
+  background: linear-gradient(
+    180deg,
+    var(--surface),
+    color-mix(in srgb, var(--brand) 5%, var(--surface))
+  );
+  box-shadow: var(--shadow-1), 0 12px 32px -22px color-mix(in srgb, var(--brand) 60%, transparent);
+}
+
+.copilot-panel .work-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.copilot-panel .work-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--gradient-signature);
+  color: #fff;
+}
+
+.copilot-panel .work-orb svg {
+  width: 15px;
+  height: 15px;
+}
+
+.copilot-panel .work-orb::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 12px;
+  border: 1.5px solid var(--brand);
+  opacity: 0;
+  animation: work-pulse 2.2s var(--ease-out) infinite;
+}
+
+@keyframes work-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+.copilot-panel .work-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.copilot-panel .work-time {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-subtle);
+}
+
+.copilot-panel .work-track {
+  display: flex;
+  gap: 4px;
+  height: 4px;
+  margin: 13px 0 11px;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.copilot-panel .work-seg {
+  flex: 1;
+  border-radius: 99px;
+  background: var(--border);
+}
+
+.copilot-panel .work-seg[data-state="done"] {
+  background: var(--gradient-signature);
+}
+
+.copilot-panel .work-seg[data-state="current"] {
+  background: linear-gradient(90deg, var(--border) 0%, var(--brand) 50%, var(--border) 100%);
+  background-size: 200% 100%;
+  animation: think-shimmer 1.4s linear infinite;
+}
+
+.copilot-panel .work-track[data-mode="bar"] {
+  background: var(--border);
+}
+
+.copilot-panel .work-bar {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--gradient-signature);
+  animation: work-slide 1.5s var(--ease-in-out) infinite;
+}
+
+@keyframes work-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(290%);
+  }
+}
+
+.copilot-panel .work-line {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.copilot-panel .work-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+/* ---------- the composer ---------- */
+
+.copilot-panel .composer {
+  position: relative;
+  overflow: visible;
+}
+
+.copilot-panel .composer-input {
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+.copilot-panel .composer-actions {
+  gap: 6px;
+  align-items: center;
+}
+
+.copilot-panel .composer-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+
+.copilot-panel .composer-btn svg {
+  width: 19px;
+  height: 19px;
+}
+
+.copilot-panel .composer-btn[aria-expanded="true"],
+.copilot-panel .model-chip[aria-expanded="true"] {
+  background: var(--brand-soft);
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
+}
+
+/* The model chip: the provider's mark, the model's name, a chevron. */
+.copilot-panel .model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  max-width: 190px;
+  padding: 0 10px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink-muted);
+}
+
+.copilot-panel .model-chip:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.copilot-panel .model-chip .model-chip-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.copilot-panel .model-chip .model-chip-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.copilot-panel .model-chip #copilot-model-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-panel .model-chip > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* Send and stop: one round button, two honest states. */
+.copilot-panel .send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--gradient-action);
+  box-shadow: var(--glow-brand);
+}
+
+.copilot-panel .send-btn .send-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  stroke-width: 2.2;
+}
+
+.copilot-panel .send-btn .stop-icon {
+  display: none;
+  width: 13px;
+  height: 13px;
+}
+
+.copilot-panel .send-btn:disabled:not(.is-stopping) {
+  opacity: 1;
+  background: var(--surface-sunken);
+  color: var(--ink-subtle);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transform: none;
+}
+
+.copilot-panel .send-btn.is-stopping {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--brand) 40%, var(--border));
+  opacity: 1;
+}
+
+.copilot-panel .send-btn.is-stopping:hover {
+  background: var(--brand-soft);
+}
+
+.copilot-panel .send-btn.is-stopping .send-icon {
+  display: none;
+}
+
+.copilot-panel .send-btn.is-stopping .stop-icon {
+  display: block;
+}
+
+.copilot-panel .send-btn.is-stopping::after {
+  inset: -3px;
+  border-width: 2px;
+  border-color: transparent;
+  border-top-color: var(--brand);
+  border-right-color: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+
+/* ---------- attachments in the composer and in the thread ---------- */
+
+.copilot-panel .copilot-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+
+.copilot-panel .pending-file {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 30px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.copilot-panel .pending-file > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--brand);
+}
+
+.copilot-panel .pending-file.is-image {
+  padding: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.copilot-panel .pending-file.is-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.copilot-panel .pending-file.is-image .pending-copy {
+  display: none;
+}
+
+.copilot-panel .pending-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.copilot-panel .pending-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.copilot-panel .pending-size {
+  font-size: 11.5px;
+  color: var(--ink-subtle);
+}
+
+.copilot-panel .pending-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
+  color: var(--surface);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.copilot-panel .pending-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.copilot-panel .pending-file:hover .pending-remove,
+.copilot-panel .pending-remove:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .copilot-panel .pending-remove {
+    opacity: 1;
+  }
+}
+
+.copilot-panel .msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.copilot-panel .file-thumb img {
+  display: block;
+  max-width: 180px;
+  max-height: 140px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.copilot-panel .file-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.copilot-panel .file-pill > svg {
+  flex: none;
+  color: var(--brand);
+}
+
+.copilot-panel .file-pill > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dropping a file onto the panel. */
+.copilot-panel.is-dropping::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  z-index: 70;
+  border: 2px dashed color-mix(in srgb, var(--brand) 60%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--brand) 7%, transparent);
+  pointer-events: none;
+}
+
+/* ---------- the two menus above the composer ---------- */
+
+.cmenu {
+  position: absolute;
+  left: var(--cm-left, 0);
+  bottom: calc(100% + 10px);
+  z-index: 60;
+  width: var(--cm-w, 264px);
+  max-width: 100%;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  transform-origin: 14% 100%;
+  animation: cmenu-in 170ms var(--ease-out) both;
+}
+
+.cmenu[hidden] {
+  display: none;
+}
+
+@keyframes cmenu-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.cmenu-item:hover,
+.cmenu-item:focus-visible {
+  background: var(--surface-sunken);
+}
+
+.cmenu-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.cmenu-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.cmenu-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.cmenu-hint {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-subtle);
+}
+
+.cmenu-link {
+  display: grid;
+  gap: 10px;
+  padding: 6px 6px 8px;
+}
+
+.cmenu-link-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmenu-link .cmenu-hint {
+  margin: 0;
+}
+
+.cmenu-back {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink-muted);
+}
+
+.cmenu-back:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.cmenu-link-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cmenu-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13.5px;
+}
+
+.cmenu-input:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+.cmenu-add {
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--gradient-action);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cmenu-add:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.cmenu-add[data-loading="true"] {
+  color: transparent;
+  position: relative;
+}
+
+.cmenu-add[data-loading="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+.cmenu-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+/* models */
+.cmenu[data-kind="model"] {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cmenu-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink-subtle);
+}
+
+.cmenu-search .cmenu-input {
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.cmenu-search .cmenu-input:focus-visible {
+  outline: none;
+}
+
+.cmenu-search:focus-within {
+  color: var(--brand);
+}
+
+.cmenu-models {
+  max-height: 264px;
+  overflow: auto;
+  padding: 6px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.cmenu-model {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  text-align: left;
+  font-size: 13.5px;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.cmenu-model:hover,
+.cmenu-model:focus-visible {
+  background: var(--surface-sunken);
+}
+
+.cmenu-model.is-selected {
+  background: var(--brand-soft);
+}
+
+.cmenu-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+
+.cmenu-model-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--brand);
+}
+
+.cmenu-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.cmenu-badge.is-free {
+  background: color-mix(in srgb, var(--success) 14%, var(--surface));
+  color: var(--success);
+}
+
+.cmenu-empty {
+  margin: 0;
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-subtle);
+}
+
+.cmenu-skeleton {
+  display: grid;
+  gap: 8px;
+  padding: 8px 6px;
+}
+
+.cmenu-skeleton span {
+  height: 26px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, var(--surface-sunken) 25%, var(--border) 50%, var(--surface-sunken) 75%);
+  background-size: 220% 100%;
+  animation: think-shimmer 1.4s linear infinite;
+}
+
+.cmenu-foot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface-sunken);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--brand);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.cmenu-foot:hover,
+.cmenu-foot:focus-visible {
+  background: var(--brand-soft);
+}
+
+/* ---------- motion preferences ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .cmenu,
+  .copilot-panel .work-orb::after,
+  .copilot-panel .work-bar,
+  .copilot-panel .work-seg[data-state="current"],
+  .copilot-panel .thinking-badge.is-live,
+  .cmenu-skeleton span {
+    animation: none !important;
+  }
+
+  .copilot-panel .msg-tools {
+    transition: none;
+  }
+}

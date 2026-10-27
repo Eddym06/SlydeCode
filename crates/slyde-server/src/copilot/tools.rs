@@ -242,7 +242,7 @@ pub fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             name: SET_THEME,
-            description: "Change the presentation theme palette in real time. Can switch to a base theme preset (studio, paper, night, terminal, academic, pitch) and optionally customize background, foreground, accent, muted colors, or font family.",
+            description: "Change the presentation palette in real time. Either pick a preset (studio, paper, night, original, academic, pitch) or design your own: pass background, foreground, muted and accent colors that suit the topic and a short name for the palette. Slides that use the theme variables follow it instantly.",
             schema: || {
                 json!({
                     "type": "object",
@@ -252,7 +252,8 @@ pub fn definitions() -> Vec<ToolDef> {
                         "foreground": { "type": "string", "description": "Hex or CSS color for primary text" },
                         "accent": { "type": "string", "description": "Hex or CSS color for accent highlight" },
                         "muted": { "type": "string", "description": "Hex or CSS color for secondary text" },
-                        "font_family": { "type": "string", "description": "CSS font-family string" }
+                        "font_family": { "type": "string", "description": "CSS font-family string" },
+                        "name": { "type": "string", "description": "Short display name for a palette you designed, e.g. Espresso or Glacier" }
                     },
                     "additionalProperties": false
                 })

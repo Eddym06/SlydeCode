@@ -6,7 +6,7 @@ export const THEME_COLORS = {
   studio: { bg: "#17161A", fg: "#F6F2EA", accent: "#7C3AED" },
   paper: { bg: "#FBF8F3", fg: "#17161A", accent: "#7C3AED" },
   night: { bg: "#1E1B4B", fg: "#F5F3FF", accent: "#FF8265" },
-  terminal: { bg: "#0B0C0E", fg: "#00FF66", accent: "#00E5FF" },
+  original: { bg: "#F4F0FF", fg: "#1B1530", accent: "#7C3AED" },
   academic: { bg: "#FFFFFF", fg: "#111111", accent: "#0055D4" },
   pitch: { bg: "#0F172A", fg: "#F8FAFC", accent: "#38BDF8" },
 };

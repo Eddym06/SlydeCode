@@ -191,7 +191,11 @@ impl AnimationKind {
 /// Same contract as [`ANIMATION_KIND_IDS`]: the tool schemas and the copilot
 /// prompt read this list instead of keeping their own copy. `Theme::resolve`
 /// must accept every entry (enforced by a test).
-pub const THEME_IDS: [&str; 6] = ["studio", "paper", "night", "terminal", "academic", "pitch"];
+///
+/// `terminal` was the sixth preset until `original` replaced it. `Theme::resolve`
+/// still accepts the old id (as `original`) so decks and MCP clients that name it
+/// keep working, but it is no longer advertised.
+pub const THEME_IDS: [&str; 6] = ["studio", "paper", "night", "original", "academic", "pitch"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnimationStep {
@@ -270,15 +274,17 @@ impl Theme {
         }
     }
 
-    pub fn terminal() -> Self {
+    /// SlydeCode's own look: a soft lavender light with deep indigo ink and the
+    /// brand violet as the accent.
+    pub fn original() -> Self {
         Self {
-            id: "terminal".into(),
-            name: "Terminal".into(),
-            background: "#0B0C0E".into(),
-            foreground: "#00FF66".into(),
-            muted: "rgba(0,255,102,.50)".into(),
-            accent: "#00E5FF".into(),
-            font_family: "Geist Mono, JetBrains Mono, monospace".into(),
+            id: "original".into(),
+            name: "Original".into(),
+            background: "#F4F0FF".into(),
+            foreground: "#1B1530".into(),
+            muted: "rgba(27,21,48,.62)".into(),
+            accent: "#7C3AED".into(),
+            font_family: "Geist, Inter, system-ui, sans-serif".into(),
         }
     }
 
@@ -312,11 +318,32 @@ impl Theme {
             "studio" => Some(Self::studio()),
             "paper" => Some(Self::paper()),
             "night" => Some(Self::night()),
-            "terminal" => Some(Self::terminal()),
+            // `terminal` is the retired id of the sixth preset.
+            "original" | "terminal" => Some(Self::original()),
             "academic" => Some(Self::academic()),
             "pitch" => Some(Self::pitch()),
             _ => None,
         }
+    }
+
+    /// Rewrites the colors of `previous` that a slide hard-coded so they follow the
+    /// theme variables instead.
+    ///
+    /// A model (or a person) often writes `#17161A` where the deck theme already
+    /// says `--slyde-bg`. Such a slide ignores every palette change, so the first
+    /// change converts those literals into the variables; later changes then just
+    /// work. Only exact matches of the previous theme's own colors are touched.
+    pub fn adopt_variables(&self, code: &str) -> String {
+        let mut out = code.to_string();
+        for (literal, variable) in [
+            (&self.background, "var(--slyde-bg)"),
+            (&self.foreground, "var(--slyde-fg)"),
+            (&self.muted, "var(--slyde-muted)"),
+            (&self.accent, "var(--slyde-accent)"),
+        ] {
+            out = replace_ignore_ascii_case(&out, literal.trim(), variable);
+        }
+        out
     }
 
     /// Basic validation: hex or rgba() colors, non-empty font stack.
@@ -346,6 +373,25 @@ impl Default for Theme {
     fn default() -> Self {
         Self::studio()
     }
+}
+
+/// `str::replace` that ignores ASCII case, so `#17161a` matches `#17161A`.
+fn replace_ignore_ascii_case(haystack: &str, needle: &str, with: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let lower_hay = haystack.to_ascii_lowercase();
+    let lower_needle = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut cursor = 0;
+    while let Some(found) = lower_hay[cursor..].find(&lower_needle) {
+        let start = cursor + found;
+        out.push_str(&haystack[cursor..start]);
+        out.push_str(with);
+        cursor = start + needle.len();
+    }
+    out.push_str(&haystack[cursor..]);
+    out
 }
 
 fn is_css_color(value: &str) -> bool {
@@ -688,5 +734,26 @@ mod tests {
         assert_eq!(T::infer("<h1>Title</h1><p>Sub</p>"), T::Hero);
         assert_eq!(T::infer("<div><p>a</p><p>b</p><p>c</p></div>"), T::Custom);
         assert_eq!(T::default(), T::Custom);
+    }
+
+    #[test]
+    fn the_retired_terminal_id_still_resolves_to_the_original_theme() {
+        let legacy = Theme::resolve("terminal").unwrap();
+        assert_eq!(legacy.id, "original");
+        assert_eq!(Theme::resolve("Original").unwrap(), legacy);
+        assert!(!THEME_IDS.contains(&"terminal"));
+        assert!(THEME_IDS.contains(&"original"));
+        legacy.validate().unwrap();
+    }
+
+    #[test]
+    fn adopting_variables_is_case_insensitive_and_leaves_other_colors_alone() {
+        let theme = Theme::paper();
+        let code = "a{background:#fbf8f3} b{color:#FBF8F3} c{color:#ABCDEF}";
+        let out = theme.adopt_variables(code);
+        assert_eq!(
+            out,
+            "a{background:var(--slyde-bg)} b{color:var(--slyde-bg)} c{color:#ABCDEF}"
+        );
     }
 }

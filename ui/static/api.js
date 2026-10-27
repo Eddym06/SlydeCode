@@ -70,6 +70,16 @@ export function createClient(token) {
       return payload.config;
     },
 
+    /** Reads a web page (as text) or an image from a link, through the server. */
+    async copilotFetchUrl(url) {
+      const payload = await json(`/api/copilot/fetch-url`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      return payload.result;
+    },
+
     async copilotModels(provider) {
       const payload = await json(
         `/api/copilot/models?provider=${encodeURIComponent(provider)}`

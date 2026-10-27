@@ -21,7 +21,7 @@ export const THEME_CHOICES = [
   { id: "studio", dots: ["#7C3AED", "#FF6B4A"] },
   { id: "paper", dots: ["#2C2B2A", "#D97706"] },
   { id: "night", dots: ["#9B6BFF", "#FF8265"] },
-  { id: "terminal", dots: ["#00FF66", "#00E5FF"] },
+  { id: "original", dots: ["#7C3AED", "#1B1530"] },
   { id: "academic", dots: ["#111111", "#0055D4"] },
   { id: "pitch", dots: ["#0F172A", "#38BDF8"] },
 ];
@@ -261,18 +261,31 @@ export function createInspector({ root, t, escapeHtml, actions }) {
   // ---------- sections ----------
 
   function deckMarkup(deck) {
-    const themeOptions = THEME_CHOICES.map(
-      (choice) =>
-        `<option value="${choice.id}" ${deck.theme.id === choice.id ? "selected" : ""}>${escapeHtml(
-          t(`theme.${choice.id}`)
-        )}</option>`
-    ).join("");
-    const themeSwatches = THEME_CHOICES.map(
+    // A palette the copilot designed is not one of the presets: it gets its own
+    // swatch, named by the model, and stays selected until a preset replaces it.
+    const custom = deck.theme.id === "custom" ? deck.theme : null;
+    const choices = custom
+      ? [{ id: "custom", dots: [custom.accent, custom.foreground] }, ...THEME_CHOICES]
+      : THEME_CHOICES;
+    const label = (choice) => (choice.id === "custom" ? custom.name : t(`theme.${choice.id}`));
+    const colorsOf = (choice) =>
+      choice.id === "custom"
+        ? { bg: custom.background, fg: custom.foreground, accent: custom.accent }
+        : THEME_COLORS[choice.id] || THEME_COLORS.studio;
+    const themeOptions = choices
+      .map(
+        (choice) =>
+          `<option value="${choice.id}" ${deck.theme.id === choice.id ? "selected" : ""}${
+            choice.id === "custom" ? " disabled" : ""
+          }>${escapeHtml(label(choice))}</option>`
+      )
+      .join("");
+    const themeSwatches = choices.map(
       (choice) => `
-          <button type="button" class="theme-swatch" data-theme="${choice.id}" role="radio" aria-checked="${
-            deck.theme.id === choice.id
-          }" aria-label="${escapeHtml(t(`theme.${choice.id}`))}">
-            <span class="swatch-preview" style="--sw-bg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).bg};--sw-fg:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).fg};--sw-a:${(THEME_COLORS[choice.id] || THEME_COLORS.studio).accent}">
+          <button type="button" class="theme-swatch" ${
+            choice.id === "custom" ? "disabled" : `data-theme="${choice.id}"`
+          } role="radio" aria-checked="${deck.theme.id === choice.id}" aria-label="${escapeHtml(label(choice))}">
+            <span class="swatch-preview" style="--sw-bg:${colorsOf(choice).bg};--sw-fg:${colorsOf(choice).fg};--sw-a:${colorsOf(choice).accent}">
               <span class="swatch-line"></span><span class="swatch-line short"></span>
               <span class="swatch-dots">
                 ${choice.dots
@@ -280,7 +293,7 @@ export function createInspector({ root, t, escapeHtml, actions }) {
                   .join("")}
               </span>
             </span>
-            <span class="swatch-name">${escapeHtml(t(`theme.${choice.id}`))}</span>
+            <span class="swatch-name">${escapeHtml(label(choice))}</span>
           </button>`
     ).join("");
     const ratios = ["16:9", "4:3", "9:16"];

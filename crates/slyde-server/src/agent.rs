@@ -76,6 +76,9 @@ pub enum AgentCommand {
         muted: Option<String>,
         #[serde(default)]
         font_family: Option<String>,
+        /// Display name of a palette the model designed ("Espresso", "Glacier").
+        #[serde(default)]
+        name: Option<String>,
     },
     /// Renames the deck without touching its slides.
     SetTitle {
@@ -273,7 +276,10 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
             accent,
             muted,
             font_family,
+            name,
         } => {
+            let designed =
+                background.is_some() || foreground.is_some() || accent.is_some() || muted.is_some();
             let mut theme = match theme_id.as_deref() {
                 Some(id) => Theme::resolve(id)
                     .ok_or_else(|| CoreError::InvalidTheme(format!("unknown theme: {id}")))?,
@@ -293,6 +299,14 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
             }
             if let Some(ff) = font_family {
                 theme.font_family = ff;
+            }
+            if designed {
+                // Not one of the presets any more: it is the model's own palette.
+                theme.id = "custom".to_string();
+                theme.name = name
+                    .map(|value| value.trim().chars().take(40).collect::<String>())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "Custom palette".to_string());
             }
             theme.validate()?;
             core.set_theme(theme)?;

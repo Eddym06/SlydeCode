@@ -7,6 +7,7 @@ import { expectedSlides, formatElapsed, lastThought, trackModel, workPhase } fro
 import { lang, onLangChange, t } from "./i18n.js";
 import { createModelSheet } from "./copilot-model-sheet.js";
 import { providerIcon, providerTint } from "./provider-icons.js";
+import { mountComposerMenus } from "./composer-menus.js";
 
 const SELECTION_KEY = "slyde.copilot.selection";
 const MAX_ATTACHMENTS = 4;
@@ -55,6 +56,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     modelLabel: $("copilot-model-label"),
     modelChip: $("copilot-model-chip"),
     modelChipText: $("copilot-model-chip-text"),
+    modelChipIcon: $("copilot-model-chip-icon"),
     newChat: $("copilot-new"),
     live: $("copilot-live"),
     sheet: $("copilot-sheet"),
@@ -215,6 +217,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     els.provider.setAttribute("aria-label", `${name} — ${model}`);
     els.provider.title = `${name} — ${model}`;
     els.modelChipText.textContent = modelId || t("copilot.model");
+    if (els.modelChipIcon) {
+      els.modelChipIcon.innerHTML = providerIcon(iconId);
+      els.modelChipIcon.style.color = providerTint(iconId);
+    }
     els.modelChip.title = model;
     els.modelChip.setAttribute("aria-label", model);
     updateSendEnabled();
@@ -421,11 +427,15 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     article.dataset.state = message.state || "done";
     if (message.role === "user") {
       article.innerHTML = `
-        <div class="msg-avatar msg-avatar-you" aria-hidden="true">${userSvg()}</div>
         <div class="msg-body">
-          <div class="msg-meta"><span>${escapeHtml(t("copilot.messageYou"))}</span></div>
-          <div class="msg-text"></div>
           <div class="msg-attachments"></div>
+          <div class="msg-row">
+            <div class="msg-tools" role="group" aria-label="${escapeHtml(t("copilot.messageActions"))}">
+              <button type="button" class="msg-tool" data-rerun title="${escapeHtml(t("copilot.rerun"))}" aria-label="${escapeHtml(t("copilot.rerun"))}">${rerunSvg()}</button>
+              <button type="button" class="msg-tool" data-edit title="${escapeHtml(t("copilot.edit"))}" aria-label="${escapeHtml(t("copilot.edit"))}">${editSvg()}</button>
+            </div>
+            <div class="msg-text"></div>
+          </div>
         </div>`;
       const text = article.querySelector(".msg-text");
       text.textContent = message.text;
@@ -440,10 +450,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
 
     article.innerHTML = `
-      <div class="msg-avatar msg-avatar-ai" aria-hidden="true">${sparkSvg()}</div>
       <div class="msg-body">
         <div class="msg-meta">
-          <span>${escapeHtml(t("copilot.messageAssistant"))}</span>
+          <span class="msg-mark" aria-hidden="true">${sparkSvg()}</span>
+          <span class="msg-who">${escapeHtml(t("copilot.messageAssistant"))}</span>
           <span class="msg-state"></span>
         </div>
         <div class="msg-thinking" hidden></div>
@@ -453,6 +463,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         <div class="msg-typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="msg-error" hidden></div>
         <div class="msg-actions" hidden></div>
+        <div class="msg-usage" hidden></div>
       </div>`;
     return article;
   }
@@ -514,12 +525,14 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
 
     const state = message.el.querySelector(".msg-state");
-    state.textContent =
-      message.state === "stopped"
-        ? t("copilot.stopped")
-        : message.state === "done" && message.usage
-          ? usageLabel(message.usage)
-          : "";
+    state.textContent = message.state === "stopped" ? t("copilot.stopped") : "";
+
+    const usageEl = message.el.querySelector(".msg-usage");
+    if (usageEl) {
+      const showUsage = message.state === "done" && Boolean(message.usage);
+      usageEl.hidden = !showUsage;
+      if (showUsage) usageEl.innerHTML = usageMarkup(message.usage);
+    }
 
     const actionsEl = message.el.querySelector(".msg-actions");
     if (actionsEl) {
@@ -540,7 +553,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     renderWorkCard(message);
 
     const list = message.el.querySelector(".tool-list");
-    list.hidden = message.tools.length === 0;
+    // While the turn runs, the work card is the one place that says what is
+    // happening; the list appears when it settles, as a summary of what was done.
+    list.hidden = message.tools.length === 0 || message.state === "streaming";
     if (message.tools.length) {
       list.innerHTML = message.tools.map(toolRow).join("");
     }
@@ -605,9 +620,51 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function userAttachment(file) {
     if (file.preview) {
-      return `<span class="file-thumb"><img src="${escapeHtml(file.preview)}" alt=""></span>`;
+      return `<span class="file-thumb"><img src="${escapeHtml(file.preview)}" alt="${escapeHtml(file.name)}"></span>`;
     }
-    return `<span class="file-pill">${docSvg()}<span>${escapeHtml(file.name)}</span></span>`;
+    return `<span class="file-pill">${file.link ? linkSvg() : docSvg()}<span>${escapeHtml(file.label || file.name)}</span></span>`;
+  }
+
+  /** Reads a web page or an image from a link and queues it like any other file. */
+  async function addLink(url) {
+    if (pending.length >= MAX_ATTACHMENTS) throw new Error(t("copilot.attachLimit"));
+    let result;
+    try {
+      result = await client.copilotFetchUrl(url);
+    } catch (error) {
+      throw new Error(linkErrorText(error.code));
+    }
+    if (result.kind === "image") {
+      pending.push({
+        name: result.name || "image",
+        mime: result.mime,
+        data: result.data,
+        size: Math.floor((result.data.length * 3) / 4),
+        preview: `data:${result.mime};base64,${result.data}`,
+        link: url,
+      });
+    } else {
+      const body = `Source: ${result.url}\nTitle: ${result.title}\n\n${result.text}`;
+      const bytes = new TextEncoder().encode(body);
+      const label = String(result.title || new URL(result.url).hostname).replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 56);
+      pending.push({
+        name: `${label || "page"}.txt`,
+        label: label || "page",
+        mime: "text/plain",
+        data: bytesToBase64(bytes),
+        size: bytes.length,
+        preview: null,
+        link: result.url,
+      });
+    }
+    renderPending();
+    updateSendEnabled();
+  }
+
+  function linkErrorText(code) {
+    const key = `copilot.link.${code}`;
+    const text = t(key);
+    return text === key ? t("copilot.attach.linkFailed") : text;
   }
 
   // ---------- attachments ----------
@@ -618,9 +675,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       .map(
         (file, index) => `
         <span class="pending-file${file.preview ? " is-image" : ""}">
-          ${file.preview ? `<img src="${escapeHtml(file.preview)}" alt="">` : docSvg()}
+          ${file.preview ? `<img src="${escapeHtml(file.preview)}" alt="">` : file.link ? linkSvg() : docSvg()}
           <span class="pending-copy">
-            <span class="pending-name">${escapeHtml(file.name)}</span>
+            <span class="pending-name">${escapeHtml(file.label || file.name)}</span>
             <span class="pending-size">${escapeHtml(formatBytes(file.size))}</span>
           </span>
           <button type="button" class="pending-remove" data-remove="${index}"
@@ -864,6 +921,21 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
   }
 
+  /** Calls and tokens as three quiet figures under the reply. */
+  function usageMarkup(usage) {
+    const mark = usage.estimated ? "~" : "";
+    const item = (glyph, value, label) =>
+      `<span class="usage-item" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${glyph}<span>${escapeHtml(value)}</span></span>`;
+    const parts = [
+      item(usageSvg("calls"), String(usage.calls), t("copilot.usage.calls", { n: usage.calls })),
+      item(usageSvg("in"), `${mark}${formatTokens(usage.input)}`, t("copilot.usage.input", { n: usage.input })),
+    ];
+    if (usage.output && !usage.estimated) {
+      parts.push(item(usageSvg("out"), formatTokens(usage.output), t("copilot.usage.output", { n: usage.output })));
+    }
+    return parts.join("");
+  }
+
   function usageLabel(usage) {
     const mark = usage.estimated ? "~" : "";
     if (usage.estimated || !usage.output) {
@@ -1099,6 +1171,51 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     startStream(buildHistory());
   }
 
+  /** Sends the same prompt again: everything after it is dropped and answered anew. */
+  function rerunMessage(userMessage) {
+    if (streaming) return;
+    const index = messages.indexOf(userMessage);
+    if (index < 0) return;
+    const provider = activeProvider();
+    if (!provider || !provider.configured || !modelId) {
+      openSheet();
+      return;
+    }
+    messages.slice(index + 1).forEach((message) => message.el && message.el.remove());
+    messages = messages.slice(0, index + 1);
+    messages.forEach((message) => {
+      if (message.reversible) message.reversible = false;
+    });
+    messages.push({
+      role: "assistant",
+      text: "",
+      thinking: "",
+      tools: [],
+      state: "streaming",
+      errorCode: null,
+      el: null,
+    });
+    renderThread({ forceScroll: true });
+    startStream(buildHistory());
+  }
+
+  /** Puts a sent prompt back in the composer, with its files, and forgets it and what followed. */
+  function editMessage(userMessage) {
+    if (streaming) return;
+    const index = messages.indexOf(userMessage);
+    if (index < 0) return;
+    messages = messages.slice(0, index);
+    pending = (userMessage.attachments || []).slice();
+    els.input.value = userMessage.text || "";
+    persistThread();
+    renderThread();
+    renderPending();
+    autosize();
+    updateSendEnabled();
+    els.input.focus();
+    els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+  }
+
   function newChat() {
     if (streaming) {
       stopTurn();
@@ -1273,12 +1390,71 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     event.preventDefault();
     stopStream();
   });
-  els.attach.addEventListener("click", () => els.file.click());
+  const menus = mountComposerMenus({
+    host: els.form,
+    attachButton: els.attach,
+    modelButton: els.modelChip,
+    fileInput: els.file,
+    t,
+    escapeHtml,
+    loadModels: (id) => client.copilotModels(id),
+    getSelection: () => ({ provider: providerId, model: modelId }),
+    onLink: addLink,
+    onPickModel(model) {
+      modelId = model.id;
+      persistSelection();
+      syncHeader();
+      els.input.focus();
+    },
+    onConfigure: openSheet,
+  });
   els.file.addEventListener("change", () => addFiles(els.file.files || []));
-  els.provider.addEventListener("click", openSheet);
-  els.modelChip.addEventListener("click", openSheet);
+  els.provider.addEventListener("click", () => {
+    menus.close({ restoreFocus: false });
+    openSheet();
+  });
+
+  // Pasting a screenshot or a file into the composer attaches it, as in any chat.
+  els.input.addEventListener("paste", (event) => {
+    const files = [...((event.clipboardData && event.clipboardData.files) || [])];
+    if (!files.length) return;
+    event.preventDefault();
+    addFiles(files);
+  });
+  // Dropping files anywhere on the copilot panel does the same.
+  let dragDepth = 0;
+  const hasFiles = (event) => [...((event.dataTransfer && event.dataTransfer.types) || [])].includes("Files");
+  els.panel.addEventListener("dragenter", (event) => {
+    if (!hasFiles(event)) return;
+    dragDepth += 1;
+    els.panel.classList.add("is-dropping");
+  });
+  els.panel.addEventListener("dragover", (event) => {
+    if (hasFiles(event)) event.preventDefault();
+  });
+  els.panel.addEventListener("dragleave", (event) => {
+    if (!hasFiles(event)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) els.panel.classList.remove("is-dropping");
+  });
+  els.panel.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragDepth = 0;
+    els.panel.classList.remove("is-dropping");
+    addFiles(event.dataTransfer.files);
+  });
   els.newChat.addEventListener("click", newChat);
   els.thread.addEventListener("click", async (event) => {
+    const toolButton = event.target.closest("[data-rerun], [data-edit]");
+    if (toolButton) {
+      const message = messages.find((item) => item.el === toolButton.closest(".msg"));
+      if (message) {
+        if (toolButton.hasAttribute("data-edit")) editMessage(message);
+        else rerunMessage(message);
+      }
+      return;
+    }
     const revertButton = event.target.closest("[data-revert]");
     if (revertButton) {
       revertButton.disabled = true;
@@ -1434,6 +1610,39 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       return config && config.providers ? config.providers : [];
     },
   };
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function svg(paths, size = 15) {
+  return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+function linkSvg() {
+  return svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1"/>');
+}
+
+function rerunSvg() {
+  return svg('<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v5h-5"/>', 16);
+}
+
+function editSvg() {
+  return svg('<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="m14.5 7.5 3 3"/>', 16);
+}
+
+function usageSvg(kind) {
+  const paths = {
+    calls: '<path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5"/><path d="M4 20v-4.5h4.5"/>',
+    in: '<path d="M12 4v13M6.5 12 12 17.5 17.5 12"/><path d="M5 20.5h14"/>',
+    out: '<path d="M12 20V7M6.5 12 12 6.5l5.5 5.5"/><path d="M5 3.5h14"/>',
+  };
+  return svg(paths[kind], 13);
 }
 
 function readDataUrl(file) {

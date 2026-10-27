@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/panels.css">
   <link rel="stylesheet" href="/static/present.css">
+  <link rel="stylesheet" href="/static/premium.css">
   <script>
     // Apply the saved theme before first paint to avoid a flash.
     try {
@@ -115,13 +116,13 @@
         <button type="button" class="icon-btn" id="undo" data-i18n-title="action.undo"
                 data-i18n-aria="action.undo" aria-label="Undo" aria-keyshortcuts="Control+Z">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 7H5v4"/><path d="M5.5 11a7 7 0 1 1 1.6 7.3"/>
+            <path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
           </svg>
         </button>
         <button type="button" class="icon-btn" id="redo" data-i18n-title="action.redo"
                 data-i18n-aria="action.redo" aria-label="Redo" aria-keyshortcuts="Control+Shift+Z">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M15 7h4v4"/><path d="M18.5 11a7 7 0 1 0-1.6 7.3"/>
+            <path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>
           </svg>
         </button>
         <button type="button" class="icon-btn panel-toggle" id="panel-toggle" aria-controls="right-panel"
@@ -256,7 +257,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             <span data-i18n="elements.insert">Insert</span>
           </button>
-          <div class="chips" id="chips"></div>
+          <div class="stage-spacer" aria-hidden="true"></div>
           <div class="stage-status" role="status" aria-live="polite" aria-atomic="true">
             <span class="status-dot" id="status-dot" aria-hidden="true"></span>
             <span id="status-text" data-i18n="stage.connecting">Connecting</span>
@@ -351,6 +352,7 @@
               <button type="button" class="model-chip" id="copilot-model-chip"
                       data-i18n-title="copilot.chooseModel" data-i18n-aria="copilot.chooseModel"
                       aria-label="Choose a model">
+                <span class="model-chip-icon" id="copilot-model-chip-icon" aria-hidden="true"></span>
                 <span id="copilot-model-chip-text" data-i18n="copilot.model">Model</span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
                      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

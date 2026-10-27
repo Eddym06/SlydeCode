@@ -67,6 +67,10 @@ pub fn app_router(state: Arc<AppState>) -> Router {
         .route("/api/decks/duplicate", post(crate::deck_api::api_duplicate))
         .route("/api/decks/delete", post(crate::deck_api::api_delete))
         .route(
+            "/api/copilot/fetch-url",
+            post(crate::copilot::routes::api_fetch_url),
+        )
+        .route(
             "/api/copilot/config",
             get(crate::copilot::routes::api_config),
         )

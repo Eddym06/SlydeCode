@@ -110,7 +110,6 @@ function boot(sessionToken) {
     frame: $("slide-frame"),
     frameWrap: $("stage-frame"),
     empty: $("empty"),
-    chips: $("chips"),
     subtabSlide: $("subtab-slide"),
     subtabDeck: $("subtab-deck"),
     inspector: $("inspector"),
@@ -722,7 +721,6 @@ function boot(sessionToken) {
 
     renderStoryboard(d);
     renderStage(d);
-    renderChips(d);
     renderInspector(d);
     renderAgentActivity({ announce: false });
     updateCopilotContext(d);
@@ -905,27 +903,6 @@ function boot(sessionToken) {
 
   function deselectElement() {
     canvas.clearSelection();
-  }
-
-  function renderChips(d) {
-    const current = slide();
-    els.chips.innerHTML = "";
-    if (!current) return;
-    if (!current.animation.length) {
-      const hint = document.createElement("span");
-      hint.className = "hint";
-      hint.textContent = t("inspector.noAnimation");
-      els.chips.append(hint);
-      return;
-    }
-    current.animation.forEach((step, index) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "chip";
-      chip.innerHTML = `<span class="chip-dot"></span>${escapeHtml(step.kind)} · ${escapeHtml(step.target)}`;
-      chip.addEventListener("click", () => run("trigger_animation", { slide_id: current.id, step_index: index }));
-      els.chips.append(chip);
-    });
   }
 
   // ---------- Inspector ----------

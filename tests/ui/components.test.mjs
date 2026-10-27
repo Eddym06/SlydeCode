@@ -195,7 +195,7 @@ test("the inspector offers exactly the contract the backend accepts", () => {
 
   assert.deepEqual(
     THEME_CHOICES.map((choice) => choice.id),
-    ["studio", "paper", "night", "terminal", "academic", "pitch"]
+    ["studio", "paper", "night", "original", "academic", "pitch"]
   );
   for (const choice of THEME_CHOICES) {
     assert.equal(choice.dots.length, 2, `${choice.id} shows two palette dots`);

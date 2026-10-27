@@ -145,6 +145,52 @@ pub async fn api_chat(
     response
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FetchUrlInput {
+    pub url: String,
+}
+
+/// `POST /api/copilot/fetch-url`: reads a web page (as text) or an image from a
+/// link the user pasted, for use as an attachment. See [`super::webfetch`] for
+/// what is refused and why.
+pub async fn api_fetch_url(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<FetchUrlInput>,
+) -> Response {
+    use super::webfetch::{FetchError, fetch};
+
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match fetch(&input.url).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "result": result })),
+        )
+            .into_response(),
+        Err(error) => {
+            let code = match error {
+                FetchError::InvalidUrl => "link_invalid",
+                FetchError::Blocked => "link_blocked",
+                FetchError::Unreachable => "link_unreachable",
+                FetchError::TooManyRedirects => "link_unreachable",
+                FetchError::TooLarge => "link_too_large",
+                FetchError::Unsupported => "link_unsupported",
+            };
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "ok": false, "code": code, "error": error.to_string() })),
+            )
+                .into_response()
+        }
+    }
+}
+
 fn error_response(error: CopilotError) -> Response {
     let status = match error {
         CopilotError::MissingKey => StatusCode::BAD_REQUEST,
