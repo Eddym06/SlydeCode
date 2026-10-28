@@ -11,8 +11,8 @@ extraction, the system prompt and the tool loop.
 - **One deck, one mutation path.** The model never gets a private deck copy. Its
   tools call the same `agent::run` path as `/api/agent`, including validation,
   undo/redo, autosave, activity events and state broadcasts.
-- **Keys never reach the browser.** The server stores them in the app-data
-  directory and exposes only `configured: true/false` per provider.
+- **Keys never reach the browser.** The server keeps them in the OS credential store (an
+  owner-only file where there is none) and exposes only `configured: true/false` per provider.
 - **Provider differences stay server-side.** Seven providers speak the
   OpenAI-compatible Chat Completions wire; Anthropic gets a native Messages
   adapter. The UI only knows provider ids, names, marks and model metadata.
@@ -31,9 +31,9 @@ extraction, the system prompt and the tool loop.
 | `copilot/models.rs` | Normalizes model lists, removes non-chat models, derives free/vision/context metadata. |
 | `copilot/attachments.rs` | Base64 decode, image/document limits, PDF/DOCX/PPTX/text extraction. |
 | `copilot/prompt.rs` | Presentation-quality system prompt and per-language guidance. |
-| `copilot/tools.rs` | Eight tool schemas plus OpenAI/Anthropic serialization and execution. |
+| `copilot/tools.rs` | Fourteen tool schemas plus OpenAI/Anthropic serialization and execution. |
 | `copilot/transport.rs` | OpenAI and Anthropic SSE parsing, fragmented tool-call assembly, error mapping. |
-| `copilot/chat.rs` | Request limits, history construction, the 8-round tool loop, SSE emission. |
+| `copilot/chat.rs` | Request limits, history construction, the 40-round tool loop, SSE emission. |
 | `copilot/routes.rs` | Guarded HTTP handlers, body limits, keep-alive SSE headers. |
 
 The frontend counterpart is `ui/static/copilot.js` (thread, composer,
@@ -51,6 +51,10 @@ the API.
 | `GET` | `/api/copilot/models?provider=…` | Fetches and normalizes models for a configured provider. |
 | `POST` | `/api/copilot/key` | Validates a key by listing models, then persists it. An empty key removes it. |
 | `POST` | `/api/copilot/chat` | Streams a chat turn as SSE. Body limit: 32 MB. |
+| `POST` | `/api/copilot/cancel` | Stops the turn for a `request_id`; the upstream response and queued tool rounds are dropped. |
+| `POST` | `/api/copilot/revert` | One-step undo of the last copilot turn, valid only while the deck is exactly as that turn left it. |
+| `GET` / `POST` | `/api/copilot/thread` | Loads or saves the deck's conversation (text only, bounded). |
+| `POST` | `/api/copilot/fetch-url` | Reads a page as text or an image as an attachment for the composer. |
 
 ### SSE events
 
@@ -70,6 +74,10 @@ Each `data:` frame is one JSON object:
 - `thinking` carries live reasoning tokens from reasoning models (e.g. DeepSeek or Anthropic thinking deltas), surfaced in the UI as an active thinking pill with thought preview.
 - `delta` carries visible assistant text.
 - `tool` status is `running`, `done` or `error`.
+- `progress` carries the live draft markup and the slide count while the model writes.
+- `usage` reports provider calls plus estimated input tokens for the turn.
+- `error` carries a typed `code`, a localized sentence and, when the provider refused,
+  its short reply with the key redacted.
 - `done` means the tool loop finished successfully. A client abort ends the
   response without a `done`; the UI marks the message as stopped.
 - `error.code` is stable (`missing_key`, `invalid_key`, `rate_limited`,
@@ -79,7 +87,8 @@ Each `data:` frame is one JSON object:
 ## Tools
 
 `read_deck`, `read_slide`, `create_presentation`, `upsert_slide`, `remove_slide`,
-`move_slide`, `trigger_animation`, `set_notes`.
+`move_slide`, `trigger_animation`, `set_notes`, `set_theme`, `set_title`,
+`mutate_element`, `get_selected_element`, `write_slides`, `build_deck`.
 
 They mirror the MCP command surface, and every mutation runs through
 `agent::run`, so an agent and the copilot are indistinguishable to the deck.
@@ -91,7 +100,9 @@ therefore consistent.
 ## Limits
 
 - Chat: last turn must be `user`, max 40 messages, 80k text characters, max 8
-  attachments across the request, max 8 tool rounds.
+  attachments across the request, max 40 tool rounds (the turn also stops early after
+  three identical tool calls, and reports a settled `tool_limit` instead of a fake
+  provider error).
 - Attachments: max 6 per message, 5 MB images, 12 MB documents, 30k extracted
   text characters per document.
 - Body: 32 MB. Provider calls: 15s connect, 60s default timeout, 300s per chat
@@ -133,9 +144,10 @@ therefore consistent.
 
 ## Known gaps
 
-- There is no conversation persistence across reloads; the thread lives in the
-  page. Keys and model selection persist.
-- Stop aborts the HTTP stream and drops the provider response; the server does
-  not send a cancellation frame.
+- The thread survives a reload: it is stored per deck next to the keys
+  (`GET`/`POST /api/copilot/thread`, bounded to 40 messages and 100 decks). Only the
+  text is kept; tool rows and reasoning from the previous session are not replayed.
+- Stop aborts the HTTP stream and `POST /api/copilot/cancel` stops the turn
+  server-side, dropping the upstream response and any tool rounds still queued.
 - The copilot is desktop-only while the right panel is hidden below 1100px.
 - Token usage/cost is not estimated or displayed.

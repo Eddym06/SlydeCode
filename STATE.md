@@ -1,13 +1,15 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-27 13:10
+> Last updated: 2026-10-27 22:40
 
 ## Current Phase
 
-Phase 3.8 — **`feat/product-completion` integrated into the post-PR #3 `main`** (branch
-`integrate/product-completion`, not pushed). 160 server tests plus the rest of the Rust workspace,
-90 UI tests (browser/CDP + component + module) green; `cargo fmt --check` and
-`clippy -D warnings` clean on `x86_64-pc-windows-gnu`.
+Phase 3.9 — **copilot provider rejections and the visual review loop** (branch
+`fix/provider-rejections`, two commits on top of `main`). The Rust workspace has **300 tests**
+(core 63, server 189 plus one ignored because it writes to the real credential store, export 9,
+pptx 17, mcp 16, app 6) and the UI suite has **106 tests** in 11 files; both green, with
+`cargo fmt --check` and `clippy --workspace --all-targets -D warnings` clean on
+`x86_64-pc-windows-gnu`.
 
 ### What the integration kept, and what it dropped
 
@@ -107,7 +109,8 @@ confirmed with a scripted provider that rejects the same ways
 - **UI:** the stop button is red with a larger square; the reasoning in the progress card is a three-line
   viewport that rolls upward instead of one line clipped at the side.
 
-Not verified against the live providers. If a refusal persists, the report shows the exact words.
+Not verified against the live providers: only DeepSeek has been exercised with a real key, so the
+other seven are unproven end to end. If a refusal persists, the report shows the exact words.
 
 ### Studio and copilot polish pass (2026-10-27)
 
@@ -177,7 +180,7 @@ reads `ui/` and `assets/` from beside the executable (`resolve_ui_dir`, `resolve
 distributable is the folder `slyde.exe` + `ui/` + `assets/` (built under `dist/`, git-ignored).
 Started from an unrelated working directory with an isolated `SLYDE_DATA_DIR`, it served 50 files
 (`/`, `/present`, 41 under `/static`, the fonts) byte-identical to the repo, and the full UI suite
-(90 tests) passed with `SLYDE_BIN` pointing at it. Embedding the UI in the binary is still open.
+(106 tests) passed with `SLYDE_BIN` pointing at it. Embedding the UI in the binary is still open.
 
 **Double-click bug (found 2026-10-27):** `slyde.exe` with no arguments panicked at `&args[1..]`
 on an empty list, so the release binary never opened when launched like a user would. Every test
@@ -185,27 +188,28 @@ passed `app` explicitly, which is why nothing caught it. `split_command` now tre
 and a leading option (`slyde --no-open`) as `app`, and has unit tests. Re-checked by launching
 the release binary with no arguments: the server stays up, answers 200, and Chrome opens the app.
 
-Phase 3.5 — **Real Interaction & Stability Test Suite (100% Green).**
-All 225 Rust tests (7 crates), 32 component/module unit tests, 24 Studio E2E tests, and 17 Real Interaction & Stability E2E tests (`tests/ui/interaction.test.mjs`) passing with zero failures and zero warnings across the entire workspace.
+### Earlier phases (2026-10-25, historical)
 
-### Implemented & Verified in this round:
-- **Universal Canvas Transform Gizmo & Snapping**: Any DOM block (text, cards, images, diagrams) can be freely moved and resized with 8-point handles, magnetic guide snapping, and arrow-key nudge (1px / 10px with Shift).
-- **Canvas Pan & Smooth Zoom**: Space + drag for smooth stage panning and Ctrl + mouse wheel continuous zoom.
-- **Full Keyboard Editing Suite**: `Delete`/`Backspace` slide deletion, `Cmd+D`/`Ctrl+D` slide duplication, `Cmd+C`/`Cmd+V` slide copy/paste (`UiCommand::PasteSlide`), and `F5` / `Cmd+Enter` / `Cmd+Shift+Enter` instant presenter launch.
-- **Presenter Live Laser & Pen Tools**: Puntero láser virtual (`L`) con halo de degradado de marca y lápiz de anotación en directo (`P`) con borrado instantáneo (`C`) y sincronización automática de resolución HiDPI.
-- **Standalone Web Deck Export (`.html`)**: `slyde export --format html` y botón en UI para exportar un único archivo HTML offline 100% interactivo y autocontenido sin servidor ni conexión.
-- **Copilot `set_theme` & Magic Redesign**: Nueva herramienta para cambiar paletas en caliente y botón en el inspector para rediseñar diapositivas con IA.
-- **End-to-End Real Interaction & Stability Suite (`tests/ui/interaction.test.mjs`)**: 17 tests reales con Chrome CDP cubriendo manipulación con ratón/teclado, concurrencia, prevención de fugas DOM y estabilidad del backend.
+Phases 3.3 and 3.5 were written on `feat/product-completion`; the counts they recorded there (220
+and 225 Rust tests, 55 UI) belong to that branch. The current numbers are the ones at the top of
+this file. Between them they shipped, and this tree still has:
 
-Phase 3.3 — **product completion on `feat/product-completion`.** Rust 220 tests and
-55 UI tests green (41 browser/CDP + 14 component); `cargo fmt --check` and
-`cargo clippy -D warnings` clean.
+- **Canvas transform gizmo and snapping** — eight handles on any block, magnetic guides, arrow-key
+  nudge (1 px / 10 px with Shift); refined since (see "Canvas handles").
+- **Canvas pan and smooth zoom** — Space + drag, Ctrl + wheel.
+- **Keyboard editing suite** — Delete/Backspace, `Ctrl+D` duplicate, `Ctrl+C`/`Ctrl+V` slide
+  copy/paste (`UiCommand::PasteSlide`), `F5` / `Ctrl+Enter` / `Ctrl+Shift+Enter` presenter
+  launch.
+- **Presenter laser and pen** — `L` / `P` / `C`, HiDPI aware.
+- **Standalone `.html` export** — `slyde export --format html`, one self-contained offline file.
+- **Copilot `set_theme` and the magic redesign** button in the inspector.
+- **Deck library, image assets and PowerPoint export**, plus batch PNG over CDP at 2x, a concurrent
+  MCP stdio loop, a server-side copilot cancel, per-locale dictionaries with a parity test, and a
+  module smoke test that would have caught the dead `app.js` import.
 
-This block closed the three product gaps the audit named — a real deck library,
-real images, and PowerPoint export — plus the infrastructure that had been
-missing: batch PNG rendering over CDP at 2x, a concurrent MCP stdio loop, a
-server-side copilot cancel, per-locale dictionaries with parity tests, and a
-module smoke test that would have caught the dead `app.js` import.
+The `tests/ui/interaction.test.mjs` those notes mention does not exist in this tree; interaction
+coverage is spread across the browser suites under `tests/ui/` (studio, panels, canvas-handles,
+welcome).
 
 Recent rounds split the studio shell into modules: the presenter state machine
 (the overlay and the standalone page had two copies that had drifted), the whole
@@ -358,7 +362,7 @@ old suite:
   slide, notes preserving the speaker view.
 - Validated independently with `python-pptx` (`scripts/validate-pptx.py`):
   opens, correct slide count and EMU size, exactly one picture per slide, notes
-  readable. The crate has 16 tests of its own, including a stack-based XML
+  readable. The crate has 17 tests of its own, including a stack-based XML
   well-formedness checker.
 - Wired into `POST /api/export?format=pptx`, `slyde export --format pptx`, the
   `export_presentation` MCP tool and the UI export menu.
@@ -372,18 +376,18 @@ old suite:
   break export.
 - PDF stays on `--print-to-pdf` (960×540 pt, exact 16:9).
 
-### Backend (Rust workspace, 7 crates, 217 tests)
+### Backend (Rust workspace, six crates, 300 tests)
 
-- `slyde-core` (54 tests): model, `PresentationState` with snapshot history and
+- `slyde-core` (63 tests): model, `PresentationState` with snapshot history and
   coalescing typing, validation, `.slyde` project format, element scoping,
   `insert_image` / `set_element_geometry`, `ImageRect`.
-- `slyde-server` (128 tests): two listeners, all HTTP/WS endpoints, token +
+- `slyde-server` (189 tests, plus one ignored): two listeners, all HTTP/WS endpoints, token +
   Origin guards, the deck library, the asset store, the copilot, exports.
 - `slyde-mcp` (16 tests): JSON-RPC stdio with **concurrent dispatch** — each line
   becomes a task under a `Semaphore(8)`, one writer task serialises stdout, and a
   fast request overtakes a slow one.
-- `slyde-pptx` (16 tests), `slyde-export` (4 tests incl. the CDP batch test),
-  `slyde-app` (3 tests).
+- `slyde-pptx` (17 tests), `slyde-export` (9 tests incl. the CDP batch test and the
+  real-Chrome audit), `slyde-app` (6 tests).
 - Copilot: `POST /api/copilot/cancel` stops a turn server-side (the flag is
   checked per SSE chunk and per tool round, so the upstream response is dropped),
   and the round budget is 40 with the repeat guard intact.
@@ -435,8 +439,8 @@ old suite:
 
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
 
-- Locale dictionaries live in `ui/static/locales/{en,es}.js` (263 keys each) and
-  `i18n.js` is a 66-line loader with the same API. A parity test enforces equal
+- Locale dictionaries live in `ui/static/locales/{en,es}.js` (555 keys each) and
+  `i18n.js` is a 56-line loader with the same API. A parity test enforces equal
   key sets, no empty values, every `data-i18n*` attribute resolving, matching
   `{placeholder}` tokens, and that the dictionary did not creep back into
   `i18n.js`.
@@ -462,8 +466,8 @@ old suite:
 
 ### Verified end to end
 
-- `cargo test --workspace`: 217 green.
-- `node --test "tests/ui/*.test.mjs"`: 41 green, including the deck library flow,
+- `cargo test --workspace`: 300 green (1 ignored).
+- `node --test "tests/ui/*.test.mjs"`: 106 green in 11 files, including the deck library flow,
   the image flow (insert → render in the sandbox → drag → geometry persisted →
   bundle download) and the 2x PNG export.
 - `python scripts/validate-pptx.py target/tmp/pptx-check.pptx --expect-slides 3`:
@@ -496,13 +500,14 @@ Nothing partially implemented on the branch.
 
 ## Not Implemented Yet
 
-- `app.js` (~1,440 lines) is still one `boot()` closure for what the shell itself owns
+- `app.js` (~1,940 lines) is still one `boot()` closure for what the shell itself owns
   (`view`, selection, stage key, zoom, panels). A store is only worth it if that grows.
 - The overlay presenter in the studio and the standalone `/present` page share the reveal
   state machine, but each still has its own DOM wiring.
 - A DOM component runner (the pure modules are covered; the DOM wiring is only
   covered end-to-end).
-- Deck thumbnails in the library (rows show title, slide count, age and theme).
+- No generated deck thumbnails: the library renders each cover as a live sandbox iframe
+  (`GET /d/{deck}`), so a large library opens one document per deck.
 - PPTX text uses the deck font name; PowerPoint substitutes it when it is not installed. Gradient text becomes the accent color.
 - Cost estimates (price per token) are not shown: prices change per model.
 
@@ -533,8 +538,8 @@ Nothing partially implemented on the branch.
   turn with a localized network error; there is no automatic retry.
 - A first copilot turn takes 70–140 s on DeepSeek and streams ~8–10k `thinking` SSE frames.
   Coalescing thinking deltas would cut traffic without changing the UI.
-- `studio.test.mjs` is ~2,200 lines and `interaction.test.mjs` still uses many fixed
-  `sleep()` waits; one of them already flaked. Convert them to readiness waits as they bite.
+- `studio.test.mjs` is ~2,100 lines and still uses fixed `sleep()` waits in places;
+  one of them already flaked. Convert them to readiness waits as they bite.
 - PowerPoint output is validated with `python-pptx` only; a missing Geist typeface makes
   PowerPoint substitute another one (glyph widths change, line breaks do not).
 - The tests leave hundreds of `slyde-*` folders in `%TEMP%`.
@@ -574,6 +579,10 @@ Nothing partially implemented on the branch.
   probe against the other seven providers.
 
 ## Completed
+
+- [x] Documentation brought back in line with the tree: 300 Rust / 106 UI tests, six crates,
+      555 locale keys, the real copilot tool and round counts, and the phantom
+      `tests/ui/interaction.test.mjs` removed from the notes — 2026-10-27
 
 - [x] New brand mark shared by the app icon, favicon, copilot glyph and README
       (light/dark banner) — 2026-10-27

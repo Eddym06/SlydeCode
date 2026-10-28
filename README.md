@@ -61,7 +61,8 @@
 
 - **High-Fidelity Chrome CLI & In-App Exports:**
   - Vector PDF exports (`--print-to-pdf`) formatted to exact 16:9 (`960×540 pt`).
-  - High-res 1280×720 PNG slide images bundled into a clean ZIP download.
+  - High-res 2560×1440 PNG slide images (2x; 1x–3x from the inspector) bundled into a clean ZIP download.
+  - PowerPoint export: each slide as a full-bleed picture with its text recovered as real, editable text boxes, plus the speaker notes.
   - Bundled variable Geist Sans and Geist Mono typography embedded into exported artifacts.
 
 ---
@@ -83,7 +84,7 @@ Linux/macOS check in CI matters.
 
 - **Rust:** Stable toolchain (`+stable-x86_64-pc-windows-gnu` recommended on Windows).
 - **Browser:** Google Chrome, Chromium, or Microsoft Edge (Chromium-based).
-- **Node.js:** Node.js 24+ for running the browser CDP test suite (zero npm dependencies).
+- **Node.js:** Node.js 22+ for running the browser CDP test suite (zero npm dependencies; CI pins 22, local runs use 24).
 
 ---
 
@@ -175,7 +176,8 @@ SlydeCode/
 │   ├── slyde-core/      # Deck data models, validation limits, state manager, undo/redo, .slyde storage
 │   ├── slyde-server/    # Loopback HTTP/WS server, Chrome lifecycle, MCP bridge, and Copilot engine
 │   │   └── src/copilot/ # 8 LLM provider transports, reasoning streaming, attachments, tools loop
-│   ├── slyde-export/    # Headless Chrome CLI export engine for PDF and PNG ZIP bundles
+│   ├── slyde-export/    # Headless Chrome CLI export engine: PDF, PNG, per-slide audit, .html
+│   ├── slyde-pptx/      # Hand-written OOXML writer: one picture per slide plus editable text boxes
 │   ├── slyde-mcp/       # Hand-rolled JSON-RPC 2.0 stdio loop and MCP tools schema
 │   └── slyde-app/       # CLI entry points, subcommands, runtime rendezvous, and signal handling
 ├── ui/                  # Native vanilla ES modules UI (HTML5, CSS3, Geist variable fonts, zero bundler)
@@ -206,11 +208,13 @@ SlydeCode/
 ## Running Tests
 
 ```powershell
-# Rust: 161 unit and integration tests across the five crates
+# Rust: 300 unit and integration tests across the six crates
+# (core 63, server 189 (+1 ignored: it writes to the real credential store),
+# export 9, pptx 17, mcp 16, app 6)
 cargo test --workspace
 
-# UI: 55 tests. Browser flows drive the real studio in headless Chrome over CDP;
-# the component and i18n suites run the DOM-free modules directly in Node.
+# UI: 106 tests in 11 files. Browser flows drive the real studio in headless Chrome over CDP;
+# the component, i18n, palette and module suites run the DOM-free modules directly in Node.
 # No npm packages are involved.
 cargo build --workspace
 node --test "tests/ui/*.test.mjs"
