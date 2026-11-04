@@ -166,13 +166,26 @@ prompt reserves the right amount instead of always using the catalog estimate.
 The copilot system prompt gets a dedicated image block only while a configured
 image model is healthy. The block simply says that an image model is available
 and how to call `request_image`; it does not expose a model name, balance, price
-or predicted image count. After a generation failure the block disappears for
-90 s, the stock fallback takes over when configured, and the chat shows the
-localized error when the textual turn closes.
+or predicted image count. It also tells the model to decide when a picture helps
+instead of waiting for an explicit request, and to use a cover and one or two key
+visual moments rather than an image on every slide. After a generation failure
+the block disappears for 90 s, the stock fallback takes over when configured, and
+the chat shows the localized error when the textual turn closes.
 
 MCP exposes `insert_image` and `generate_image`. `POST /api/images/generate` is
 the shared direct endpoint and reports provider failures with the same
 `CopilotError` mapping as chat.
+
+### Layout review
+
+After `build_deck`, `write_slides` or `upsert_slide`, the server opens only the
+changed slides in a real browser and measures them. The model receives one
+review, and only hard failures: `broken`, `empty`, `overflow`, `clipped`,
+`overlap` and `contrast`. Cosmetic audit warnings such as small labels, tight
+margins or dense data are not returned as work, because they are frequently
+intentional and would trigger a whole-deck rewrite. Local edits such as
+`mutate_element` or `insert_image` do not start the review automatically, and a
+slide whose background image is still queued is not reported as `empty`.
 
 ## Security and privacy
 

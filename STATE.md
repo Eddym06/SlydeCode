@@ -1,8 +1,22 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-11-03 20:59
+> Last updated: 2026-11-03 21:15
 
-## Current Task — SaC documentation refresh (2026-11-03)
+## Current Task — quieter layout review and autonomous images (2026-11-03)
+
+- [x] One layout review per turn instead of a fix-plus-confirm pair
+- [x] Only hard audit failures go back to the model: broken, empty, overflow,
+      clipped, overlap and contrast
+- [x] Cosmetic findings (small type, margins, density) no longer trigger rewrites
+- [x] Review runs after `build_deck`, `write_slides` or `upsert_slide`, not after
+      local edits such as `mutate_element` or `insert_image`
+- [x] An image-only slide with a queued background image is not reported as empty
+- [x] Prompt tells the copilot to decide when a picture helps, without waiting for
+      an explicit request, targeting a cover and one or two key moments
+- [x] README, docs/copilot.md and MEMORY.md updated
+- [ ] Live provider pass to compare edit churn before and after the change
+
+## Previous task — SaC documentation refresh (2026-11-03)
 
 - [x] Replace the old tagline with **SaC: Slide as Code**
 - [x] Rewrite README for a first-time reader: what SaC is, quick start, features,
@@ -792,6 +806,10 @@ Nothing partially implemented on the branch.
   real PowerPoint.
 
 ## Completed
+
+- [x] Quieter layout review: one pass, hard failures only, no review after local
+      edits, pending images are not flagged as empty; proactive image decisions in
+      the prompt — 2026-11-03
 
 - [x] SaC README and brand refresh: new **SaC: Slide as Code** tagline, clearer
       onboarding, image flow, cancellation, stock-key screen and 348 Rust + 110 UI

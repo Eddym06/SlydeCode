@@ -5,10 +5,12 @@
 //! top of each other. After a round that wrote slides, the slides are opened in a
 //! real browser and measured (`slyde_export::audit_slides`), and what was found
 //! goes back to the model inside the tool result it is about to read, so it can
-//! fix it in the next round. The budget is small and fixed, because every round
-//! resends the whole conversation.
+//! fix it in the next round. Only hard failures are returned as work; cosmetic
+//! audit warnings never trigger a rewrite. One review per turn, because every
+//! round resends the whole conversation.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,12 +21,23 @@ use crate::state::AppState;
 /// The name the review shows under in the tool list.
 pub const TOOL_NAME: &str = "review_slides";
 
-/// Reviews a single turn may trigger. Two is enough to fix and confirm; more
-/// would burn tokens polishing what the user can adjust by hand.
-pub const MAX_REVIEWS_PER_TURN: usize = 2;
+/// One review per turn. A confirmation pass mostly invites the model to rewrite
+/// slides that already work; the user can ask for another pass if needed.
+pub const MAX_REVIEWS_PER_TURN: usize = 1;
 
 /// Problems listed per slide, so a bad slide never becomes a wall of text.
 const MAX_PER_SLIDE: usize = 6;
+
+/// Only these findings are sent back to the model as work to fix. The audit
+/// still measures cosmetic preferences (`small`, `margin`, `dense`), but those
+/// are intentional in many designs and must not trigger a whole-deck rewrite.
+const HARD_ISSUES: &[&str] = &[
+    "broken", "empty", "overflow", "clipped", "overlap", "contrast",
+];
+
+fn is_hard_issue(kind: &str) -> bool {
+    HARD_ISSUES.contains(&kind)
+}
 
 /// Hard stop for one review: a browser that hangs must not hang the turn.
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
@@ -52,7 +65,11 @@ pub fn changed_slides(
 /// Opens the slides in a browser and returns the findings, or `None` when no
 /// review can be made (the feature is off, no browser, a failure). A review that
 /// cannot run is silent: the turn simply continues as it always did.
-pub async fn review_slides(state: &Arc<AppState>, slide_ids: &[String]) -> Option<Review> {
+pub async fn review_slides(
+    state: &Arc<AppState>,
+    slide_ids: &[String],
+    pending_images: &[String],
+) -> Option<Review> {
     if slide_ids.is_empty() || !state.copilot.review_enabled() {
         return None;
     }
@@ -98,7 +115,12 @@ pub async fn review_slides(state: &Arc<AppState>, slide_ids: &[String]) -> Optio
         }
     };
     let width_by_height = slyde_export::png_dimensions(deck.aspect_ratio);
-    Some(format_review(&positions, &audits, width_by_height))
+    Some(format_review(
+        &positions,
+        &audits,
+        width_by_height,
+        pending_images,
+    ))
 }
 
 /// Builds the message for the model from the findings.
@@ -106,23 +128,31 @@ pub fn format_review(
     positions: &[(usize, String)],
     audits: &[SlideAudit],
     canvas: (u32, u32),
+    pending_images: &[String],
 ) -> Review {
+    let pending_images: HashSet<&str> = pending_images.iter().map(String::as_str).collect();
     let mut problems = 0;
     let mut sections = Vec::new();
     let mut clean = Vec::new();
     for ((number, id), audit) in positions.iter().zip(audits) {
-        if audit.issues.is_empty() {
+        let hard: Vec<&slyde_export::AuditIssue> = audit
+            .issues
+            .iter()
+            .filter(|issue| is_hard_issue(&issue.kind))
+            // An image-only slide is empty until its background job lands.
+            .filter(|issue| !(issue.kind == "empty" && pending_images.contains(id.as_str())))
+            .collect();
+        if hard.is_empty() {
             clean.push(number.to_string());
             continue;
         }
-        problems += audit.issues.len();
-        let shown = audit.issues.iter().take(MAX_PER_SLIDE);
+        problems += hard.len();
         let mut lines = vec![format!(
-            "Slide {number} (id {id}), {} problem{}:",
-            audit.issues.len(),
-            if audit.issues.len() == 1 { "" } else { "s" }
+            "Slide {number} (id {id}), {} hard problem{}:",
+            hard.len(),
+            if hard.len() == 1 { "" } else { "s" }
         )];
-        for issue in shown {
+        for issue in hard.iter().take(MAX_PER_SLIDE) {
             if issue.element.is_empty() {
                 lines.push(format!("- {}: {}", issue.kind, issue.detail));
             } else {
@@ -132,15 +162,15 @@ pub fn format_review(
                 ));
             }
         }
-        if audit.issues.len() > MAX_PER_SLIDE {
-            lines.push(format!("- and {} more", audit.issues.len() - MAX_PER_SLIDE));
+        if hard.len() > MAX_PER_SLIDE {
+            lines.push(format!("- and {} more", hard.len() - MAX_PER_SLIDE));
         }
         sections.push(lines.join("\n"));
     }
 
     if problems == 0 {
         return Review {
-            text: "Automatic review: no layout problems found in the slides you wrote. \
+            text: "Automatic review: no hard layout problems found in the slides you wrote. \
                    Do not call more tools; give the short summary."
                 .to_string(),
             problems: 0,
@@ -149,15 +179,17 @@ pub fn format_review(
 
     let mut text = format!(
         "Automatic review of the slides you just wrote, measured in a real render of the \
-         {}x{} canvas. Fix every problem below in ONE call (write_slides for several slides, \
-         mutate_element for a single block), change only what is listed, then stop.\n\n{}",
+         {}x{} canvas. Fix every hard problem below in ONE call (write_slides for several \
+         slides, mutate_element for a single block). Change only what is listed, do not rewrite \
+         a slide that already passes, and ignore cosmetic preferences such as small labels, \
+         tight margins or dense data. Then stop.\n\n{}",
         canvas.0,
         canvas.1,
         sections.join("\n\n")
     );
     if !clean.is_empty() {
         text.push_str(&format!(
-            "\n\nNo problems on slide(s) {}.",
+            "\n\nNo hard problems on slide(s) {}.",
             clean.join(", ")
         ));
     }
@@ -191,6 +223,19 @@ mod tests {
             kind: kind.into(),
             element: element.into(),
             detail: detail.into(),
+        }
+    }
+
+    #[test]
+    fn the_review_policy_is_one_hard_pass() {
+        assert_eq!(MAX_REVIEWS_PER_TURN, 1);
+        for kind in [
+            "broken", "empty", "overflow", "clipped", "overlap", "contrast",
+        ] {
+            assert!(is_hard_issue(kind), "{kind} is a hard failure");
+        }
+        for kind in ["small", "margin", "dense"] {
+            assert!(!is_hard_issue(kind), "{kind} is cosmetic");
         }
     }
 
@@ -233,21 +278,25 @@ mod tests {
                         "h1#title \"Big\"",
                         "extends beyond the canvas right by 80px",
                     ),
-                    issue("small", "p \"tiny\"", "type is 10px; use at least 18px"),
+                    issue(
+                        "clipped",
+                        "p \"body\"",
+                        "text is cut off vertically (90px of content in 60px)",
+                    ),
                 ],
             },
             SlideAudit::unavailable(),
         ];
-        let review = format_review(&positions, &audits, (1280, 720));
+        let review = format_review(&positions, &audits, (1280, 720), &[]);
         assert_eq!(review.problems, 2);
         assert!(review.text.contains("1280x720"));
-        assert!(review.text.contains("Slide 2 (id b), 2 problems:"));
+        assert!(review.text.contains("Slide 2 (id b), 2 hard problems:"));
         assert!(
             review.text.contains(
                 "- overflow on h1#title \"Big\": extends beyond the canvas right by 80px"
             )
         );
-        assert!(review.text.contains("No problems on slide(s) 1, 3."));
+        assert!(review.text.contains("No hard problems on slide(s) 1, 3."));
         assert!(
             review.text.contains("ONE call"),
             "the model is told to fix in one round"
@@ -260,16 +309,65 @@ mod tests {
             &[(1, "a".to_string())],
             &[SlideAudit::unavailable()],
             (1280, 720),
+            &[],
         );
         assert_eq!(review.problems, 0);
-        assert!(review.text.contains("no layout problems"));
+        assert!(review.text.contains("no hard layout problems"));
         assert!(review.text.contains("Do not call more tools"));
+    }
+
+    #[test]
+    fn cosmetic_findings_do_not_trigger_a_rewrite() {
+        let review = format_review(
+            &[(1, "a".to_string())],
+            &[SlideAudit {
+                words: 140,
+                issues: vec![
+                    issue("small", "span.eyebrow", "type is 11px; use at least 18px"),
+                    issue(
+                        "margin",
+                        "h1",
+                        "only 18px from the canvas edge; keep at least 40px",
+                    ),
+                    issue("dense", "", "140 words on one slide"),
+                ],
+            }],
+            (1280, 720),
+            &[],
+        );
+        assert_eq!(review.problems, 0);
+        assert!(review.text.contains("no hard layout problems"));
+        assert!(!review.text.contains("span.eyebrow"));
+        assert!(!review.text.contains("only 18px"));
+        assert!(!review.text.contains("140 words"));
+    }
+
+    #[test]
+    fn a_slide_waiting_for_its_image_is_not_reported_as_empty() {
+        let positions = [(1, "a".to_string())];
+        let audits = [SlideAudit {
+            words: 0,
+            issues: vec![issue("empty", "", "the slide shows nothing")],
+        }];
+        let pending = ["a".to_string()];
+        let review = format_review(&positions, &audits, (1280, 720), &pending);
+        assert_eq!(review.problems, 0);
+        assert!(review.text.contains("no hard layout problems"));
+
+        let review = format_review(&positions, &audits, (1280, 720), &[]);
+        assert_eq!(review.problems, 1, "without a pending image it is empty");
     }
 
     #[test]
     fn a_bad_slide_never_becomes_a_wall_of_text() {
         let many: Vec<AuditIssue> = (0..12)
-            .map(|index| issue("small", "p", &format!("type is {index}px")))
+            .map(|index| {
+                issue(
+                    "overflow",
+                    "p",
+                    &format!("runs off the canvas by {index}px"),
+                )
+            })
             .collect();
         let review = format_review(
             &[(1, "a".to_string())],
@@ -278,10 +376,11 @@ mod tests {
                 issues: many,
             }],
             (1280, 720),
+            &[],
         );
-        assert!(review.text.contains("12 problems"));
+        assert!(review.text.contains("12 hard problems"));
         assert!(review.text.contains("and 6 more"));
-        assert_eq!(review.text.matches("- small").count(), MAX_PER_SLIDE);
+        assert_eq!(review.text.matches("- overflow").count(), MAX_PER_SLIDE);
     }
 
     #[test]

@@ -40,23 +40,28 @@ impl ImagePrompt<'_> {
             .capability
             .is_some_and(|capability| capability.available)
         {
-            "Images: make the picture part of the composition, not a sticker on top. Call \
-             `request_image` once for every picture you want, with a precise visual prompt, the \
-             unique `image_id`, the `alt` text and the target slide (`slide_id`, or `slide_index` \
-             while you are still writing). It runs in the background, so keep writing: the system \
-             buffers the result and places it on its slide when the slide exists. Do not call \
-             `generate_image` and do not invent image URLs. Alt text is mandatory."
+            "Images: make the picture part of the composition, not a sticker on top. Decide when a \
+             slide needs a picture; the user does not have to ask. Covers, products, places, \
+             people, mood and concept slides are natural candidates. Plan a cover and one or two \
+             key visual moments, not an image on every slide; when type or a diagram carries the \
+             idea better, do not force a picture. Call `request_image` once for every picture you \
+             want, with a precise visual prompt, the unique `image_id`, the `alt` text and the \
+             target slide (`slide_id`, or `slide_index` while you are still writing). It runs in \
+             the background, so keep writing: the system buffers the result and places it on its \
+             slide when the slide exists. Do not call `generate_image` and do not invent image \
+             URLs. Alt text is mandatory."
                 .to_string()
         } else if self.stock {
-            "Images: the image generator is not available right now, so use `search_images` to find \
-             a real photo or vector that fits the content, then place the best result with \
-             `insert_image` using its `url` and a specific `alt`. Prefer one strong image over a \
-             collage. Never invent image URLs. Alt text is mandatory."
+            "Images: the image generator is not available right now. Decide when a slide needs a \
+             real photo or vector; the user does not have to ask. Use `search_images` to find one \
+             that fits the content, then place the best result with `insert_image` using its `url` \
+             and a specific `alt`. Prefer one strong image over a collage. Never invent image \
+             URLs. Alt text is mandatory."
                 .to_string()
         } else {
-            "Images: make the picture part of the composition, not a sticker on top. Use \
-             `insert_image` with a high-resolution https link the user supplied or a stored \
-             `/assets/…` path; alt text is mandatory."
+            "Images: use `insert_image` only with a high-resolution https link the user supplied \
+             or a stored \
+             `/assets/…` path. Do not add decorative pictures when no image source is available. Alt text is mandatory."
                 .to_string()
         }
     }
@@ -71,6 +76,7 @@ impl ImagePrompt<'_> {
             return String::new();
         }
         "\n## Image generation\n\nAn image model is available and works in the background. Never name its provider or model.\n\
+         Decide when a slide needs a picture; the user does not need to ask. Use one for a cover or a key visual moment, not on every slide.\n\
          Call `request_image` with a unique `image_id`, a precise `prompt`, `alt`, and `slide_id` or \
          `slide_index`; it returns immediately and the system places the picture when the slide is \
          ready. Do not call `generate_image`.\n"
@@ -87,6 +93,8 @@ impl ImagePrompt<'_> {
         "\n## Image generation\n\n\
          An image model is available and works in the background. Never name, compare or mention \
          the provider or model to the user.\n\n\
+         - Decide when a picture is needed; the user does not have to ask. Use it for a cover or a \
+         key visual moment, not on every slide.\n\
          - Call `request_image` with a unique `image_id`, a precise visual `prompt`, `alt`, and the \
          target (`slide_id` for an existing slide, or `slide_index` while you are still writing). \
          Optional `x`/`y`/`w`/`h` place it exactly.\n\
@@ -503,6 +511,10 @@ mod tests {
         );
         assert!(prompt.contains("Image generation"));
         assert!(prompt.contains("An image model is available"));
+        assert!(
+            prompt.contains("the user does not have to ask"),
+            "the copilot must decide when a picture helps"
+        );
         assert!(prompt.contains("request_image"));
         assert!(!prompt.contains("- `generate_image`"), "{prompt}");
         for absent in [

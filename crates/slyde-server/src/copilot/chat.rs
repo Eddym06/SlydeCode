@@ -15,6 +15,7 @@ use crate::state::{AgentAction, AgentPhase, AppState, ServerEvent};
 use super::attachments::{self, AttachmentContent, AttachmentInput};
 use super::catalog;
 use super::error::CopilotError;
+use super::image_service::ImageStatus;
 use super::prompt;
 use super::tools;
 use super::wire::{ChatEvent, ImagePart, TokenUsage, Turn};
@@ -352,9 +353,13 @@ async fn run_inner(
             tool_calls: calls.clone(),
         });
 
+        let mut review_after_round = false;
         for call in calls {
             if tx.is_closed() {
                 return Err(CopilotError::Cancelled);
+            }
+            if review_after_tool(&call.name) {
+                review_after_round = true;
             }
             let _ = tx.send(ChatEvent::Tool {
                 name: call.name.clone(),
@@ -394,23 +399,45 @@ async fn run_inner(
         }
         // The model wrote blind: open what it wrote, measure it, and hand the
         // findings back inside the last tool result.
-        if reviews < review::MAX_REVIEWS_PER_TURN && state.copilot.review_enabled() {
-            let changed = review::changed_slides(&code_before, &state.view().await.presentation);
+        if review_after_round
+            && reviews < review::MAX_REVIEWS_PER_TURN
+            && state.copilot.review_enabled()
+        {
+            let view = state.view().await;
+            let changed = review::changed_slides(&code_before, &view.presentation);
+            // A slide whose picture is still queued would look empty to the
+            // audit. Do not ask the model to fix it before the image lands.
+            let pending_images: Vec<String> = turn
+                .images
+                .jobs()
+                .await
+                .iter()
+                .filter(|job| matches!(job.status, ImageStatus::Queued | ImageStatus::Generating))
+                .filter_map(|job| {
+                    job.slide_id.clone().or_else(|| {
+                        job.slide_index
+                            .and_then(|index| view.presentation.slides.get(index))
+                            .map(|slide| slide.id.clone())
+                    })
+                })
+                .collect();
             if !changed.is_empty() {
                 let _ = tx.send(ChatEvent::Tool {
                     name: review::TOOL_NAME.to_string(),
                     status: "running".into(),
                 });
-                let outcome = review::review_slides(state, &changed).await;
+                let outcome = review::review_slides(state, &changed, &pending_images).await;
                 let _ = tx.send(ChatEvent::Tool {
                     name: review::TOOL_NAME.to_string(),
                     status: "done".into(),
                 });
-                if let Some(found) = outcome {
-                    reviews += 1;
-                    if let Some(Turn::Tool { content, .. }) = turns.last_mut() {
-                        *content = review::attach(content, &found.text);
-                    }
+                // Count the attempt, not only a successful audit: a missing
+                // browser must not make the next round try the same review again.
+                reviews += 1;
+                if let Some(found) = outcome
+                    && let Some(Turn::Tool { content, .. }) = turns.last_mut()
+                {
+                    *content = review::attach(content, &found.text);
                 }
             }
         }
@@ -478,6 +505,13 @@ fn activity(phase: AgentPhase) -> ServerEvent {
         slide_id: None,
         slide_index: None,
     }
+}
+
+/// A review only follows tools that write a whole slide. Local edits such as
+/// `mutate_element` or `insert_image` should not open a browser and spend a
+/// model round unless the user asks for a review.
+fn review_after_tool(name: &str) -> bool {
+    [tools::BUILD_DECK, tools::WRITE_SLIDES, tools::UPSERT_SLIDE].contains(&name)
 }
 
 fn build_turns(messages: &[ChatMessageInput]) -> Result<Vec<Turn>, CopilotError> {
@@ -573,6 +607,22 @@ mod tests {
         assert_eq!(turns.len(), 3);
         assert!(matches!(turns[0], Turn::User { .. }));
         assert!(matches!(turns[1], Turn::Assistant { .. }));
+    }
+
+    #[test]
+    fn only_full_slide_writes_trigger_the_layout_review() {
+        for name in [tools::BUILD_DECK, tools::WRITE_SLIDES, tools::UPSERT_SLIDE] {
+            assert!(review_after_tool(name), "{name} writes a full slide");
+        }
+        for name in [
+            tools::MUTATE_ELEMENT,
+            tools::INSERT_IMAGE,
+            tools::SET_THEME,
+            tools::SET_TITLE,
+            tools::REQUEST_IMAGE,
+        ] {
+            assert!(!review_after_tool(name), "{name} is a local edit");
+        }
     }
 
     #[test]
