@@ -1943,6 +1943,11 @@ test("selects a block on the canvas and lists the slide structure", async (t) =>
   );
   const addedId = addedState.view.presentation.slides[0].id;
   await waitForStageReady(addedId);
+  assert.match(
+    await page.evaluate(`document.getElementById("copilot-context-pill").textContent`),
+    /Referencing slide 1|Referenciando diapositiva 1/,
+    "clicking a slide adds its reference to the chat"
+  );
 
   const { tag: hudTag } = await selectBlockOnStage(t, page, addedId);
   assert.ok(hudTag.length > 0 && !hudTag.startsWith("#"), "the HUD names the block in plain words");
@@ -1953,7 +1958,11 @@ test("selects a block on the canvas and lists the slide structure", async (t) =>
     tree: document.querySelectorAll(".element-tree-item").length
   })`);
   assert.equal(selection.hud, true, "the element HUD is visible");
-  assert.match(selection.pill, /Destino: /, "the copilot targets the block");
+  assert.match(
+    selection.pill,
+    /Referencing slide|Referenciando diapositiva/,
+    "the copilot targets the block inside its slide"
+  );
   assert.ok(selection.tree > 0, "the inspector lists the slide structure");
 
   // The palette opens scoped to the selection.
@@ -1966,7 +1975,9 @@ test("selects a block on the canvas and lists the slide structure", async (t) =>
     groups: [...document.querySelectorAll(".palette-group")].map((node) => node.textContent)
   })`);
   assert.equal(palette.open, true);
-  assert.ok(palette.groups.includes("Elemento seleccionado"));
+  assert.ok(
+    palette.groups.some((group) => /Elemento seleccionado|Selected element/.test(group))
+  );
 
   await page.evaluate(
     `document.getElementById("palette-input").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); true`

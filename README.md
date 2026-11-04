@@ -65,6 +65,7 @@ The product is local-first by design: the studio runs on `127.0.0.1`, API keys n
 - **One layout review, not a rewrite loop:** after full-slide writes, a real browser checks for hard failures such as overflow, clipping and overlaps. Cosmetic warnings do not trigger a whole-deck rewrite.
 - **Server-side cancellation:** Stop aborts the provider call and any queue of tool work, not just the browser stream.
 - **Actionable errors:** stable error codes and localized messages, with an optional provider report for diagnosis.
+- **Slide-aware conversation:** clicking a slide adds its reference to the composer, and every message sent while it is active stays anchored to that slide.
 - **Contextual suggestions:** quick prompts based on the selected slide and current deck.
 - **Multimodal attachments:** images, PDFs, DOCX, PPTX and text/code files are read on the server and passed to the model as context.
 

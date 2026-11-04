@@ -312,10 +312,11 @@ Rules:
 8. If a tool returns an error, correct the arguments and try once; if it still fails, explain
    the specific problem in plain language.
 9. After you write slides you receive an automatic `review` inside the tool result: the slides
-   were opened in a real browser and measured (text off the canvas, cut off or overlapping,
-   type under 18 px, low contrast, crowded or empty slides). Fix every listed problem in ONE
-   call, changing only what is listed, then stop. If the review says there are no problems, do
-   not call more tools.
+   were opened in a real browser and measured. Only hard failures are listed (off-canvas,
+   clipped, overlapping, broken or empty slides, and bad contrast). Fix every hard problem in
+   ONE call, changing only what is listed, then stop. Small labels, tight margins and dense
+   data are intentional design choices and are not returned as problems. If the review says
+   there are no hard problems, do not call more tools.
 "#,
         language = language,
         aspect = deck.aspect_ratio.as_str(),

@@ -58,6 +58,7 @@ function boot(sessionToken) {
   /// `&t=…` suffix appended to every slide URL (`""` when the server sent none).
   let sourceQuery = "";
   let selectedId = null;
+  let lastContextText = "";
   let stageKey = "";
   let pendingAnimations = [];
   let titleTimer = null;
@@ -124,6 +125,7 @@ function boot(sessionToken) {
     agentAnnouncer: $("agent-announcer"),
     stageScan: $("stage-scan"),
     copilotContextPill: $("copilot-context-pill"),
+    copilotContextText: $("copilot-context-text"),
     copilotPromptPills: $("copilot-prompt-pills"),
   };
 
@@ -728,26 +730,52 @@ function boot(sessionToken) {
     maybeSweep();
   }
 
+  function slideContext() {
+    const d = deck();
+    const current = slide();
+    if (!d || !current) return null;
+    const index = d.slides.findIndex((s) => s.id === current.id);
+    if (index < 0) return null;
+    return {
+      id: current.id,
+      index,
+      label: t("copilot.contextSlide", {
+        n: index + 1,
+        template: t(`template.${current.template}`),
+      }),
+    };
+  }
+
   function updateCopilotContext(d) {
-    if (!els.copilotContextPill || !els.copilotPromptPills) return;
+    if (!els.copilotContextPill || !els.copilotContextText || !els.copilotPromptPills) return;
     const current = slide();
     const idx = current ? d.slides.findIndex((s) => s.id === current.id) : -1;
+    let label = "";
     if (canvas.selectedElement) {
-      els.copilotContextPill.textContent = t("copilot.contextElement", {
+      label = t("copilot.contextElement", {
         id: canvas.selectedElement.id,
+        n: idx + 1,
       });
       els.copilotContextPill.dataset.target = "element";
     } else if (current && idx >= 0) {
-      els.copilotContextPill.textContent = t("copilot.contextSlide", {
+      label = t("copilot.contextSlide", {
         n: idx + 1,
         template: t(`template.${current.template}`),
       });
       delete els.copilotContextPill.dataset.target;
     } else {
-      els.copilotContextPill.textContent = t("copilot.contextDeck", {
+      label = t("copilot.contextDeck", {
         n: d.slides.length,
       });
       delete els.copilotContextPill.dataset.target;
+    }
+    if (label !== lastContextText) {
+      lastContextText = label;
+      els.copilotContextText.textContent = label;
+      els.copilotContextPill.title = label;
+      els.copilotContextPill.classList.remove("is-updated");
+      void els.copilotContextPill.offsetWidth;
+      els.copilotContextPill.classList.add("is-updated");
     }
 
     // Suggestions follow what the user is looking at: a block, a slide, or a
@@ -2076,6 +2104,7 @@ function boot(sessionToken) {
       copilot = mountCopilot({
         client,
         getSelectedSlideId: () => selectedId,
+        getSlideContext: () => slideContext(),
         getSelectedElementId: () => (canvas.selectedElement ? canvas.selectedElement.id : null),
         notify: toast,
         getDeckId: () => activeDeckId,

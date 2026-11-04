@@ -328,12 +328,19 @@
 
           <div class="copilot-attachments" id="copilot-attachments" hidden></div>
 
-          <div class="copilot-context-bar" id="copilot-context-bar">
-            <span class="context-pill" id="copilot-context-pill"></span>
-          </div>
           <div class="copilot-prompt-pills" id="copilot-prompt-pills"></div>
 
           <form class="composer" id="copilot-form">
+            <div class="copilot-context-bar" id="copilot-context-bar">
+              <span class="context-pill" id="copilot-context-pill">
+                <svg class="context-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 17v5"/>
+                  <path d="M8 3h8l-1 6 3 3v2H6v-2l3-3z"/>
+                </svg>
+                <span id="copilot-context-text"></span>
+              </span>
+            </div>
             <div class="composer-field">
               <textarea id="copilot-input" class="composer-input" rows="1"
                         data-i18n-placeholder="copilot.placeholder"

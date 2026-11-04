@@ -40,7 +40,14 @@ const TEXT_EXT = new Set([
 
 const $ = (id) => document.getElementById(id);
 
-export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId, notify, getDeckId }) {
+export function mountCopilot({
+  client,
+  getSelectedSlideId,
+  getSlideContext,
+  getSelectedElementId,
+  notify,
+  getDeckId,
+}) {
   const els = {
     panel: $("copilot-panel"),
     thread: $("copilot-thread"),
@@ -466,6 +473,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (message.role === "user") {
       article.innerHTML = `
         <div class="msg-body">
+          <div class="msg-context" hidden></div>
           <div class="msg-attachments"></div>
           <div class="msg-row">
             <div class="msg-tools" role="group" aria-label="${escapeHtml(t("copilot.messageActions"))}">
@@ -483,6 +491,13 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         files.innerHTML = message.attachments.map(userAttachment).join("");
       } else {
         files.hidden = true;
+      }
+      const context = article.querySelector(".msg-context");
+      if (message.context && message.context.label) {
+        context.hidden = false;
+        context.textContent = message.context.label;
+      } else {
+        context.hidden = true;
       }
       return article;
     }
@@ -989,6 +1004,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       role: "user",
       text,
       attachments,
+      context: typeof getSlideContext === "function" ? getSlideContext() : null,
       state: "done",
       el: null,
     });
@@ -1036,9 +1052,14 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       provider: providerId,
       model: modelId,
       messages: history,
-      selected_slide_id: getSelectedSlideId() || null,
+      selected_slide_id:
+        (lastUser && lastUser.context && lastUser.context.id) ||
+        getSelectedSlideId() ||
+        null,
       selected_element_id:
-        typeof getSelectedElementId === "function" ? getSelectedElementId() || null : null,
+        lastUser && lastUser.context && typeof getSelectedElementId === "function"
+          ? getSelectedElementId() || null
+          : null,
       language: lang(),
       request_id: requestId,
     };

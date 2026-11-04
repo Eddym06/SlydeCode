@@ -100,6 +100,11 @@ Each `data:` frame is one JSON object:
 
 They mirror the MCP command surface, and every mutation runs through
 `agent::run`, so an agent and the copilot are indistinguishable to the deck.
+
+The composer shows a slide-reference pill whenever a slide is selected. The
+reference travels as `selected_slide_id`, is named in the system prompt's deck
+context and selection block, and is kept as a small chip on the user message that
+was sent while it was active.
 Reads are local and do not broadcast activity. The chat itself emits a
 `thinking` activity phase on request start and between tool rounds, then the
 shared `done`/`error` outcome; the stage chip and the panel's own live dot are

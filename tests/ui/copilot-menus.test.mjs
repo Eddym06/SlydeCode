@@ -414,6 +414,15 @@ test("a sent message offers run again and edit, and the reply shows its usage", 
   await page.waitFor(`document.querySelectorAll(".msg-assistant .msg-text").length === 1 &&
     document.querySelector(".msg-assistant").dataset.state === "done"`);
 
+  const context = await page.evaluate(
+    `document.querySelector(".msg-user .msg-context")?.textContent || ""`
+  );
+  assert.match(
+    context,
+    /Referencing slide|Referenciando diapositiva/,
+    "the sent message keeps the slide reference"
+  );
+
   const usage = await page.evaluate(`[...document.querySelectorAll(".msg-usage .usage-item")].map((item) => item.getAttribute("aria-label"))`);
   assert.equal(usage.length, 3, `calls, input and output are listed: ${usage}`);
   assert.match(usage[0], /3/);

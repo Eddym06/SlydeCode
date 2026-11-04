@@ -1352,6 +1352,21 @@ details.dev[open] summary::before {
   font-size: 13px;
 }
 
+.msg-context {
+  align-self: flex-end;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-strong);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.msg-context[hidden] {
+  display: none;
+}
+
 .msg-attachments {
   display: flex;
   flex-wrap: wrap;
@@ -3200,7 +3215,7 @@ body.has-thinking-expanded .copilot-panel {
 
 /* ---------- Copilot Context Bar & Prompt Pills ---------- */
 .copilot-context-bar {
-  padding: 6px 14px 2px;
+  padding: 8px 11px 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3217,6 +3232,27 @@ body.has-thinking-expanded .copilot-panel {
   background: var(--brand-soft);
   color: var(--brand-strong);
   border: 1px solid var(--border);
+}
+
+.context-pin {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.context-pill.is-updated {
+  animation: context-pop 320ms var(--ease-out);
+}
+
+@keyframes context-pop {
+  0% {
+    transform: scale(0.96);
+    opacity: 0.72;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .copilot-prompt-pills {
