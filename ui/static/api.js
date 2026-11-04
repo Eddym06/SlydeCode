@@ -107,6 +107,26 @@ export function createClient(token) {
       return payload.config;
     },
 
+    /** off, ai or stock. */
+    async copilotImageMode(mode) {
+      const payload = await json(`/api/copilot/image-mode`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      return payload.config;
+    },
+
+    /** Retries one failed background image with the same prompt and target. */
+    async copilotRetryImage(input) {
+      const payload = await json(`/api/copilot/image-retry`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return payload.job;
+    },
+
     /** Remembers which provider/model draws images, independently of chat. */
     async copilotImageModel(provider, model) {
       const payload = await json(`/api/copilot/image-model`, {

@@ -80,10 +80,21 @@ pub enum ImageStatus {
 pub struct ImageJobView {
     pub id: String,
     pub status: ImageStatus,
+    /// Kept so a failed job can be retried without asking the model again.
+    pub prompt: String,
+    pub alt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slide_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slide_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub w: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// Stable reason code the UI localizes. `error` keeps the English detail
@@ -256,8 +267,14 @@ impl ImageRequest {
         ImageJobView {
             id: self.id.clone(),
             status,
+            prompt: self.prompt.clone(),
+            alt: self.alt.clone(),
             slide_id: self.slide_id.clone(),
             slide_index: self.slide_index,
+            x: self.x,
+            y: self.y,
+            w: self.w,
+            h: self.h,
             url: None,
             error_code: None,
             error: None,
@@ -844,8 +861,14 @@ async fn next_view(turn: &ImageTurn, id: &str) -> ImageJobView {
         .unwrap_or_else(|| ImageJobView {
             id: id.to_string(),
             status: ImageStatus::Failed,
+            prompt: String::new(),
+            alt: String::new(),
             slide_id: None,
             slide_index: None,
+            x: None,
+            y: None,
+            w: None,
+            h: None,
             url: None,
             error_code: Some("image_missing".into()),
             error: Some("the image job disappeared".into()),
@@ -1351,6 +1374,10 @@ mod tests {
         let view = job.view(ImageStatus::Queued);
         assert_eq!(view.slide_id.as_deref(), Some("sld_a"));
         assert_eq!(view.slide_index, Some(0));
+        assert_eq!(view.prompt, "a hero image");
+        assert_eq!(view.alt, "A hero image");
+        assert_eq!(view.x, Some(10.0));
+        assert_eq!(view.w, Some(400.0));
         assert_eq!(view.status, ImageStatus::Queued);
     }
 }

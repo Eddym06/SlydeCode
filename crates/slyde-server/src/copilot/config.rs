@@ -49,6 +49,10 @@ pub struct CopilotConfig {
     /// call just to know what a picture costs.
     #[serde(default)]
     pub last_image_cost: Option<f64>,
+    /// `off`, `ai` or `stock`. `None` lets the app derive the best default from
+    /// the configured keys until the user chooses explicitly.
+    #[serde(default)]
+    pub image_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]

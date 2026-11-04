@@ -12,6 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::state::{AgentAction, AgentPhase, AppState, ServerEvent};
 
+use super::ImageMode;
 use super::attachments::{self, AttachmentContent, AttachmentInput};
 use super::catalog;
 use super::error::CopilotError;
@@ -206,21 +207,21 @@ async fn run_inner(
             .selected_slide_id
             .as_deref()
             .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
-        // The image capability is re-read every round: an image failure removes
-        // it from the next prompt and advertises the stock fallback instead.
-        // No image count is predicted or sent to the model.
+        // The image source is re-read every round: the user's switch decides
+        // whether the model may generate, search or do neither. No image count
+        // is predicted or sent to the model.
+        let image_mode = state.copilot.image_mode().await;
         let capability = state.images.capability(state).await;
+        let stock_available = !state.copilot.stock_keys().await.providers().is_empty();
+        let use_ai = image_mode == ImageMode::Ai && capability.available;
+        let use_stock = image_mode == ImageMode::Stock && stock_available;
         let availability = tools::ToolAvailability {
-            image_requests: capability.available,
-            // Advertise the stock tool only when a service is actually
-            // configured. Without keys the model gets the plain `insert_image`
-            // guidance instead of a dead-end search.
-            stock_images: !capability.available
-                && !state.copilot.stock_keys().await.providers().is_empty(),
+            image_requests: use_ai,
+            stock_images: use_stock,
         };
         let image_prompt = prompt::ImagePrompt {
-            capability: Some(&capability),
-            stock: availability.stock_images,
+            capability: if use_ai { Some(&capability) } else { None },
+            stock: use_stock,
         };
         let system = if lean {
             prompt::system_prompt_lean_with_images(

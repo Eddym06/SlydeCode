@@ -58,6 +58,8 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     modelChip: $("copilot-model-chip"),
     modelChipText: $("copilot-model-chip-text"),
     modelChipIcon: $("copilot-model-chip-icon"),
+    imageMode: $("copilot-image-mode"),
+    imageModeText: $("copilot-image-mode-text"),
     newChat: $("copilot-new"),
     live: $("copilot-live"),
     sheet: $("copilot-sheet"),
@@ -224,7 +226,55 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     }
     els.modelChip.title = model;
     els.modelChip.setAttribute("aria-label", model);
+    syncImageMode();
     updateSendEnabled();
+  }
+
+  function imageModeState() {
+    return {
+      mode: (config && config.image_mode) || "off",
+      aiAvailable: Boolean(
+        config &&
+          config.providers &&
+          config.providers.some((provider) => provider.configured && provider.image_model)
+      ),
+      stockAvailable: Boolean(
+        config && config.stock && config.stock.some((source) => source.configured)
+      ),
+    };
+  }
+
+  function syncImageMode() {
+    if (!els.imageMode) return;
+    const { mode } = imageModeState();
+    const shortKey = `copilot.imageMode.short.${mode}`;
+    const short = t(shortKey);
+    els.imageModeText.textContent = short === shortKey ? t("copilot.imageMode.off") : short;
+    els.imageMode.dataset.mode = mode;
+    const label = `${t("copilot.imageMode.label")}: ${t(`copilot.imageMode.${mode}`)}`;
+    els.imageMode.title = label;
+    els.imageMode.setAttribute("aria-label", label);
+  }
+
+  async function chooseImageMode(mode) {
+    if (!config) return;
+    const previous = config.image_mode;
+    if (mode === previous) return;
+    els.imageMode.disabled = true;
+    try {
+      const next = await client.copilotImageMode(mode);
+      if (next) {
+        config = next;
+        configError = null;
+        syncHeader();
+      }
+    } catch (error) {
+      config.image_mode = previous;
+      syncImageMode();
+      notify(error.message || t("copilot.imageMode.failed"));
+    } finally {
+      els.imageMode.disabled = false;
+    }
   }
 
   function openSheet() {
@@ -280,16 +330,6 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         stream.scrollTop = stream.scrollHeight;
       }
     });
-    const toggle = drawer.querySelector("[data-thinking-expand]");
-    if (toggle) {
-      toggle.addEventListener("click", (event) => {
-        // A click inside <summary> would also open/close the drawer.
-        event.preventDefault();
-        event.stopPropagation();
-        if (drawer.classList.contains("is-expanded")) collapseThinking(drawer);
-        else expandThinking(drawer);
-      });
-    }
     const header = drawer.querySelector(".thinking-header");
     if (header) {
       header.addEventListener("click", (event) => {
@@ -301,17 +341,6 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         expandThinking(drawer);
       });
     }
-    syncThinkingToggle(drawer);
-  }
-
-  function syncThinkingToggle(drawer) {
-    const toggle = drawer.querySelector("[data-thinking-expand]");
-    if (!toggle) return;
-    const expanded = drawer.classList.contains("is-expanded");
-    const label = t(expanded ? "copilot.thinking.collapse" : "copilot.thinking.expand");
-    toggle.setAttribute("aria-label", label);
-    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-    toggle.title = label;
   }
 
   function expandThinking(drawer) {
@@ -324,10 +353,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     drawer.open = true;
     drawer.classList.add("is-expanded");
     document.body.classList.add("has-thinking-expanded");
-    syncThinkingToggle(drawer);
     const stream = drawer.querySelector(".thinking-stream");
     if (stream && stream.dataset.pinned !== "false") stream.scrollTop = stream.scrollHeight;
-    drawer.querySelector("[data-thinking-expand]")?.focus();
+    drawer.querySelector(".thinking-header")?.focus();
   }
 
   function collapseThinking(drawer) {
@@ -340,8 +368,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     const slot = drawerSlots.get(drawer);
     if (slot?.isConnected) slot.append(drawer);
     else drawer.remove();
-    syncThinkingToggle(drawer);
-    drawer.querySelector("[data-thinking-expand]")?.focus();
+    drawer.querySelector(".thinking-header")?.focus();
   }
 
   function closeExpandedThinking() {
@@ -505,12 +532,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
             <details class="thinking-drawer">
               <summary class="thinking-header">
                 <span class="thinking-spark" aria-hidden="true">${sparkSvg()}</span>
-                <span class="thinking-title">${escapeHtml(t("copilot.thinking"))}</span>
-                <span class="thinking-badge"></span>
-                <button type="button" class="thinking-expand" data-thinking-expand>
-                  <svg class="thinking-expand-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H5a1 1 0 0 0-1 1v4M15 20h4a1 1 0 0 0 1-1v-4M4 15v4a1 1 0 0 0 1 1h4M20 9V5a1 1 0 0 0-1-1h-4"/></svg>
-                  <svg class="thinking-expand-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
-                </button>
+                <span class="thinking-title"></span>
                 <svg class="thinking-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>
               </summary>
               <div class="thinking-body">
@@ -529,11 +551,10 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         if (stream && isStreamingThinking && stream.dataset.pinned !== "false") {
           stream.scrollTop = stream.scrollHeight;
         }
-        const badge = drawer.querySelector(".thinking-badge");
-        if (badge) {
-          const label = t(isStreamingThinking ? "copilot.thinking.live" : "copilot.thinking.done");
-          if (badge.textContent !== label) badge.textContent = label;
-          badge.classList.toggle("is-live", isStreamingThinking);
+        const title = drawer.querySelector(".thinking-title");
+        if (title) {
+          const label = t(isStreamingThinking ? "copilot.thinking" : "copilot.thinking.done");
+          if (title.textContent !== label) title.textContent = label;
         }
       }
     }
@@ -578,7 +599,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (images) {
       const jobs = message.images || [];
       images.hidden = jobs.length === 0;
-      if (jobs.length) images.innerHTML = jobs.map(imageRow).join("");
+      if (jobs.length) images.innerHTML = jobs.map((job) => imageRow(job, message.turnId)).join("");
     }
     const imageErrors = message.el.querySelector(".image-errors");
     if (imageErrors) {
@@ -634,6 +655,48 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (stick) scrollToBottom();
   }
 
+  async function retryImage(button) {
+    const turnId = button.dataset.retryTurn;
+    const imageId = button.dataset.retryImage;
+    const assistant = messages.find(
+      (message) => message.role === "assistant" && message.turnId === turnId
+    );
+    const job = assistant && (assistant.images || []).find((item) => item.id === imageId);
+    if (!assistant || !job || !job.prompt) return;
+    button.disabled = true;
+    try {
+      const next = await client.copilotRetryImage({
+        turn_id: turnId,
+        image_id: imageId,
+        prompt: job.prompt,
+        alt: job.alt || "",
+        slide_id: job.slide_id || null,
+        slide_index: job.slide_index ?? null,
+        x: job.x ?? null,
+        y: job.y ?? null,
+        w: job.w ?? null,
+        h: job.h ?? null,
+      });
+      const oldError = job.error;
+      if (next) {
+        Object.assign(job, next);
+      } else {
+        job.status = "queued";
+        job.error = null;
+        job.error_code = null;
+      }
+      if (Array.isArray(assistant.imageErrors)) {
+        assistant.imageErrors = assistant.imageErrors.filter(
+          (failure) => failure.message !== oldError
+        );
+      }
+      syncAssistant(assistant);
+    } catch (error) {
+      button.disabled = false;
+      notify(error.message || t("copilot.images.retryFailed"));
+    }
+  }
+
   function imageErrorText(error) {
     if (!error) return "";
     const code = error.code || "generic";
@@ -644,7 +707,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       : text;
   }
 
-  function imageRow(job) {
+  function imageRow(job, turnId) {
     const status = job.status || "queued";
     const label = t(`copilot.images.${status}`);
     const glyph =
@@ -670,10 +733,18 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     const thumb = job.url
       ? `<img class="image-thumb" src="${escapeHtml(job.url)}" alt="" loading="lazy">`
       : `<span class="image-thumb is-empty" aria-hidden="true"></span>`;
+    const retry =
+      status === "failed" && job.prompt
+        ? `<button type="button" class="image-retry" data-retry-image="${escapeHtml(
+            job.id
+          )}" data-retry-turn="${escapeHtml(turnId || "")}" title="${escapeHtml(
+            t("copilot.images.retry")
+          )}">${rerunSvg()}<span>${escapeHtml(t("copilot.images.retry"))}</span></button>`
+        : "";
     return `<div class="image-row" data-status="${escapeHtml(status)}">
       ${thumb}${glyph}<span class="image-label">${escapeHtml(label)}</span>${
         detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ""
-      }</div>`;
+      }${retry}</div>`;
   }
 
   function toolRow(tool) {
@@ -1554,11 +1625,13 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     host: els.form,
     attachButton: els.attach,
     modelButton: els.modelChip,
+    imageButton: els.imageMode,
     fileInput: els.file,
     t,
     escapeHtml,
     loadModels: (id) => client.copilotModels(id),
     getSelection: () => ({ provider: providerId, model: modelId }),
+    getImageMode: imageModeState,
     onLink: addLink,
     onPickModel(model) {
       modelId = model.id;
@@ -1566,6 +1639,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       syncHeader();
       els.input.focus();
     },
+    onPickImageMode: chooseImageMode,
     onConfigure: openSheet,
   });
   els.file.addEventListener("change", () => addFiles(els.file.files || []));
@@ -1606,6 +1680,11 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   });
   els.newChat.addEventListener("click", newChat);
   els.thread.addEventListener("click", async (event) => {
+    const imageRetry = event.target.closest("[data-retry-image]");
+    if (imageRetry) {
+      await retryImage(imageRetry);
+      return;
+    }
     const reportButton = event.target.closest("[data-report]");
     if (reportButton) {
       const message = messages.find((item) => item.el === reportButton.closest(".msg"));

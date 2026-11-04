@@ -32,11 +32,13 @@ const config = {
     { id: "pexels", name: "Pexels", configured: false },
     { id: "vecteezy", name: "Vecteezy", configured: false },
   ],
+  image_mode: "off",
   last_provider: "openai",
   last_model: "gpt-4.1-mini",
 };
 let imageModelRequests = 0;
 let stockKeyRequests = 0;
+let imageModeRequests = 0;
 const models = Array.from({ length: 30 }, (_, index) => ({
   id: index === 0 ? "gpt-4.1-mini" : `gpt-model-${index}`,
   name: index === 0 ? "gpt-4.1-mini" : `gpt-model-${index}`,
@@ -109,6 +111,11 @@ before(async () => {
             last_image_model: input.model,
           },
         });
+      } else if (request.url.includes("/api/copilot/image-mode")) {
+        imageModeRequests += 1;
+        const input = JSON.parse(request.postData || "{}");
+        config.image_mode = input.mode;
+        await fulfill(requestId, { ok: true, config });
       } else if (request.url.includes("/api/copilot/stock-key")) {
         stockKeyRequests += 1;
         const input = JSON.parse(request.postData || "{}");
@@ -142,7 +149,7 @@ before(async () => {
     }
   });
   await page.send("Fetch.enable", {
-    patterns: ["config", "models", "image-model", "stock-key", "fetch-url", "chat"].map((name) => ({
+    patterns: ["config", "models", "image-model", "image-mode", "stock-key", "fetch-url", "chat"].map((name) => ({
       urlPattern: `*api/copilot/${name}*`,
       requestStage: "Request",
     })),
@@ -366,6 +373,34 @@ test("the provider sheet saves stock image keys", async () => {
 
   await page.press("Escape", { keyCode: 27 });
   await page.waitFor(`document.getElementById("copilot-sheet").hidden === true`);
+});
+
+test("the image source chip switches between off, AI and stock", async () => {
+  await page.evaluate(`document.getElementById("copilot-image-mode").click(); true`);
+  await page.waitFor(
+    `!document.querySelector(".cmenu").hidden && document.querySelectorAll(".cmenu [data-mode]").length === 3`
+  );
+  const modes = await page.evaluate(`(() => ({
+    ids: [...document.querySelectorAll(".cmenu [data-mode]")].map((button) => button.dataset.mode),
+    stockDisabled: document.querySelector('.cmenu [data-mode="stock"]').disabled,
+    selected: document.querySelector('.cmenu [data-mode="off"]').getAttribute("aria-checked")
+  }))()`);
+  assert.deepEqual(modes.ids, ["off", "ai", "stock"]);
+  assert.equal(modes.stockDisabled, false, "stock is available after its key was saved");
+  assert.equal(modes.selected, "true");
+
+  await page.evaluate(`document.querySelector('.cmenu [data-mode="ai"]').click(); true`);
+  await page.waitFor(`document.getElementById("copilot-image-mode-text").textContent === "AI"`);
+  assert.equal(imageModeRequests, 1, "the choice reaches the server");
+  assert.equal(
+    await page.evaluate(`document.getElementById("copilot-image-mode").dataset.mode`),
+    "ai"
+  );
+
+  await page.evaluate(`document.getElementById("copilot-image-mode").click(); true`);
+  await page.waitFor(`!document.querySelector(".cmenu").hidden`);
+  await page.evaluate(`document.querySelector('.cmenu [data-mode="off"]').click(); true`);
+  await page.waitFor(`document.getElementById("copilot-image-mode-text").textContent === "Off"`);
 });
 
 test("a sent message offers run again and edit, and the reply shows its usage", async () => {

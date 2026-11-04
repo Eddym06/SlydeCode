@@ -92,6 +92,14 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::copilot::routes::api_stock_key),
         )
         .route(
+            "/api/copilot/image-mode",
+            post(crate::copilot::routes::api_image_mode),
+        )
+        .route(
+            "/api/copilot/image-retry",
+            post(crate::copilot::routes::api_image_retry),
+        )
+        .route(
             "/api/copilot/cancel",
             post(crate::copilot::routes::api_cancel),
         )

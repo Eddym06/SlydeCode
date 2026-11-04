@@ -46,6 +46,33 @@ pub struct ProviderStatus {
     pub image_model: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageMode {
+    Off,
+    Ai,
+    Stock,
+}
+
+impl ImageMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "ai" => Some(Self::Ai),
+            "stock" => Some(Self::Stock),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Ai => "ai",
+            Self::Stock => "stock",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StockStatus {
     pub id: &'static str,
@@ -57,6 +84,7 @@ pub struct StockStatus {
 pub struct CopilotConfigView {
     pub providers: Vec<ProviderStatus>,
     pub stock: Vec<StockStatus>,
+    pub image_mode: ImageMode,
     pub last_provider: Option<String>,
     pub last_model: Option<String>,
     pub last_image_provider: Option<String>,
@@ -347,6 +375,7 @@ impl CopilotState {
         let config = self.config.read().await.clone();
         let stock = stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned());
         let stock = stock.providers();
+        let image_mode = effective_image_mode(&config);
         CopilotConfigView {
             providers: PROVIDERS
                 .iter()
@@ -372,6 +401,7 @@ impl CopilotState {
                 configured,
             })
             .collect(),
+            image_mode,
             last_provider: config.last_provider,
             last_model: config.last_model,
             last_image_provider: config.last_image_provider,
@@ -384,6 +414,48 @@ impl CopilotState {
     pub async fn stock_keys(&self) -> stock::StockKeys {
         let config = self.config.read().await;
         stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned())
+    }
+
+    /// The current image source for the copilot: off, AI or stock search.
+    pub async fn image_mode(&self) -> ImageMode {
+        let config = self.config.read().await;
+        effective_image_mode(&config)
+    }
+
+    pub async fn set_image_mode(&self, mode: &str) -> Result<(), CopilotError> {
+        let mode = ImageMode::parse(mode).ok_or_else(|| {
+            CopilotError::InvalidRequest("the image mode must be off, ai or stock".into())
+        })?;
+        {
+            let config = self.config.read().await;
+            match mode {
+                ImageMode::Ai
+                    if !PROVIDERS.iter().any(|provider| {
+                        provider.image.is_some() && has_key(&config, *provider)
+                    }) =>
+                {
+                    return Err(CopilotError::InvalidRequest(
+                        "connect an image model before selecting AI images".into(),
+                    ));
+                }
+                ImageMode::Stock
+                    if stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned())
+                        .providers()
+                        .is_empty() =>
+                {
+                    return Err(CopilotError::InvalidRequest(
+                        "add a stock image key before selecting stock images".into(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        let mut config = self.config.write().await;
+        config.image_mode = Some(mode.as_str().to_string());
+        let snapshot = config.clone();
+        drop(config);
+        self.save(&snapshot).await;
+        Ok(())
     }
 
     /// Saves or removes one stock service key. No network call is made: a stock
@@ -763,6 +835,27 @@ fn has_key(config: &CopilotConfig, provider: ProviderDef) -> bool {
         || provider.env_key().is_some()
 }
 
+/// Explicit user choice first; otherwise prefer an AI image model and fall back
+/// to the stock services when only those are configured.
+fn effective_image_mode(config: &CopilotConfig) -> ImageMode {
+    if let Some(mode) = config.image_mode.as_deref().and_then(ImageMode::parse) {
+        return mode;
+    }
+    if PROVIDERS
+        .iter()
+        .any(|provider| provider.image.is_some() && has_key(config, *provider))
+    {
+        return ImageMode::Ai;
+    }
+    if !stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned())
+        .providers()
+        .is_empty()
+    {
+        return ImageMode::Stock;
+    }
+    ImageMode::Off
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -915,6 +1008,34 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code(), "invalid_request");
         assert!(error.public_message().contains("account"));
+    }
+
+    #[tokio::test]
+    async fn the_image_mode_is_validated_and_remembered() {
+        let state = CopilotState::in_memory();
+        let error = state.set_image_mode("sometimes").await.unwrap_err();
+        assert_eq!(error.code(), "invalid_request");
+
+        state.set_image_mode("off").await.unwrap();
+        assert_eq!(state.image_mode().await, ImageMode::Off);
+
+        state
+            .config
+            .write()
+            .await
+            .keys
+            .insert("openai".into(), "sk-test".into());
+        state.set_image_mode("ai").await.unwrap();
+        assert_eq!(state.image_mode().await, ImageMode::Ai);
+        assert_eq!(state.view().await.image_mode, ImageMode::Ai);
+
+        state
+            .set_stock_key("unsplash", "stock-test", None)
+            .await
+            .unwrap();
+        state.set_image_mode("stock").await.unwrap();
+        assert_eq!(state.image_mode().await, ImageMode::Stock);
+        assert_eq!(state.view().await.image_mode, ImageMode::Stock);
     }
 
     #[tokio::test]

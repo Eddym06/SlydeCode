@@ -9,6 +9,7 @@ import { startStudio } from "./support/harness.mjs";
 
 let studio;
 let page;
+let retryImageRequests = 0;
 
 const config = {
   providers: [
@@ -31,6 +32,8 @@ const events = [
       {
         id: "img_cover",
         status: "failed",
+        prompt: "editorial photo of a red apple",
+        alt: "A red apple",
         slide_index: 0,
         error_code: "invalid_key",
         error: "the image model rejected this key",
@@ -60,14 +63,30 @@ before(async () => {
   page.client.on("Fetch.requestPaused", async ({ requestId, request }) => {
     try {
       if (request.url.includes("/api/copilot/config")) await fulfill(requestId, { ok: true, config });
-      else if (request.url.includes("/api/copilot/chat")) await fulfill(requestId, sse, "text/event-stream");
+      else if (request.url.includes("/api/copilot/image-retry")) {
+        retryImageRequests += 1;
+        const input = JSON.parse(request.postData || "{}");
+        await fulfill(requestId, {
+          ok: true,
+          job: {
+            id: input.image_id,
+            status: "queued",
+            prompt: input.prompt,
+            alt: input.alt,
+            slide_index: input.slide_index,
+          },
+        });
+      } else if (request.url.includes("/api/copilot/chat")) await fulfill(requestId, sse, "text/event-stream");
       else await page.send("Fetch.continueRequest", { requestId });
     } catch {
       /* page gone */
     }
   });
   await page.send("Fetch.enable", {
-    patterns: ["config", "chat"].map((name) => ({ urlPattern: `*api/copilot/${name}*`, requestStage: "Request" })),
+    patterns: ["config", "image-retry", "chat"].map((name) => ({
+      urlPattern: `*api/copilot/${name}*`,
+      requestStage: "Request",
+    })),
   });
   const origin = await page.evaluate("performance.timeOrigin");
   await page.evaluate(
@@ -103,6 +122,22 @@ test("a failed picture stays in the thread with its reason", async () => {
   assert.match(notice, /rejected the API key/i);
   const detail = await page.evaluate(`document.querySelector(".image-errors li").getAttribute("title")`);
   assert.match(detail, /rejected this key/);
+});
+
+test("a failed picture offers a retry that sends the same prompt", async () => {
+  assert.equal(
+    await page.evaluate(`Boolean(document.querySelector("[data-retry-image]"))`),
+    true,
+    "the failed row has a retry button"
+  );
+  await page.evaluate(`document.querySelector("[data-retry-image]").click(); true`);
+  await page.waitFor(`Boolean(document.querySelector('.image-row[data-status="queued"]'))`);
+  assert.equal(retryImageRequests, 1, "the retry reaches the server");
+  assert.equal(
+    await page.evaluate(`document.querySelector(".image-errors").hidden`),
+    true,
+    "the stale failure clears when the retry starts"
+  );
 });
 
 test("a late WebSocket update moves the picture to placed", async () => {

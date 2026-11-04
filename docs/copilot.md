@@ -55,6 +55,8 @@ the API.
 | `POST` | `/api/copilot/key` | Validates a key by listing models, then persists it. An empty key removes it. |
 | `POST` | `/api/copilot/image-model` | Remembers which provider/model draws pictures, without touching the chat selection. |
 | `POST` | `/api/copilot/stock-key` | Saves or removes an Unsplash, Pexels or Vecteezy key for the stock fallback. |
+| `POST` | `/api/copilot/image-mode` | Sets the image source: `off`, `ai` or `stock`. |
+| `POST` | `/api/copilot/image-retry` | Re-queues one failed image with its original prompt and target. |
 | `POST` | `/api/copilot/chat` | Streams a chat turn as SSE. Body limit: 32 MB. |
 | `POST` | `/api/copilot/cancel` | Stops the turn for a `request_id`; the upstream response and queued tool rounds are dropped. |
 | `POST` | `/api/copilot/revert` | One-step undo of the last copilot turn, valid only while the deck is exactly as that turn left it. |
@@ -177,6 +179,13 @@ the chat shows the localized error when the textual turn closes.
 MCP exposes `insert_image` and `generate_image`. `POST /api/images/generate` is
 the shared direct endpoint and reports provider failures with the same
 `CopilotError` mapping as chat.
+
+The chat composer's image-source chip persists `image_mode` as `off`, `ai` or
+`stock`. `off` hides both image tools, `ai` advertises `request_image` only while
+the configured image model is healthy, and `stock` advertises `search_images` only
+while at least one stock key exists. A failed background job exposes its prompt,
+alt text and geometry in the job view, so the UI can retry it without another
+model round.
 
 ### Layout review
 

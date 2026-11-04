@@ -1,6 +1,7 @@
-// The two menus above the copilot composer: what to attach, and which model to use.
+// The menus above the copilot composer: what to attach, which model to use, and
+// where pictures come from (off, AI or stock).
 //
-// Both open upward from their button, close on Escape or an outside click, and
+// They open upward from their button, close on Escape or an outside click, and
 // hand focus back to the button, so the composer never traps the keyboard. The
 // module owns no copilot state: the copilot passes in what to show and what to do.
 
@@ -19,6 +20,11 @@ const ICONS = {
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>',
+  spark:
+    '<path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7z"/><path d="M19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7z"/>',
+  library:
+    '<path d="M4 5.5 9 4l5 1.5L19 4v14l-5 1.5L9 18l-5 1.5z"/><path d="M9 4v14M14 5.5v14"/>',
+  off: '<circle cx="12" cy="12" r="8"/><path d="m6.5 6.5 11 11"/>',
 };
 
 function icon(name, size = 18) {
@@ -37,30 +43,34 @@ function contextLabel(tokens) {
  * @param {HTMLElement} options.host            the composer; menus are positioned inside it
  * @param {HTMLElement} options.attachButton
  * @param {HTMLElement} options.modelButton
+ * @param {HTMLElement} options.imageButton
  * @param {HTMLInputElement} options.fileInput  the hidden file input the copilot already owns
  * @param {(key: string, vars?: object) => string} options.t
  * @param {(value: string) => string} options.escapeHtml
  * @param {(providerId: string) => Promise<Array>} options.loadModels
  * @param {() => {provider: string|null, model: string}} options.getSelection
+ * @param {() => {mode: string, aiAvailable: boolean, stockAvailable: boolean}} options.getImageMode
  * @param {(url: string) => Promise<void>} options.onLink     resolves once the link became an attachment
  * @param {(model: object) => void} options.onPickModel
+ * @param {(mode: string) => void} options.onPickImageMode
  * @param {() => void} options.onConfigure
  */
 export function mountComposerMenus(options) {
-  const { host, attachButton, modelButton, fileInput, t, escapeHtml } = options;
+  const { host, attachButton, modelButton, imageButton, fileInput, t, escapeHtml } = options;
 
   const menu = document.createElement("div");
   menu.className = "cmenu";
   menu.hidden = true;
   host.append(menu);
 
-  let current = null; // "attach" | "model" | null
+  let current = null; // "attach" | "model" | "image" | null
   let view = "root"; // attach menu: "root" | "link"
   const modelCache = new Map(); // provider id -> { models } | { error }
   let modelQuery = "";
 
   function triggerFor(kind) {
-    return kind === "attach" ? attachButton : modelButton;
+    if (kind === "attach") return attachButton;
+    return kind === "image" ? imageButton : modelButton;
   }
 
   function place(trigger, width) {
@@ -95,8 +105,9 @@ export function mountComposerMenus(options) {
     trigger.setAttribute("aria-expanded", "true");
     menu.dataset.kind = kind;
     menu.hidden = false;
-    place(trigger, kind === "attach" ? 264 : 316);
+    place(trigger, kind === "attach" ? 264 : kind === "image" ? 250 : 316);
     if (kind === "attach") renderAttach();
+    else if (kind === "image") renderImageModes();
     else renderModels();
   }
 
@@ -295,6 +306,65 @@ export function mountComposerMenus(options) {
     list.querySelector(".is-selected")?.scrollIntoView({ block: "nearest" });
   }
 
+  // ---------- image source ----------
+
+  function renderImageModes() {
+    const state = options.getImageMode();
+    const modes = [
+      {
+        id: "off",
+        icon: "off",
+        title: t("copilot.imageMode.off"),
+        hint: t("copilot.imageMode.offHint"),
+        available: true,
+      },
+      {
+        id: "ai",
+        icon: "spark",
+        title: t("copilot.imageMode.ai"),
+        hint: t("copilot.imageMode.aiHint"),
+        available: state.aiAvailable,
+      },
+      {
+        id: "stock",
+        icon: "library",
+        title: t("copilot.imageMode.stock"),
+        hint: t("copilot.imageMode.stockHint"),
+        available: state.stockAvailable,
+      },
+    ];
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", t("copilot.imageMode.label"));
+    menu.innerHTML = `
+      <div class="cmenu-mode-head">${escapeHtml(t("copilot.imageMode.label"))}</div>
+      ${modes
+        .map((mode) => {
+          const selected = state.mode === mode.id;
+          return `<button type="button" class="cmenu-item cmenu-mode${selected ? " is-selected" : ""}"
+            role="menuitemradio" aria-checked="${selected}" data-mode="${mode.id}"
+            ${mode.available ? "" : 'disabled aria-disabled="true"'}>
+            <span class="cmenu-icon">${icon(mode.icon)}</span>
+            <span class="cmenu-copy">
+              <span class="cmenu-title">${escapeHtml(mode.title)}</span>
+              <span class="cmenu-hint">${escapeHtml(
+                mode.available ? mode.hint : t("copilot.imageMode.unavailable")
+              )}</span>
+            </span>
+            ${selected ? icon("check", 15) : ""}
+          </button>`;
+        })
+        .join("")}`;
+    menu.querySelectorAll("[data-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.disabled) return;
+        const mode = button.dataset.mode;
+        close({ restoreFocus: false });
+        options.onPickImageMode(mode);
+      });
+    });
+    menu.querySelector("[data-mode]:not([disabled])")?.focus();
+  }
+
   // ---------- shared behavior ----------
 
   attachButton.setAttribute("aria-haspopup", "menu");
@@ -303,6 +373,11 @@ export function mountComposerMenus(options) {
   modelButton.setAttribute("aria-expanded", "false");
   attachButton.addEventListener("click", () => open("attach"));
   modelButton.addEventListener("click", () => open("model"));
+  if (imageButton) {
+    imageButton.setAttribute("aria-haspopup", "menu");
+    imageButton.setAttribute("aria-expanded", "false");
+    imageButton.addEventListener("click", () => open("image"));
+  }
 
   document.addEventListener("pointerdown", (event) => {
     if (!current) return;
@@ -323,7 +398,7 @@ export function mountComposerMenus(options) {
       return;
     }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const items = [...menu.querySelectorAll(".cmenu-item, .cmenu-model")];
+    const items = [...menu.querySelectorAll(".cmenu-item:not([disabled]), .cmenu-model")];
     if (!items.length) return;
     event.preventDefault();
     const at = items.indexOf(document.activeElement);

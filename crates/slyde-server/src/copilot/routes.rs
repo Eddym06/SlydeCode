@@ -21,6 +21,7 @@ use crate::state::{AppState, AuthQuery, is_authorized, origin_allowed};
 
 use super::chat::{self, ChatRequest};
 use super::error::CopilotError;
+use super::image_service::ImageRequest;
 use super::wire::ChatEvent;
 
 /// Generous because images and PDFs are base64-encoded in the request. The
@@ -57,6 +58,32 @@ pub struct StockKeyInput {
     key: String,
     #[serde(default)]
     account: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImageModeInput {
+    mode: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImageRetryInput {
+    turn_id: String,
+    image_id: String,
+    prompt: String,
+    #[serde(default)]
+    alt: String,
+    #[serde(default)]
+    slide_id: Option<String>,
+    #[serde(default)]
+    slide_index: Option<usize>,
+    #[serde(default)]
+    x: Option<f32>,
+    #[serde(default)]
+    y: Option<f32>,
+    #[serde(default)]
+    w: Option<f32>,
+    #[serde(default)]
+    h: Option<f32>,
 }
 
 pub async fn api_config(
@@ -173,6 +200,100 @@ pub async fn api_stock_key(
             (StatusCode::OK, Json(json!({ "ok": true, "config": view }))).into_response()
         }
         Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_image_mode(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<ImageModeInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match state.copilot.set_image_mode(&input.mode).await {
+        Ok(()) => {
+            let view = state.copilot.view().await;
+            (StatusCode::OK, Json(json!({ "ok": true, "config": view }))).into_response()
+        }
+        Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_image_retry(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<ImageRetryInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+
+    let turn_id = input.turn_id.trim();
+    let image_id = input.image_id.trim();
+    let prompt = input.prompt.trim();
+    let alt = input.alt.trim();
+    if turn_id.is_empty() || turn_id.len() > 200 {
+        return error_response(CopilotError::InvalidRequest(
+            "the turn id is not valid".into(),
+        ));
+    }
+    if image_id.is_empty()
+        || image_id.len() > 48
+        || !image_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return error_response(CopilotError::InvalidRequest(
+            "the image id is not valid".into(),
+        ));
+    }
+    if prompt.is_empty() || prompt.chars().count() > 4_000 {
+        return error_response(CopilotError::InvalidRequest(
+            "the image prompt is missing or too long".into(),
+        ));
+    }
+    if alt.is_empty() || alt.chars().count() > 400 {
+        return error_response(CopilotError::InvalidRequest(
+            "the image alt text is missing or too long".into(),
+        ));
+    }
+    let slide_id = input
+        .slide_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+    if slide_id.is_none() && input.slide_index.is_none() {
+        return error_response(CopilotError::InvalidRequest(
+            "the image needs a target slide".into(),
+        ));
+    }
+    let number = |value: Option<f32>| value.filter(|value| value.is_finite());
+    let request = ImageRequest {
+        id: image_id.to_string(),
+        prompt: prompt.to_string(),
+        alt: alt.to_string(),
+        slide_id,
+        slide_index: input.slide_index,
+        x: number(input.x),
+        y: number(input.y),
+        w: number(input.w),
+        h: number(input.h),
+    };
+    // A retry is an explicit action from the user, not a new text turn. Release
+    // placement immediately so the job can land as soon as its slide exists.
+    let turn = state.images.begin_turn(turn_id.to_string());
+    turn.allow_placement();
+    match state.images.request(state.clone(), turn, request).await {
+        Ok(job) => (StatusCode::OK, Json(json!({ "ok": true, "job": job }))).into_response(),
+        Err(error) => error_response(CopilotError::InvalidRequest(error)),
     }
 }
 
@@ -423,13 +544,15 @@ fn forbidden() -> Response {
 
 /// Ensures the module is part of the app router even when the route list is
 /// edited later.
-pub fn routes() -> [&'static str; 6] {
+pub fn routes() -> [&'static str; 8] {
     [
         "/api/copilot/config",
         "/api/copilot/models",
         "/api/copilot/key",
         "/api/copilot/image-model",
         "/api/copilot/stock-key",
+        "/api/copilot/image-mode",
+        "/api/copilot/image-retry",
         "/api/copilot/chat",
     ]
 }
@@ -440,6 +563,6 @@ mod tests {
 
     #[test]
     fn route_list_matches_the_documented_surface() {
-        assert_eq!(routes().len(), 6);
+        assert_eq!(routes().len(), 8);
     }
 }

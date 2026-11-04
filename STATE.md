@@ -1,6 +1,6 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-11-03 21:15
+> Last updated: 2026-11-04 00:13
 
 ## Current Task — quieter layout review and autonomous images (2026-11-03)
 
@@ -19,6 +19,13 @@
       slide root with `z-index: 10`
 - [x] Prompt asks for explicit `x/y/w/h` when the picture belongs in a column,
       corner or full-bleed area instead of relying on the centered default
+- [x] Compact image-source chip beside the model: Off / AI images / Stock images,
+      persisted in `image_mode` and enforced by the prompt/tool availability
+- [x] Failed image rows get a Retry button that re-queues the same prompt/target
+      without another model round
+- [x] Reasoning pill simplified: one status title and one chevron, no extra
+      expand button or duplicate status badge
+- [x] EN/ES strings and UI tests for the image-source menu and image retry
 - [x] README, docs/copilot.md and MEMORY.md updated
 - [ ] Live provider pass to compare edit churn before and after the change
 - [ ] Live pass with real image generation to verify placement in every deck
@@ -813,6 +820,9 @@ Nothing partially implemented on the branch.
   real PowerPoint.
 
 ## Completed
+
+- [x] Image source switch, retry for failed pictures and a quieter reasoning pill
+      — 2026-11-04
 
 - [x] Reliable image placement: deferred until the text turn ends, stable slide
       ids, above-the-root z-order and explicit geometry guidance — 2026-11-03

@@ -1905,8 +1905,7 @@ test("the reasoning drawer follows the stream, scrolls and expands", async () =>
         stacked: document.querySelectorAll(".msg-thinking .thinking-drawer").length,
         width: Math.round(box.width),
         height: Math.round(box.height),
-        roomier: stream.clientHeight > 260,
-        toggleExpanded: drawer.querySelector("[data-thinking-expand]").getAttribute("aria-expanded")
+        roomier: stream.clientHeight > 260
       };
     })()`);
     assert.equal(expanded.layerVisible, true);
@@ -1915,7 +1914,6 @@ test("the reasoning drawer follows the stream, scrolls and expands", async () =>
     assert.ok(expanded.width >= 600, `expanded width is ${expanded.width}`);
     assert.ok(expanded.height >= 400, `expanded height is ${expanded.height}`);
     assert.equal(expanded.roomier, true, "expanded mode gives the text more room");
-    assert.equal(expanded.toggleExpanded, "true");
 
     await page.evaluate(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
     await page.waitFor(`document.getElementById("thinking-layer").hidden === true`);

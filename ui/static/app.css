@@ -1955,6 +1955,38 @@ body.has-thinking-expanded .copilot-panel {
   padding: 4px 7px;
 }
 
+.image-mode-chip {
+  max-width: 96px;
+  gap: 5px;
+  transition: background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.image-mode-chip .image-mode-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.image-mode-chip .image-mode-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.image-mode-chip[data-mode="ai"] {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+}
+
+.image-mode-chip[data-mode="stock"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.image-mode-chip[data-mode="off"] {
+  color: var(--ink-subtle);
+}
+
 .model-chip span {
   overflow: hidden;
   white-space: nowrap;
