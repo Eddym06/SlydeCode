@@ -46,7 +46,9 @@ impl ImagePrompt<'_> {
              key visual moments, not an image on every slide; when type or a diagram carries the \
              idea better, do not force a picture. Call `request_image` once for every picture you \
              want, with a precise visual prompt, the unique `image_id`, the `alt` text and the \
-             target slide (`slide_id`, or `slide_index` while you are still writing). It runs in \
+             target slide (`slide_id`, or `slide_index` while you are still writing). Pass \
+             `x`/`y`/`w`/`h` in stage pixels whenever the layout has a column, corner or \
+             full-bleed area; omitting them centers the picture at 60% of the canvas. It runs in \
              the background, so keep writing: the system buffers the result and places it on its \
              slide when the slide exists. Do not call `generate_image` and do not invent image \
              URLs. Alt text is mandatory."
@@ -54,9 +56,10 @@ impl ImagePrompt<'_> {
         } else if self.stock {
             "Images: the image generator is not available right now. Decide when a slide needs a \
              real photo or vector; the user does not have to ask. Use `search_images` to find one \
-             that fits the content, then place the best result with `insert_image` using its `url` \
-             and a specific `alt`. Prefer one strong image over a collage. Never invent image \
-             URLs. Alt text is mandatory."
+             that fits the content, then place the best result with `insert_image` using its `url`, \
+             a specific `alt` and `x`/`y`/`w`/`h` when the layout needs a precise rectangle; \
+             without them it centers at 60% of the canvas. Prefer one strong image over a collage. \
+             Never invent image URLs. Alt text is mandatory."
                 .to_string()
         } else {
             "Images: use `insert_image` only with a high-resolution https link the user supplied \
@@ -77,9 +80,10 @@ impl ImagePrompt<'_> {
         }
         "\n## Image generation\n\nAn image model is available and works in the background. Never name its provider or model.\n\
          Decide when a slide needs a picture; the user does not need to ask. Use one for a cover or a key visual moment, not on every slide.\n\
-         Call `request_image` with a unique `image_id`, a precise `prompt`, `alt`, and `slide_id` or \
-         `slide_index`; it returns immediately and the system places the picture when the slide is \
-         ready. Do not call `generate_image`.\n"
+         Call `request_image` with a unique `image_id`, a precise `prompt`, `alt`, `slide_id` or \
+         `slide_index`, and `x`/`y`/`w`/`h` when the picture needs a specific rectangle; it returns \
+         immediately and the system places the picture when the slide is ready. Do not call \
+         `generate_image`.\n"
             .to_string()
     }
 
@@ -97,7 +101,8 @@ impl ImagePrompt<'_> {
          key visual moment, not on every slide.\n\
          - Call `request_image` with a unique `image_id`, a precise visual `prompt`, `alt`, and the \
          target (`slide_id` for an existing slide, or `slide_index` while you are still writing). \
-         Optional `x`/`y`/`w`/`h` place it exactly.\n\
+         Pass `x`/`y`/`w`/`h` (stage pixels) for a column, corner or full-bleed area; omitting \
+         them centers the picture at 60% of the canvas.\n\
          - The call returns immediately. Generation continues after your reply; the picture is \
          buffered and placed on its target slide when it is ready. If the target slide does not \
          exist yet, the system waits for it.\n\

@@ -338,7 +338,7 @@ pub fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             name: REQUEST_IMAGE,
-            description: "Ask the image system for one original picture. It returns a ticket immediately and generates in the background, so keep writing the deck. Provide a unique image_id, a precise visual prompt, alt text and the target slide: slide_id for an existing slide, or the zero-based slide_index for a slide you are writing right now. Optional x/y/w/h place it exactly. Never name or choose a provider; the system does that and enforces its own budget and rate limits.",
+            description: "Ask the image system for one original picture. It returns a ticket immediately and generates in the background, so keep writing the deck. Provide a unique image_id, a precise visual prompt, alt text and the target slide: slide_id for an existing slide, or the zero-based slide_index for a slide you are writing right now. Pass x/y/w/h in stage pixels when the picture belongs in a column, corner or full-bleed area; without them it centers at 60% of the canvas. Never name or choose a provider; the system does that and enforces its own budget and rate limits.",
             schema: || {
                 json!({
                     "type": "object",

@@ -79,7 +79,7 @@ The product is local-first by design: the studio runs on `127.0.0.1`, API keys n
 - **Cancellation is complete:** stopping the text turn also cancels queued and in-flight image jobs for that turn.
 - **Stock fallback:** when no image generator is usable and at least one stock key is configured, `search_images` finds photos on Unsplash and Pexels and vectors on Vecteezy, then places the chosen result with `insert_image`.
 - **Stock keys in the app:** open **Provider & model → Stock image keys** to save Unsplash, Pexels or Vecteezy credentials without touching a terminal. The same keys can come from environment variables.
-- **Model fit:** the image service waits for the target slide (up to 120 seconds) instead of placing a picture on the wrong slide or dropping it.
+- **Model fit:** the image service waits for the target slide (up to 120 seconds) and for the text turn to finish rewriting slides, so a later edit cannot erase the picture. Images are inserted above the slide content with their own layer.
 
 ### Motion and presentation
 

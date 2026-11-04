@@ -111,17 +111,22 @@ pub struct ImageTurn {
     /// Set when the textual turn is cancelled. Queued and in-flight jobs watch
     /// this channel and stop before spending another provider call.
     cancelled: tokio::sync::watch::Sender<bool>,
+    /// Opens only when the text turn has finished writing slides. A picture must
+    /// not land on a slide that a later round would replace.
+    placement: tokio::sync::watch::Sender<bool>,
 }
 
 impl ImageTurn {
     fn new(id: String) -> Self {
         let (cancelled, _) = tokio::sync::watch::channel(false);
+        let (placement, _) = tokio::sync::watch::channel(false);
         Self {
             id,
             jobs: Mutex::new(Vec::new()),
             errors: Mutex::new(Vec::new()),
             requested: AtomicUsize::new(0),
             cancelled,
+            placement,
         }
     }
 
@@ -137,8 +142,18 @@ impl ImageTurn {
         self.cancelled.subscribe()
     }
 
+    fn placement_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.placement.subscribe()
+    }
+
     pub fn is_cancelled(&self) -> bool {
         *self.cancelled.borrow()
+    }
+
+    /// Lets buffered pictures land. The text runner calls this only after it has
+    /// finished every tool round, so a later `write_slides` cannot erase them.
+    pub fn allow_placement(&self) {
+        self.placement.send_replace(true);
     }
 
     /// Stops this turn: queued jobs never start, running jobs drop their
@@ -408,6 +423,17 @@ impl ImageService {
         if turn.is_cancelled() {
             return Err("the turn was cancelled".into());
         }
+        // Freeze an index that already resolves to a slide. Otherwise inserting
+        // or moving a slide can change what `slide_index` means before the
+        // picture is placed. While the slide is still being written, the index
+        // stays as a fallback and is frozen the first time it resolves.
+        let mut request = request;
+        if request.slide_id.is_none()
+            && let Some(index) = request.slide_index
+            && let Some(slide) = state.view().await.presentation.slides.get(index)
+        {
+            request.slide_id = Some(slide.id.clone());
+        }
         let capability = self.capability(&state).await;
         if !capability.available {
             return Err(capability
@@ -481,7 +507,7 @@ impl ImageService {
                     return;
                 }
             },
-            _ = wait_for_cancel(&mut cancel) => {
+            _ = wait_for_flag(&mut cancel) => {
                 self.release(reserved).await;
                 self.cancel_job(&state, &turn, &request).await;
                 return;
@@ -499,7 +525,7 @@ impl ImageService {
         // exceed the per-minute ceiling while old jobs are still queued.
         tokio::select! {
             _ = self.acquire_rate() => {}
-            _ = wait_for_cancel(&mut cancel) => {
+            _ = wait_for_flag(&mut cancel) => {
                 drop(worker);
                 self.release(reserved).await;
                 self.cancel_job(&state, &turn, &request).await;
@@ -531,7 +557,7 @@ impl ImageService {
                     return;
                 }
             },
-            _ = wait_for_cancel(&mut cancel) => {
+            _ = wait_for_flag(&mut cancel) => {
                 drop(worker);
                 self.release(reserved).await;
                 self.cancel_job(&state, &turn, &request).await;
@@ -577,9 +603,21 @@ impl ImageService {
         // slot: the next queued picture can start drawing in the meantime.
         drop(worker);
 
+        // Hold the placement until the text turn has finished writing slides.
+        // Placing earlier lets a later `write_slides` replace the code and erase
+        // the image, which is the main "the picture never appeared" race.
+        let mut placement = turn.placement_signal();
+        tokio::select! {
+            _ = wait_for_flag(&mut placement) => {}
+            _ = wait_for_flag(&mut cancel) => {
+                self.cancel_job(&state, &turn, &request).await;
+                return;
+            }
+        }
+
         let placed = tokio::select! {
             result = self.wait_and_place(&state, &request, &stored.url) => result,
-            _ = wait_for_cancel(&mut cancel) => {
+            _ = wait_for_flag(&mut cancel) => {
                 self.cancel_job(&state, &turn, &request).await;
                 return;
             }
@@ -647,15 +685,35 @@ impl ImageService {
         url: &str,
     ) -> Result<(String, Option<String>), String> {
         let deadline = Instant::now() + SLIDE_WAIT;
+        // Once an index resolves to a slide id, keep that id. Inserting another
+        // slide before it must not move the picture somewhere else.
+        let mut resolved = request.slide_id.clone();
         loop {
-            let Some(slide_id) = resolve_target(state, request).await else {
-                if Instant::now() >= deadline {
-                    return Err(
-                        "the picture was generated but its target slide never appeared".into(),
-                    );
+            let slide_id = match &resolved {
+                Some(id) if slide_exists(state, id).await => id.clone(),
+                Some(_) => {
+                    if Instant::now() >= deadline {
+                        return Err(
+                            "the picture was generated but its target slide disappeared".into()
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_millis(180)).await;
+                    continue;
                 }
-                tokio::time::sleep(Duration::from_millis(180)).await;
-                continue;
+                None => {
+                    let Some(id) = resolve_target(state, request).await else {
+                        if Instant::now() >= deadline {
+                            return Err(
+                                "the picture was generated but its target slide never appeared"
+                                    .into(),
+                            );
+                        }
+                        tokio::time::sleep(Duration::from_millis(180)).await;
+                        continue;
+                    };
+                    resolved = Some(id.clone());
+                    id
+                }
             };
 
             let command = AgentCommand::InsertImage {
@@ -672,7 +730,7 @@ impl ImageService {
                 Err(error) => {
                     // The slide may have been replaced between resolution and
                     // insertion. If it is still there, this is a real failure.
-                    if resolve_target(state, request).await.as_deref() == Some(slide_id.as_str()) {
+                    if slide_exists(state, &slide_id).await {
                         return Err(format!("the picture could not be placed: {error}"));
                     }
                     if Instant::now() >= deadline {
@@ -765,9 +823,9 @@ impl ImageService {
     }
 }
 
-/// Resolves when the textual turn is cancelled. A dropped sender also counts
-/// as cancellation because the turn no longer exists to own its images.
-async fn wait_for_cancel(cancel: &mut tokio::sync::watch::Receiver<bool>) {
+/// Resolves when a watch flag turns true. A dropped sender also unblocks: the
+/// turn no longer exists to own its images, so they must stop or proceed.
+async fn wait_for_flag(cancel: &mut tokio::sync::watch::Receiver<bool>) {
     loop {
         if *cancel.borrow_and_update() {
             return;
@@ -805,6 +863,16 @@ async fn resolve_target(state: &AppState, request: &ImageRequest) -> Option<Stri
         .slide_index
         .and_then(|index| view.presentation.slides.get(index))
         .map(|slide| slide.id.clone())
+}
+
+async fn slide_exists(state: &AppState, slide_id: &str) -> bool {
+    state
+        .view()
+        .await
+        .presentation
+        .slides
+        .iter()
+        .any(|slide| slide.id == slide_id)
 }
 
 #[cfg(test)]
@@ -979,7 +1047,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_queued_picture_returns_at_once_and_lands_when_its_slide_exists() {
+    async fn a_queued_picture_waits_for_the_turn_before_landing() {
         let app = axum::Router::new().route(
             "/images/generations",
             axum::routing::post(|| async {
@@ -1052,6 +1120,16 @@ mod tests {
         .await
         .unwrap();
 
+        // The slide exists, but the turn is still writing: the image must stay
+        // buffered so a later `write_slides` cannot erase it.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_ne!(
+            turn.jobs().await[0].status,
+            ImageStatus::Placed,
+            "the picture must not land while the text turn is still open"
+        );
+
+        turn.allow_placement();
         let placed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let jobs = turn.jobs().await;
@@ -1062,7 +1140,7 @@ mod tests {
             }
         })
         .await
-        .expect("the picture should be placed after the slide appears");
+        .expect("the picture should be placed once the turn releases it");
         assert_eq!(placed[0].slide_id.as_deref(), Some("sld_cover"));
         assert!(
             placed[0]

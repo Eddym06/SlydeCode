@@ -134,7 +134,9 @@ slide, because the sandbox refuses to fetch the network (`connect-src 'none'`):
   the text stream keeps writing while the picture is generated. Results are
   buffered in the asset store and placed on the requested slide; if the slide
   does not exist yet, the job waits (up to 120 s) instead of failing or landing on
-  the wrong slide. At most 10 pictures start per minute, 3 generate in parallel
+  the wrong slide. Placement is held until the text turn finishes its tool rounds,
+  so a later `write_slides` cannot erase a picture that already landed. At most
+  10 pictures start per minute, 3 generate in parallel
   and a turn may request at most 10. The prompt is only told that an image model
   is available: no balance, price or predicted image count is sent to the text
   model. Cancelling the textual turn also cancels its queued and in-flight image

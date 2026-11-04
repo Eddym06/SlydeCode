@@ -13,8 +13,15 @@
 - [x] An image-only slide with a queued background image is not reported as empty
 - [x] Prompt tells the copilot to decide when a picture helps, without waiting for
       an explicit request, targeting a cover and one or two key moments
+- [x] Image placement waits until the text turn finishes, so a later slide rewrite
+      cannot erase the picture
+- [x] `slide_index` freezes to a stable `slide_id`; inserted images sit above the
+      slide root with `z-index: 10`
+- [x] Prompt asks for explicit `x/y/w/h` when the picture belongs in a column,
+      corner or full-bleed area instead of relying on the centered default
 - [x] README, docs/copilot.md and MEMORY.md updated
 - [ ] Live provider pass to compare edit churn before and after the change
+- [ ] Live pass with real image generation to verify placement in every deck
 
 ## Previous task — SaC documentation refresh (2026-11-03)
 
@@ -806,6 +813,9 @@ Nothing partially implemented on the branch.
   real PowerPoint.
 
 ## Completed
+
+- [x] Reliable image placement: deferred until the text turn ends, stable slide
+      ids, above-the-root z-order and explicit geometry guidance — 2026-11-03
 
 - [x] Quieter layout review: one pass, hard failures only, no review after local
       edits, pending images are not flagged as empty; proactive image decisions in

@@ -397,7 +397,7 @@ impl PresentationState {
 
         let id = unique_element_id(&slide.code, "image");
         let tag = format!(
-            r#"<img data-id="{id}" class="slyde-image" src="{src}" alt="{alt}" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; object-fit: cover" />"#,
+            r#"<img data-id="{id}" class="slyde-image" src="{src}" alt="{alt}" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; object-fit: cover; z-index: 10" />"#,
             src = escape_attribute(src),
             alt = escape_attribute(alt),
             x = css_px(rect.x),
@@ -1768,6 +1768,10 @@ mod tests {
         assert!(code.contains("left: 40px"), "{code}");
         assert!(code.contains("width: 320px"), "{code}");
         assert!(code.contains("object-fit: cover"), "{code}");
+        assert!(
+            code.contains("z-index: 10"),
+            "the image must sit above a positioned slide root: {code}"
+        );
 
         let second = s
             .insert_image(

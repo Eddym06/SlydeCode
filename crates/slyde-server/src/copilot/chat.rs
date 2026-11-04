@@ -91,6 +91,10 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
         || crate::copilot::CopilotState::was_cancelled(&cancel_after)
     {
         turn.cancel().await;
+    } else {
+        // The deck is no longer being rewritten in this turn, so buffered
+        // pictures can land without a later tool round erasing them.
+        turn.allow_placement();
     }
     let after = state.view().await;
     let reversible = state
