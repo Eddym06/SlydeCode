@@ -9,11 +9,14 @@ pub mod catalog;
 pub mod chat;
 pub mod config;
 pub mod error;
+pub mod image_service;
+pub mod imagegen;
 pub mod models;
 pub mod partial;
 pub mod prompt;
 pub mod review;
 pub mod routes;
+pub mod stock;
 pub mod tools;
 pub mod transport;
 pub mod vault;
@@ -38,13 +41,26 @@ pub struct ProviderStatus {
     pub icon: &'static str,
     pub key_url: &'static str,
     pub configured: bool,
+    /// The image model behind the same key, when the provider offers one.
+    /// `None` tells the UI that this provider cannot draw pictures.
+    pub image_model: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StockStatus {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CopilotConfigView {
     pub providers: Vec<ProviderStatus>,
+    pub stock: Vec<StockStatus>,
     pub last_provider: Option<String>,
     pub last_model: Option<String>,
+    pub last_image_provider: Option<String>,
+    pub last_image_model: Option<String>,
 }
 
 /// Live turns: request id → the flag a running turn polls.
@@ -329,6 +345,8 @@ impl CopilotState {
 
     pub async fn view(&self) -> CopilotConfigView {
         let config = self.config.read().await.clone();
+        let stock = stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned());
+        let stock = stock.providers();
         CopilotConfigView {
             providers: PROVIDERS
                 .iter()
@@ -339,11 +357,103 @@ impl CopilotState {
                     icon: provider.icon,
                     key_url: provider.key_url,
                     configured: has_key(&config, *provider),
+                    image_model: provider.image.map(|image| image.model),
                 })
                 .collect(),
+            stock: [
+                ("unsplash", "Unsplash", stock.contains(&"unsplash")),
+                ("pexels", "Pexels", stock.contains(&"pexels")),
+                ("vecteezy", "Vecteezy", stock.contains(&"vecteezy")),
+            ]
+            .into_iter()
+            .map(|(id, name, configured)| StockStatus {
+                id,
+                name,
+                configured,
+            })
+            .collect(),
             last_provider: config.last_provider,
             last_model: config.last_model,
+            last_image_provider: config.last_image_provider,
+            last_image_model: config.last_image_model,
         }
+    }
+
+    /// The effective stock-image keys for this profile, with stored values
+    /// taking precedence over environment variables.
+    pub async fn stock_keys(&self) -> stock::StockKeys {
+        let config = self.config.read().await;
+        stock::StockKeys::from_lookup(|id| config.keys.get(id).cloned())
+    }
+
+    /// Saves or removes one stock service key. No network call is made: a stock
+    /// key is small and the failure is visible on the next search, unlike a
+    /// chat provider key where a bad key would break the whole copilot.
+    pub async fn set_stock_key(
+        &self,
+        provider: &str,
+        key: &str,
+        account: Option<&str>,
+    ) -> Result<(), CopilotError> {
+        let (key_id, account_id) = match provider {
+            "unsplash" => (stock::UNSPLASH_KEY, None),
+            "pexels" => (stock::PEXELS_KEY, None),
+            "vecteezy" => (stock::VECTEEZY_KEY, Some(stock::VECTEEZY_ACCOUNT)),
+            _ => {
+                return Err(CopilotError::InvalidRequest(
+                    "unknown stock image provider".into(),
+                ));
+            }
+        };
+        let key = key.trim();
+        let account = account.unwrap_or("").trim();
+        if key.is_empty() {
+            let mut config = self.config.write().await;
+            config.keys.remove(key_id);
+            if let Some(account_id) = account_id {
+                config.keys.remove(account_id);
+            }
+            let snapshot = config.clone();
+            drop(config);
+            self.save(&snapshot).await;
+            return Ok(());
+        }
+        if key.len() > 1024 || !key.chars().all(|ch| ch.is_ascii_graphic()) {
+            return Err(CopilotError::InvalidRequest(
+                "the stock API key contains unsupported characters".into(),
+            ));
+        }
+        if let Some(account_id) = account_id {
+            if account.is_empty() {
+                return Err(CopilotError::InvalidRequest(
+                    "the Vecteezy account id is required".into(),
+                ));
+            }
+            if account.len() > 64
+                || !account
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+            {
+                return Err(CopilotError::InvalidRequest(
+                    "the Vecteezy account id is not valid".into(),
+                ));
+            }
+            let mut config = self.config.write().await;
+            config.keys.insert(key_id.to_string(), key.to_string());
+            config
+                .keys
+                .insert(account_id.to_string(), account.to_string());
+            let snapshot = config.clone();
+            drop(config);
+            self.save(&snapshot).await;
+            return Ok(());
+        }
+        let mut config = self.config.write().await;
+        config.keys.insert(key_id.to_string(), key.to_string());
+        let snapshot = config.clone();
+        drop(config);
+        self.save(&snapshot).await;
+        Ok(())
     }
 
     pub async fn key_for(&self, provider: &ProviderDef) -> Option<String> {
@@ -399,15 +509,79 @@ impl CopilotState {
         self.fetch_models(provider, &key).await
     }
 
+    /// The models a provider can draw with. OpenRouter returns its full routed
+    /// image catalog here; direct vendors return the image models their model
+    /// list exposes, or their catalog default when the list has no metadata.
+    pub async fn image_models(&self, provider_id: &str) -> Result<Vec<ModelInfo>, CopilotError> {
+        let provider = catalog::find(provider_id)
+            .ok_or_else(|| CopilotError::InvalidRequest("unknown provider".into()))?;
+        let spec = provider.image.ok_or_else(|| {
+            CopilotError::InvalidRequest(format!(
+                "{} does not offer image generation",
+                provider.name
+            ))
+        })?;
+        let key = self
+            .key_for(provider)
+            .await
+            .ok_or(CopilotError::MissingKey)?;
+        let payload = self
+            .fetch_payload(provider, &key, provider.image_models_url(&key))
+            .await?;
+        let mut models = models::parse_image_models(provider, &payload);
+        if provider.id == "openrouter"
+            && let Ok(general) = self.fetch_model_payload(provider, &key).await
+        {
+            models::merge_prices(&mut models, &general);
+        }
+        if models.is_empty() {
+            // A vendor that exposes no image metadata still has the one model
+            // the catalog knows how to call.
+            models.push(ModelInfo {
+                id: spec.model.to_string(),
+                name: spec.model.to_string(),
+                free: false,
+                vision: None,
+                context_window: None,
+                input_price: None,
+                output_price: None,
+                image_price: Some(spec.cost_usd),
+            });
+        }
+        Ok(models)
+    }
+
     async fn fetch_models(
         &self,
         provider: &ProviderDef,
         key: &str,
     ) -> Result<Vec<ModelInfo>, CopilotError> {
-        let mut request = self
-            .http
-            .get(provider.models_url(key))
-            .header("accept", "application/json");
+        let payload = self.fetch_model_payload(provider, key).await?;
+        let models = models::parse_models(provider, &payload);
+        if models.is_empty() {
+            return Err(CopilotError::Upstream(
+                "the provider returned no chat-capable models".into(),
+            ));
+        }
+        Ok(models)
+    }
+
+    async fn fetch_model_payload(
+        &self,
+        provider: &ProviderDef,
+        key: &str,
+    ) -> Result<serde_json::Value, CopilotError> {
+        let url = provider.models_url(key);
+        self.fetch_payload(provider, key, url).await
+    }
+
+    async fn fetch_payload(
+        &self,
+        provider: &ProviderDef,
+        key: &str,
+        url: String,
+    ) -> Result<serde_json::Value, CopilotError> {
+        let mut request = self.http.get(url).header("accept", "application/json");
         request = match provider.id {
             "anthropic" => request
                 .header("x-api-key", key)
@@ -426,16 +600,31 @@ impl CopilotState {
             let body = response.text().await.unwrap_or_default();
             return Err(CopilotError::from_status(status, &body));
         }
-        let payload: serde_json::Value = response.json().await.map_err(|_| {
+        response.json().await.map_err(|_| {
             CopilotError::Upstream("the provider returned an unexpected model list".into())
-        })?;
-        let models = models::parse_models(provider, &payload);
-        if models.is_empty() {
-            return Err(CopilotError::Upstream(
-                "the provider returned no chat-capable models".into(),
-            ));
+        })
+    }
+
+    /// One small request for the selected model's per-picture estimate. It is
+    /// best effort: a failure keeps the catalog estimate instead of blocking the
+    /// user's choice.
+    async fn image_price_for(&self, provider: &ProviderDef, key: &str, model: &str) -> Option<f64> {
+        let url = provider.image_endpoints_url(model)?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(key)
+            .header("accept", "application/json")
+            .header("X-Title", "SlydeCode")
+            .timeout(Duration::from_secs(4))
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
         }
-        Ok(models)
+        let payload: serde_json::Value = response.json().await.ok()?;
+        models::parse_image_price(&payload)
     }
 
     pub async fn remember(&self, provider: &str, model: &str) {
@@ -445,6 +634,118 @@ impl CopilotState {
         let snapshot = config.clone();
         drop(config);
         self.save(&snapshot).await;
+    }
+
+    /// Remembers the provider/model used for pictures. It deliberately does not
+    /// touch the chat selection: DeepSeek can write the deck while OpenAI draws
+    /// it.
+    pub async fn remember_image(&self, provider: &str, model: &str) -> Result<(), CopilotError> {
+        let def = catalog::find(provider)
+            .ok_or_else(|| CopilotError::InvalidRequest("unknown provider".into()))?;
+        let image = def.image.ok_or_else(|| {
+            CopilotError::InvalidRequest(format!("{} does not offer image generation", def.name))
+        })?;
+        let model = model.trim();
+        if model.is_empty()
+            || model.len() > 200
+            || !model
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':'))
+        {
+            return Err(CopilotError::InvalidRequest(
+                "the image model id is not valid".into(),
+            ));
+        }
+
+        let mut cost = image.cost_usd;
+        if model != image.model {
+            if self.key_for(def).await.is_none() {
+                return Err(CopilotError::InvalidRequest(format!(
+                    "connect {} before choosing another image model",
+                    def.name
+                )));
+            }
+            let models = self.image_models(provider).await?;
+            let selected = models
+                .iter()
+                .find(|candidate| candidate.id == model)
+                .ok_or_else(|| {
+                    CopilotError::InvalidRequest(format!(
+                        "{} does not offer the image model {model}",
+                        def.name
+                    ))
+                })?;
+            cost = selected.image_price.unwrap_or(image.cost_usd);
+        }
+        if def.id == "openrouter"
+            && let Some(key) = self.key_for(def).await
+            && let Some(price) = self.image_price_for(def, &key, model).await
+        {
+            cost = price;
+        }
+
+        let mut config = self.config.write().await;
+        config.last_image_provider = Some(provider.to_string());
+        config.last_image_model = Some(model.to_string());
+        config.last_image_cost = Some(cost);
+        let snapshot = config.clone();
+        drop(config);
+        self.save(&snapshot).await;
+        Ok(())
+    }
+
+    /// The model the image service should call for `provider`, honoring the
+    /// user's selection only when it belongs to that provider.
+    pub async fn image_model_for(&self, provider: &ProviderDef) -> String {
+        let config = self.config.read().await;
+        if config.last_image_provider.as_deref() == Some(provider.id)
+            && let Some(model) = config.last_image_model.as_deref()
+            && !model.trim().is_empty()
+        {
+            return model.to_string();
+        }
+        provider
+            .image
+            .map(|spec| spec.model.to_string())
+            .unwrap_or_default()
+    }
+
+    /// Conservative per-picture price for the selected model, used to reserve
+    /// budget before the provider reports the real charge.
+    pub async fn image_model_cost(&self, provider: &ProviderDef) -> f64 {
+        let config = self.config.read().await;
+        if config.last_image_provider.as_deref() == Some(provider.id) {
+            return config
+                .last_image_cost
+                .filter(|cost| *cost >= 0.0)
+                .unwrap_or_else(|| provider.image.map(|spec| spec.cost_usd).unwrap_or(0.0));
+        }
+        provider.image.map(|spec| spec.cost_usd).unwrap_or(0.0)
+    }
+
+    /// The provider the user picked for pictures, when its key is still present
+    /// and it still offers an image model.
+    pub async fn preferred_image_provider(&self) -> Option<&'static ProviderDef> {
+        let config = self.config.read().await;
+        let id = config.last_image_provider.as_deref()?;
+        let provider = catalog::find(id)?;
+        (provider.image.is_some() && has_key(&config, *provider)).then_some(provider)
+    }
+
+    /// The provider the image service should use: the user's explicit choice,
+    /// or the first connected provider that can draw.
+    pub async fn image_provider(&self) -> Option<&'static ProviderDef> {
+        let config = self.config.read().await;
+        if let Some(id) = config.last_image_provider.as_deref()
+            && let Some(provider) = catalog::find(id)
+            && provider.image.is_some()
+            && has_key(&config, *provider)
+        {
+            return Some(provider);
+        }
+        catalog::PROVIDERS
+            .iter()
+            .find(|provider| provider.image.is_some() && has_key(&config, **provider))
     }
 
     async fn save(&self, config: &CopilotConfig) {
@@ -539,6 +840,81 @@ mod tests {
         let state = CopilotState::in_memory();
         let error = state.models("not-a-provider").await.unwrap_err();
         assert_eq!(error.code(), "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn the_image_role_is_remembered_apart_from_chat() {
+        let state = CopilotState::in_memory();
+
+        let error = state.remember_image("deepseek", "any").await.unwrap_err();
+        assert_eq!(
+            error.code(),
+            "invalid_request",
+            "no image model behind that key"
+        );
+
+        let error = state
+            .remember_image("openai", "not-gpt-image-1")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            "invalid_request",
+            "the model must be the offered one"
+        );
+
+        state.remember_image("openai", "gpt-image-1").await.unwrap();
+        let view = state.view().await;
+        assert_eq!(view.last_image_provider.as_deref(), Some("openai"));
+        assert_eq!(view.last_image_model.as_deref(), Some("gpt-image-1"));
+        assert_eq!(view.last_provider, None, "the chat selection is untouched");
+        assert_eq!(view.last_model, None);
+        assert!(
+            state.preferred_image_provider().await.is_none(),
+            "without a key the preference is not usable"
+        );
+    }
+
+    #[tokio::test]
+    async fn stock_keys_are_stored_and_reported_without_leaving_the_server() {
+        let state = CopilotState::in_memory();
+        state
+            .set_stock_key("unsplash", "unsplash-key", None)
+            .await
+            .unwrap();
+        state
+            .set_stock_key("vecteezy", "vecteezy-key", Some("acct_9"))
+            .await
+            .unwrap();
+        let view = state.view().await;
+        assert!(
+            view.stock
+                .iter()
+                .any(|source| source.id == "unsplash" && source.configured)
+        );
+        assert!(
+            view.stock
+                .iter()
+                .any(|source| source.id == "vecteezy" && source.configured)
+        );
+        assert!(state.stock_keys().await.providers().contains(&"vecteezy"));
+
+        let config = state.config.read().await;
+        assert_eq!(
+            config.keys.get(stock::UNSPLASH_KEY).map(String::as_str),
+            Some("unsplash-key")
+        );
+        assert_eq!(
+            config.keys.get(stock::VECTEEZY_ACCOUNT).map(String::as_str),
+            Some("acct_9")
+        );
+
+        let error = state
+            .set_stock_key("vecteezy", "only-key", None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid_request");
+        assert!(error.public_message().contains("account"));
     }
 
     #[tokio::test]

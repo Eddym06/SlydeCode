@@ -6,18 +6,19 @@
 //! opaque origin: AI-authored JavaScript cannot read the editor's DOM, storage
 //! or token.
 //!
-//! Inside the sandbox we also lock the document down with CSP: no network
-//! requests, no forms, no navigation. Only inline styles/scripts and local
-//! image data are allowed.
+//! Inside the sandbox we also lock the document down with CSP: no scripted
+//! network requests (`connect-src 'none'`), no forms, no navigation. Inline
+//! styles/scripts are allowed, and `https:` images, media and fonts render so a
+//! slide can point at a hosted asset; plain `http:` stays blocked.
 
 use slyde_core::{Presentation, Slide};
 
 const CSP: &str = "default-src 'none'; \
-style-src 'self' 'unsafe-inline'; \
+style-src 'self' 'unsafe-inline' https:; \
 script-src 'self' 'unsafe-inline'; \
-img-src 'self' data: blob:; \
-font-src 'self' data:; \
-media-src data: blob:; \
+img-src 'self' data: blob: https:; \
+font-src 'self' data: https:; \
+media-src data: blob: https:; \
 connect-src 'none'; \
 form-action 'none'; \
 base-uri 'none'";
@@ -1434,7 +1435,12 @@ mod tests {
         assert!(html.contains("height: 720px"));
         assert!(html.contains("Content-Security-Policy"));
         assert!(html.contains("connect-src 'none'"));
-        assert!(html.contains("font-src 'self' data:"));
+        assert!(html.contains("font-src 'self' data: https:"));
+        assert!(html.contains("img-src 'self' data: blob: https:"));
+        assert!(
+            !html.contains("http:"),
+            "a slide must not be able to load plain-http pictures"
+        );
         assert!(html.contains("@font-face"));
         assert!(html.contains("/fonts/Geist-Variable.woff2"));
     }

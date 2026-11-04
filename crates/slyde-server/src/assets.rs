@@ -1,8 +1,9 @@
 //! Image asset store.
 //!
-//! Slides may only reference images from two places: a `data:` URL or the asset
-//! store (`/assets/<id>.<ext>`), because the sandbox CSP allows `'self' data:
-//! blob:` and nothing else. The store is what makes "paste a photo" work:
+//! Slides can reference images from a `data:` URL, the asset store
+//! (`/assets/<id>.<ext>`) or a remote `https:` URL, because the sandbox CSP
+//! allows `'self' data: blob: https:`. The store is what makes "paste a photo"
+//! work and keeps a deck self-contained:
 //!
 //! - files live in `<app-data>/assets/`, content is never rewritten;
 //! - ids are random and opaque, so a slide cannot address anything outside the

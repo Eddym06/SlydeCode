@@ -56,12 +56,48 @@ pub enum FetchError {
     TooManyRedirects,
     #[error("the page is larger than the copilot can read")]
     TooLarge,
-    #[error("only web pages and PNG, JPEG or WebP images can be read")]
+    #[error("only web pages and PNG, JPEG, WebP or GIF images can be read")]
     Unsupported,
+}
+
+/// Fetches a picture from a public link, with the same address checks and hop
+/// limit as [`fetch`].
+///
+/// Remote photography is downloaded once and stored in the deck's asset store.
+/// That makes a slide work offline and travel inside a `.slyde` bundle instead
+/// of breaking when a CDN link expires.
+pub async fn fetch_image(link: &str) -> Result<Vec<u8>, FetchError> {
+    let (_, response) = fetch_response(
+        link,
+        "image/png,image/jpeg,image/webp,image/gif;q=0.9,*/*;q=0.1",
+    )
+    .await?;
+    let mime = content_type(&response);
+    // Some CDNs answer `application/octet-stream` for a real picture. The asset
+    // store sniffs the bytes, so the content type only has to rule out a page.
+    let is_image = is_image_mime(&mime) || mime.is_empty() || mime == "application/octet-stream";
+    if !is_image {
+        return Err(FetchError::Unsupported);
+    }
+    let body = read_bytes(response, MAX_IMAGE_BYTES).await?;
+    if body.is_empty() {
+        return Err(FetchError::Unreachable);
+    }
+    Ok(body)
 }
 
 /// Fetches `link`, following at most [`MAX_HOPS`] validated redirects.
 pub async fn fetch(link: &str) -> Result<Fetched, FetchError> {
+    let (url, response) = fetch_response(
+        link,
+        "text/html,text/plain,image/png,image/jpeg,image/webp,image/gif;q=0.9,*/*;q=0.1",
+    )
+    .await?;
+    read_body(url, response).await
+}
+
+/// Resolves a link to the final successful response, validating every hop.
+async fn fetch_response(link: &str, accept: &str) -> Result<(Url, reqwest::Response), FetchError> {
     let mut url = Url::parse(link.trim()).map_err(|_| FetchError::InvalidUrl)?;
     for _ in 0..=MAX_HOPS {
         let address = validate(&url).await?;
@@ -75,10 +111,7 @@ pub async fn fetch(link: &str) -> Result<Fetched, FetchError> {
             .map_err(|_| FetchError::Unreachable)?;
         let response = client
             .get(url.clone())
-            .header(
-                reqwest::header::ACCEPT,
-                "text/html,text/plain,image/png,image/jpeg,image/webp;q=0.9,*/*;q=0.1",
-            )
+            .header(reqwest::header::ACCEPT, accept)
             .send()
             .await
             .map_err(|_| FetchError::Unreachable)?;
@@ -96,29 +129,28 @@ pub async fn fetch(link: &str) -> Result<Fetched, FetchError> {
         if !response.status().is_success() {
             return Err(FetchError::Unreachable);
         }
-        return read_body(url, response).await;
+        return Ok((url, response));
     }
     Err(FetchError::TooManyRedirects)
 }
 
-async fn read_body(url: Url, mut response: reqwest::Response) -> Result<Fetched, FetchError> {
-    let mime = response
+fn content_type(response: &reqwest::Response) -> String {
+    response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.split(';').next().unwrap_or("").trim().to_lowercase())
-        .unwrap_or_default();
-    let is_image = matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/webp");
-    let is_text = mime.is_empty() || mime.starts_with("text/") || mime == "application/xhtml+xml";
-    if !is_image && !is_text {
-        return Err(FetchError::Unsupported);
-    }
+        .unwrap_or_default()
+}
 
-    let limit = if is_image {
-        MAX_IMAGE_BYTES
-    } else {
-        MAX_PAGE_BYTES
-    };
+fn is_image_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+    )
+}
+
+async fn read_bytes(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, FetchError> {
     let mut body = Vec::new();
     while let Some(chunk) = response
         .chunk()
@@ -130,6 +162,23 @@ async fn read_body(url: Url, mut response: reqwest::Response) -> Result<Fetched,
         }
         body.extend_from_slice(&chunk);
     }
+    Ok(body)
+}
+
+async fn read_body(url: Url, response: reqwest::Response) -> Result<Fetched, FetchError> {
+    let mime = content_type(&response);
+    let is_image = is_image_mime(&mime);
+    let is_text = mime.is_empty() || mime.starts_with("text/") || mime == "application/xhtml+xml";
+    if !is_image && !is_text {
+        return Err(FetchError::Unsupported);
+    }
+
+    let limit = if is_image {
+        MAX_IMAGE_BYTES
+    } else {
+        MAX_PAGE_BYTES
+    };
+    let body = read_bytes(response, limit).await?;
 
     if is_image {
         let name = url
@@ -360,6 +409,16 @@ mod tests {
             "::ffff:10.0.0.1",
         ] {
             assert!(!is_public(ip(blocked)), "{blocked} must be refused");
+        }
+    }
+
+    #[test]
+    fn every_raster_format_the_asset_store_keeps_is_read_as_an_image() {
+        for mime in ["image/png", "image/jpeg", "image/webp", "image/gif"] {
+            assert!(is_image_mime(mime), "{mime} must be an image");
+        }
+        for mime in ["text/html", "image/svg+xml", "application/json"] {
+            assert!(!is_image_mime(mime), "{mime} must not be read as an image");
         }
     }
 

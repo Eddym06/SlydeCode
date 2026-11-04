@@ -369,6 +369,22 @@ impl PresentationState {
         src: &str,
         rect: ImageRect,
     ) -> Result<String, CoreError> {
+        self.insert_image_with_alt(slide_id, src, "", rect)
+    }
+
+    /// Like [`insert_image`](Self::insert_image), with alternative text.
+    ///
+    /// Agents insert photography they never see, so they describe it: the alt
+    /// text is what a screen reader (and the inspector) can announce, and an
+    /// empty string keeps a purely decorative image out of the accessibility
+    /// tree.
+    pub fn insert_image_with_alt(
+        &mut self,
+        slide_id: &str,
+        src: &str,
+        alt: &str,
+        rect: ImageRect,
+    ) -> Result<String, CoreError> {
         validate_asset_src(src)?;
         rect.validate()?;
 
@@ -381,8 +397,9 @@ impl PresentationState {
 
         let id = unique_element_id(&slide.code, "image");
         let tag = format!(
-            r#"<img data-id="{id}" class="slyde-image" src="{src}" alt="" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; object-fit: cover" />"#,
+            r#"<img data-id="{id}" class="slyde-image" src="{src}" alt="{alt}" style="position: absolute; left: {x}; top: {y}; width: {w}; height: {h}; object-fit: cover" />"#,
             src = escape_attribute(src),
+            alt = escape_attribute(alt),
             x = css_px(rect.x),
             y = css_px(rect.y),
             w = css_px(rect.w),
@@ -1766,6 +1783,38 @@ mod tests {
             .unwrap();
         assert_eq!(second, "image-2", "each image gets its own handle");
         assert!(s.can_undo());
+    }
+
+    /// Agents describe the photo they insert, and that description must reach
+    /// the markup, escaped, without breaking the tag.
+    #[test]
+    fn insert_image_carries_escaped_alternative_text() {
+        let mut s = state();
+        s.upsert_slide(
+            0,
+            Some("sld1".into()),
+            "<h1>A</h1>".into(),
+            TemplateType::Hero,
+            vec![],
+        )
+        .unwrap();
+        s.insert_image_with_alt(
+            "sld1",
+            "/assets/0123456789abcdef.png",
+            "Team \"offsite\" in <Lisbon> & Porto",
+            ImageRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
+        )
+        .unwrap();
+        let code = &s.presentation().slides[0].code;
+        assert!(
+            code.contains("alt=\"Team &quot;offsite&quot; in &lt;Lisbon&gt; &amp; Porto\""),
+            "{code}"
+        );
     }
 
     #[test]

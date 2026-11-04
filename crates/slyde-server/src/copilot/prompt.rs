@@ -7,13 +7,118 @@
 
 use slyde_core::Presentation;
 
+use super::image_service::ImageCapability;
 use super::tools::deck_summary;
+
+/// What the prompt should say about pictures in this turn. Built from the live
+/// image capability: a model that has no generator must not be told to call one.
+#[derive(Default, Clone, Copy)]
+pub struct ImagePrompt<'a> {
+    pub capability: Option<&'a ImageCapability>,
+    pub stock: bool,
+}
+
+impl ImagePrompt<'_> {
+    fn tools(&self) -> String {
+        if self
+            .capability
+            .is_some_and(|capability| capability.available)
+        {
+            "- `request_image` – request an original picture in the background. It returns immediately; the system generates and places it."
+                .to_string()
+        } else if self.stock {
+            "- `search_images` — find a real photo (Unsplash, Pexels) or vector (Vecteezy), then place the chosen result with `insert_image`."
+                .to_string()
+        } else {
+            "- `insert_image` — store a linked or data picture on a slide at a given rectangle."
+                .to_string()
+        }
+    }
+
+    fn guidance(&self) -> String {
+        if self
+            .capability
+            .is_some_and(|capability| capability.available)
+        {
+            "Images: make the picture part of the composition, not a sticker on top. Call \
+             `request_image` once for every picture you want, with a precise visual prompt, the \
+             unique `image_id`, the `alt` text and the target slide (`slide_id`, or `slide_index` \
+             while you are still writing). It runs in the background, so keep writing: the system \
+             buffers the result and places it on its slide when the slide exists. Do not call \
+             `generate_image` and do not invent image URLs. Alt text is mandatory."
+                .to_string()
+        } else if self.stock {
+            "Images: the image generator is not available right now, so use `search_images` to find \
+             a real photo or vector that fits the content, then place the best result with \
+             `insert_image` using its `url` and a specific `alt`. Prefer one strong image over a \
+             collage. Never invent image URLs. Alt text is mandatory."
+                .to_string()
+        } else {
+            "Images: make the picture part of the composition, not a sticker on top. Use \
+             `insert_image` with a high-resolution https link the user supplied or a stored \
+             `/assets/…` path; alt text is mandatory."
+                .to_string()
+        }
+    }
+
+    /// The compact version for providers that only get the lean prompt. It only
+    /// says that a generator exists; no image count is predicted.
+    fn contract_lean(&self) -> String {
+        if self
+            .capability
+            .is_none_or(|capability| !capability.available)
+        {
+            return String::new();
+        }
+        "\n## Image generation\n\nAn image model is available and works in the background. Never name its provider or model.\n\
+         Call `request_image` with a unique `image_id`, a precise `prompt`, `alt`, and `slide_id` or \
+         `slide_index`; it returns immediately and the system places the picture when the slide is \
+         ready. Do not call `generate_image`.\n"
+            .to_string()
+    }
+
+    fn contract(&self) -> String {
+        if self
+            .capability
+            .is_none_or(|capability| !capability.available)
+        {
+            return String::new();
+        }
+        "\n## Image generation\n\n\
+         An image model is available and works in the background. Never name, compare or mention \
+         the provider or model to the user.\n\n\
+         - Call `request_image` with a unique `image_id`, a precise visual `prompt`, `alt`, and the \
+         target (`slide_id` for an existing slide, or `slide_index` while you are still writing). \
+         Optional `x`/`y`/`w`/`h` place it exactly.\n\
+         - The call returns immediately. Generation continues after your reply; the picture is \
+         buffered and placed on its target slide when it is ready. If the target slide does not \
+         exist yet, the system waits for it.\n\
+         - Do not call `generate_image`, and do not invent image URLs.\n"
+            .to_string()
+    }
+}
 
 pub fn system_prompt(
     deck: &Presentation,
     selected_id: Option<&str>,
     selected_element: Option<&str>,
     language: &str,
+) -> String {
+    system_prompt_with_images(
+        deck,
+        selected_id,
+        selected_element,
+        language,
+        ImagePrompt::default(),
+    )
+}
+
+pub fn system_prompt_with_images(
+    deck: &Presentation,
+    selected_id: Option<&str>,
+    selected_element: Option<&str>,
+    language: &str,
+    image: ImagePrompt<'_>,
 ) -> String {
     let language = if language == "es" {
         "Spanish"
@@ -67,8 +172,11 @@ deck aspect ratio and scaled to the viewport. You write only the inner HTML and 
 `<style>` block.
 
 - Do not write `<!doctype>`, `<html>`, `<head>`, `<body>` or a `<script>`.
-- Do not use external URLs, web fonts, `@import`, remote images or network requests. The
-  sandbox blocks them.
+- Images & photography: call `insert_image` with a high-resolution https image URL (Unsplash
+  with `auto=format&fit=crop&w=1280&q=80`, Pexels, a direct image link) or a data URL. The server
+  stores the bytes in the deck, so the slide keeps working offline and inside a `.slyde` bundle.
+  You may also write `<img src="/assets/…">` for a stored asset. Inline SVG and data URLs are fine.
+- Web fonts: You CAN import modern Google Fonts in your `<style>` block via `@import url('https://fonts.googleapis.com/css2?family=...');` (such as `Plus Jakarta Sans`, `Space Grotesk`, `Playfair Display`, `Outfit`, `Syne`, `Inter`). Use expressive typography that matches the presentation tone.
 - Inline SVG is welcome for diagrams, icons and data marks.
 - The deck theme exposes `--slyde-bg`, `--slyde-fg`, `--slyde-muted`, `--slyde-accent` and
   `--slyde-font`. Use these variables first; they are what makes a slide belong to the deck.
@@ -85,8 +193,7 @@ deck aspect ratio and scaled to the viewport. You write only the inner HTML and 
   The canvas is {aspect}. Do not rely on the browser window size.
 - Keep every piece of text inside the canvas. Large type must wrap deliberately; never use
   `white-space: nowrap` for prose.
-- Use Geist (already loaded) through `var(--slyde-font)`; use a monospace face only for
-  code or numeric data. Do not load another family.
+- Use Geist (already loaded) through `var(--slyde-font)` or import Google Fonts in `<style>` for distinctive editorial typography; use a monospace face only for code or numeric data.
 
 ## Design standard
 
@@ -107,9 +214,7 @@ product launch — not a SaaS template.
   clearly labeled schematic instead of fake statistics.
 - Diagrams should explain a relationship: use connectors, alignment, grouping and a
   readable direction of travel. Avoid decorative arrows that carry no meaning.
-- Images: when the user attaches a photo, treat it as a reference and build a layout with a
-  labeled image region if the asset cannot be embedded. Do not claim to have placed the
-  original file unless the slide code actually contains it.
+- {image_guidance}
 - Copy: concrete, specific, human. No lorem ipsum, no "unlock your potential", no empty
   adjectives, no repeated slide title. If the user supplies source material, use its facts
   and phrasing, not a generic summary.
@@ -141,7 +246,7 @@ Slides come alive with smooth, high-fidelity animations. Combine continuous CSS 
 ## Selection
 
 {selection}
-
+{image_contract}
 ## Tools
 
 You can only change the deck through the provided tools.
@@ -158,6 +263,8 @@ You can only change the deck through the provided tools.
 - `set_title` — rename the deck. Call it whenever the deck is still "Untitled presentation" or the
   title no longer matches the content; it never touches the slides.
 - `set_theme` — switch to a preset, or design a palette (background, foreground, muted, accent, name) and set its font.
+- `insert_image` — store a linked, data or generated picture on a slide at a given rectangle.
+{image_tools}
 - `remove_slide`, `move_slide`, `trigger_animation`, `set_notes`.
 
 Rules:
@@ -180,7 +287,8 @@ Rules:
      Escape `<`, `>` and `&` inside the code. `data-emphasis` highlights 1-based lines.
    - Math: `$inline$` or `$$display$$` (KaTeX). Escape anything that looks like a price.
    - Diagrams: `<div class="slyde-diagram">graph TD; A-->B;</div>` with Mermaid source only.
-   - Images: `data:` or `blob:` URIs or `/vendor` assets; the sandbox has no network.
+   - Images: use `insert_image` for anything remote, or `/assets/…`, `data:` and `blob:` URIs
+     already stored in the deck. The sandbox itself does not fetch external URLs.
    Keep line lengths short (the canvas is a slide, not an editor) and never paste raw Markdown.
 5. Write a deck as a story: a hook, the argument, the proof, the decision. Typical decks are
    5–9 slides unless the user asks for another length.
@@ -200,7 +308,10 @@ Rules:
         aspect = deck.aspect_ratio.as_str(),
         summary = summary,
         kinds = kinds,
-        themes = themes
+        themes = themes,
+        image_guidance = image.guidance(),
+        image_tools = image.tools(),
+        image_contract = image.contract(),
     )
 }
 
@@ -215,6 +326,22 @@ pub fn system_prompt_lean(
     selected_id: Option<&str>,
     selected_element: Option<&str>,
     language: &str,
+) -> String {
+    system_prompt_lean_with_images(
+        deck,
+        selected_id,
+        selected_element,
+        language,
+        ImagePrompt::default(),
+    )
+}
+
+pub fn system_prompt_lean_with_images(
+    deck: &Presentation,
+    selected_id: Option<&str>,
+    selected_element: Option<&str>,
+    language: &str,
+    image: ImagePrompt<'_>,
 ) -> String {
     let language = if language == "es" {
         "Spanish"
@@ -232,9 +359,11 @@ pub fn system_prompt_lean(
 sentences, and never paste code into the chat. Change the deck only through the tools.
 
 Canvas: each slide is the inner HTML (plus an optional <style>) of a {aspect} stage. No doctype,
-html, head, body or script; no external URLs, web fonts or network requests; inline SVG is fine.
+html, head, body or script; Google Fonts via @import in <style> are supported; inline SVG is fine.
+Store remote pictures with `insert_image`, then reference them as `<img>`.
+{image_line}
 Use `var(--slyde-bg)`, `var(--slyde-fg)`, `var(--slyde-muted)`, `var(--slyde-accent)` and
-`var(--slyde-font)` for every theme color and the font, never literal theme colors.
+`var(--slyde-font)` for every theme color and default font.
 
 Design: one idea per slide, one focal point, large type with a clear hierarchy, generous space,
 text that fits the canvas and stays legible. Concrete copy, no lorem ipsum. A deck is a story of
@@ -250,12 +379,15 @@ Deck:
 {summary}
 
 {selection}
+{image_contract}
 "#,
         language = language,
         aspect = deck.aspect_ratio.as_str(),
         kinds = kinds,
         summary = summary,
         selection = selection,
+        image_line = image.tools(),
+        image_contract = image.contract_lean(),
     )
 }
 
@@ -311,10 +443,27 @@ mod tests {
     #[test]
     fn the_fixed_overhead_is_bounded_and_the_lean_one_is_much_smaller() {
         let deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
-        let full = system_prompt(&deck, None, None, "en");
-        let lean = system_prompt_lean(&deck, None, None, "en");
-        let full_tools = crate::copilot::tools::openai_tools().to_string();
-        let lean_tools = crate::copilot::tools::openai_tools_lean().to_string();
+        // Worst case is a connected image model: the prompt carries the live
+        // capability block and one image tool, not both fallbacks.
+        let capability = ImageCapability {
+            available: true,
+            provider: Some("openrouter"),
+            provider_name: "OpenRouter".into(),
+            model: "google/gemini-2.5-flash-image".into(),
+            reason: None,
+        };
+        let image = ImagePrompt {
+            capability: Some(&capability),
+            stock: false,
+        };
+        let availability = crate::copilot::tools::ToolAvailability {
+            image_requests: true,
+            stock_images: false,
+        };
+        let full = system_prompt_with_images(&deck, None, None, "en", image);
+        let lean = system_prompt_lean_with_images(&deck, None, None, "en", image);
+        let full_tools = crate::copilot::tools::openai_tools_for(availability, false).to_string();
+        let lean_tools = crate::copilot::tools::openai_tools_for(availability, true).to_string();
         // About four characters per token.
         let full_tokens = (full.len() + full_tools.len()) / 4;
         let lean_tokens = (lean.len() + lean_tools.len()) / 4;
@@ -323,13 +472,67 @@ mod tests {
             "full overhead grew to ~{full_tokens} tokens"
         );
         assert!(
-            lean_tokens < 2_800,
+            lean_tokens < 3_000,
             "lean overhead is ~{lean_tokens} tokens"
         );
         assert!(
             lean_tokens * 2 < full_tokens,
             "lean {lean_tokens} vs full {full_tokens}"
         );
+    }
+
+    #[test]
+    fn the_image_block_appears_only_when_the_capability_is_available() {
+        let deck = Presentation::new("Q3 Review", Theme::studio(), AspectRatio::R16x9);
+        let capability = ImageCapability {
+            available: true,
+            provider: Some("openrouter"),
+            provider_name: "OpenRouter".into(),
+            model: "google/gemini-2.5-flash-image".into(),
+            reason: None,
+        };
+        let prompt = system_prompt_with_images(
+            &deck,
+            None,
+            None,
+            "en",
+            ImagePrompt {
+                capability: Some(&capability),
+                stock: false,
+            },
+        );
+        assert!(prompt.contains("Image generation"));
+        assert!(prompt.contains("An image model is available"));
+        assert!(prompt.contains("request_image"));
+        assert!(!prompt.contains("- `generate_image`"), "{prompt}");
+        for absent in [
+            "Account balance",
+            "Cost per image",
+            "at most",
+            "images per minute",
+            "google/gemini-2.5-flash-image",
+            "OpenRouter",
+        ] {
+            assert!(
+                !prompt.contains(absent),
+                "the prompt must not predict image quantities or expose the model: {absent}\n{prompt}"
+            );
+        }
+
+        let without = system_prompt_with_images(
+            &deck,
+            None,
+            None,
+            "en",
+            ImagePrompt {
+                capability: None,
+                stock: true,
+            },
+        );
+        assert!(!without.contains("Image generation"));
+        assert!(!without.contains("Account balance"));
+        assert!(without.contains("search_images"));
+        assert!(!without.contains("request_image"));
     }
 
     #[test]

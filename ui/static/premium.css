@@ -199,6 +199,90 @@
   margin-top: 14px;
 }
 
+/* ---------- background pictures: a quiet queue under the reply ---------- */
+
+.copilot-panel .msg-assistant .image-list,
+.copilot-panel .msg-assistant .image-errors {
+  margin-top: 12px;
+}
+
+.copilot-panel .image-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* An author `display` beats the browser's `[hidden]`, so say it explicitly. */
+.copilot-panel .image-list[hidden] {
+  display: none;
+}
+
+.copilot-panel .image-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 8px 4px 4px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink-subtle) 6%, transparent);
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+
+.copilot-panel .image-thumb {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  object-fit: cover;
+  background: color-mix(in srgb, var(--ink-subtle) 12%, transparent);
+}
+
+.copilot-panel .image-thumb.is-empty {
+  display: block;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+    color-mix(in srgb, var(--ink-subtle) 12%, transparent);
+}
+
+.copilot-panel .image-label {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.copilot-panel .image-row[data-status="failed"] .image-label {
+  color: var(--danger);
+}
+
+.copilot-panel .image-row .tool-detail {
+  margin-left: auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.copilot-panel .image-errors {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.copilot-panel .image-errors p {
+  margin: 0 0 4px;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.copilot-panel .image-errors ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
 /* Calls and tokens: three small figures under the reply, quiet until looked at. */
 .copilot-panel .msg-usage {
   display: flex;

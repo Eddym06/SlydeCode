@@ -18,6 +18,7 @@ pub mod deck_api;
 pub mod error;
 pub mod export_api;
 pub mod http;
+pub mod image_intake;
 pub mod library;
 pub mod presence;
 pub mod rendezvous;

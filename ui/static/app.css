@@ -2075,12 +2075,114 @@ body.has-thinking-expanded .copilot-panel {
   letter-spacing: -0.025em;
 }
 
+.sheet-head-copy {
+  min-width: 0;
+}
+
+.sheet-head-copy h2 {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.sheet-head-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* "Model for: Text | Image" — a compact role switch beside the sheet title.
+   The thumb answers the click with one spring; no other motion competes. */
+.model-for {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.model-for-label {
+  color: var(--ink-muted);
+  font-size: 8.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.model-for-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-sunken);
+}
+
+.model-for-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  border-radius: 7px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--border);
+  transition: transform 320ms var(--spring), background 240ms var(--ease-out);
+  will-change: transform;
+}
+
+.model-for-switch[data-active="image"] .model-for-thumb {
+  transform: translateX(100%);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 30%, var(--border));
+}
+
+.model-for-option {
+  position: relative;
+  z-index: 1;
+  min-width: 42px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  transition: color 200ms var(--ease-out);
+}
+
+.model-for-option:hover {
+  color: var(--ink);
+}
+
+.model-for-option.is-selected {
+  color: var(--ink);
+}
+
+.model-for-option:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-for-thumb {
+    transition: none;
+  }
+}
+
 .provider-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   padding: 0 15px 13px;
   border-bottom: 1px solid var(--border);
+}
+
+.provider-strip.is-image {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .provider-card {
@@ -2194,6 +2296,22 @@ body.has-thinking-expanded .copilot-panel {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.stock-source {
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.stock-source + .stock-source {
+  padding-top: 14px;
+}
+
+.stock-source h4 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: -0.01em;
 }
 
 .sheet-label {
@@ -2394,6 +2512,7 @@ body.has-thinking-expanded .copilot-panel {
 
 .model-main {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   line-height: 1.3;
@@ -2408,12 +2527,102 @@ body.has-thinking-expanded .copilot-panel {
   font-weight: 500;
 }
 
+.model-sub {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .model-id {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--ink-subtle);
   font-size: 9.5px;
+}
+
+.model-prices {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-subtle);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-prices.is-unknown {
+  font-size: 8.5px;
+  letter-spacing: 0.01em;
+}
+
+.model-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-weight: 500;
+}
+
+.model-price svg {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+}
+
+.model-price.is-input,
+.model-legend-item.is-input {
+  color: var(--ink-muted);
+}
+
+.model-price.is-output,
+.model-legend-item.is-output {
+  color: var(--ink-muted);
+}
+
+/* The arrows carry the semantic colour; the numbers stay AA-readable. */
+.model-price.is-input svg,
+.model-legend-item.is-input svg {
+  color: var(--success);
+}
+
+.model-price.is-output svg,
+.model-legend-item.is-output svg {
+  color: var(--danger);
+}
+
+.model-price.is-image {
+  color: var(--ink-subtle);
+  font-weight: 400;
+}
+
+.model-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 7px;
+  color: var(--ink-subtle);
+  font-size: 8.5px;
+  line-height: 1.3;
+}
+
+.model-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 500;
+}
+
+.model-legend-item svg {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+}
+
+.model-legend-note {
+  color: var(--ink-subtle);
 }
 
 .model-badges {
@@ -2437,6 +2646,17 @@ body.has-thinking-expanded .copilot-panel {
   border-color: color-mix(in srgb, var(--success) 35%, var(--border));
   color: var(--success);
   background: color-mix(in srgb, var(--success) 7%, transparent);
+}
+
+.model-badge.is-image {
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border));
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.model-row[disabled] {
+  opacity: 0.55;
+  cursor: progress;
 }
 
 .model-check {

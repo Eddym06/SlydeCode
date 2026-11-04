@@ -16,8 +16,19 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::catalog::PROVIDERS;
+use super::stock;
 use super::vault::{Vault, system_vault};
 use crate::rendezvous::app_data_dir;
+
+/// Every secret the config can hold: chat/image provider keys and the stock
+/// image services. Keeping one list means a stock key lands in the credential
+/// store exactly like a provider key.
+fn secret_ids() -> impl Iterator<Item = &'static str> {
+    PROVIDERS
+        .iter()
+        .map(|provider| provider.id)
+        .chain(stock::SECRET_IDS.iter().copied())
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CopilotConfig {
@@ -27,6 +38,17 @@ pub struct CopilotConfig {
     pub last_provider: Option<String>,
     #[serde(default)]
     pub last_model: Option<String>,
+    /// The provider whose key generates pictures. It may differ from the chat
+    /// provider: DeepSeek writes the deck while OpenAI draws it.
+    #[serde(default)]
+    pub last_image_provider: Option<String>,
+    #[serde(default)]
+    pub last_image_model: Option<String>,
+    /// Conservative per-picture price for the selected image model. It is kept
+    /// next to the selection so the capability probe does not need a network
+    /// call just to know what a picture costs.
+    #[serde(default)]
+    pub last_image_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -100,14 +122,14 @@ impl ConfigStore {
             config.keys = legacy;
         }
 
-        for provider in PROVIDERS {
-            match vault.get(provider.id) {
+        for id in secret_ids() {
+            match vault.get(id) {
                 Ok(Some(key)) => {
-                    config.keys.insert(provider.id.to_string(), key);
+                    config.keys.insert(id.to_string(), key);
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    tracing::warn!(provider = provider.id, %error, "could not read a key from the credential store");
+                    tracing::warn!(secret = id, %error, "could not read a key from the credential store");
                 }
             }
         }
@@ -124,20 +146,16 @@ impl ConfigStore {
             // refuses stays in the file, because losing a key the user just typed
             // is worse than keeping it in the owner-only fallback.
             let mut refused = BTreeMap::new();
-            for provider in PROVIDERS {
-                match config
-                    .keys
-                    .get(provider.id)
-                    .filter(|k| !k.trim().is_empty())
-                {
+            for id in secret_ids() {
+                match config.keys.get(id).filter(|k| !k.trim().is_empty()) {
                     Some(key) => {
-                        if let Err(error) = vault.set(provider.id, key) {
-                            tracing::warn!(provider = provider.id, %error, "credential store refused a key; keeping it in the config file");
-                            refused.insert(provider.id.to_string(), key.clone());
+                        if let Err(error) = vault.set(id, key) {
+                            tracing::warn!(secret = id, %error, "credential store refused a key; keeping it in the config file");
+                            refused.insert(id.to_string(), key.clone());
                         }
                     }
                     None => {
-                        let _ = vault.delete(provider.id);
+                        let _ = vault.delete(id);
                     }
                 }
             }
@@ -306,12 +324,15 @@ mod tests {
         let store = ConfigStore::with_vault(dir.join("copilot.json"), Some(vault.clone()));
         let mut config = CopilotConfig::default();
         config.keys.insert("deepseek".into(), "sk-secret".into());
+        config
+            .keys
+            .insert(stock::UNSPLASH_KEY.into(), "unsplash-secret".into());
         config.last_provider = Some("deepseek".into());
         store.save(&config).await.unwrap();
 
         let raw = std::fs::read_to_string(dir.join("copilot.json")).unwrap();
         assert!(
-            !raw.contains("sk-secret"),
+            !raw.contains("sk-secret") && !raw.contains("unsplash-secret"),
             "the file must hold no secret: {raw}"
         );
         assert!(
@@ -323,8 +344,20 @@ mod tests {
             Some("sk-secret")
         );
         assert_eq!(
-            store.load().keys.get("deepseek").map(String::as_str),
+            vault
+                .snapshot()
+                .get(stock::UNSPLASH_KEY)
+                .map(String::as_str),
+            Some("unsplash-secret")
+        );
+        let loaded = store.load();
+        assert_eq!(
+            loaded.keys.get("deepseek").map(String::as_str),
             Some("sk-secret")
+        );
+        assert_eq!(
+            loaded.keys.get(stock::UNSPLASH_KEY).map(String::as_str),
+            Some("unsplash-secret")
         );
 
         // Removing a key removes it from the vault too.

@@ -38,6 +38,13 @@ pub enum ChatEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         draft: Option<String>,
     },
+    /// Every picture this turn requested, reported before the turn closes.
+    /// Later progress arrives over the WebSocket so a slow image can still land
+    /// on its slide after the text answer is done.
+    Images {
+        jobs: Vec<super::image_service::ImageJobView>,
+        errors: Vec<super::image_service::ImageErrorView>,
+    },
     /// The turn changed the deck and can be undone in one step.
     Reversible,
     Done,

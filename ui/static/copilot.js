@@ -270,6 +270,16 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
 
   function wireThinkingDrawer(drawer, slot) {
     drawerSlots.set(drawer, slot);
+    // Opening a collapsed drawer after the stream finished must still show the
+    // tail. `<details>` fires `toggle` asynchronously, so pin there instead of
+    // relying on the next token render.
+    drawer.addEventListener("toggle", () => {
+      if (!drawer.open) return;
+      const stream = drawer.querySelector(".thinking-stream");
+      if (stream && stream.dataset.pinned !== "false") {
+        stream.scrollTop = stream.scrollHeight;
+      }
+    });
     const toggle = drawer.querySelector("[data-thinking-expand]");
     if (toggle) {
       toggle.addEventListener("click", (event) => {
@@ -461,6 +471,8 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         <div class="msg-text"></div>
         <div class="work-card" hidden></div>
         <div class="tool-list" hidden></div>
+        <div class="image-list" hidden></div>
+        <div class="image-errors" hidden></div>
         <div class="msg-typing" hidden aria-hidden="true"><span></span><span></span><span></span></div>
         <div class="msg-error" hidden></div>
         <div class="msg-actions" hidden></div>
@@ -473,6 +485,7 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
     if (!message.el) return;
     const stick = forceScroll || nearBottom();
     message.el.dataset.state = message.state;
+    message.el.dataset.turnId = message.turnId || "";
     const text = message.el.querySelector(".msg-text");
     text.textContent = message.text;
     text.hidden = !message.text;
@@ -561,6 +574,26 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       list.innerHTML = message.tools.map(toolRow).join("");
     }
 
+    const images = message.el.querySelector(".image-list");
+    if (images) {
+      const jobs = message.images || [];
+      images.hidden = jobs.length === 0;
+      if (jobs.length) images.innerHTML = jobs.map(imageRow).join("");
+    }
+    const imageErrors = message.el.querySelector(".image-errors");
+    if (imageErrors) {
+      const failures = message.imageErrors || [];
+      imageErrors.hidden = failures.length === 0;
+      if (failures.length) {
+        imageErrors.innerHTML = `<p>${escapeHtml(t("copilot.images.errorTitle"))}</p><ul>${failures
+          .map(
+            (failure) =>
+              `<li title="${escapeHtml(failure.message || "")}">${escapeHtml(imageErrorText(failure))}</li>`
+          )
+          .join("")}</ul>`;
+      }
+    }
+
     const error = message.el.querySelector(".msg-error");
     const failed = message.state === "error" || message.state === "stopped";
     error.hidden = !failed;
@@ -599,6 +632,48 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         }`;
     }
     if (stick) scrollToBottom();
+  }
+
+  function imageErrorText(error) {
+    if (!error) return "";
+    const code = error.code || "generic";
+    const key = `copilot.imageError.${code}`;
+    const text = t(key);
+    return text === key
+      ? error.message || t("copilot.imageError.generic")
+      : text;
+  }
+
+  function imageRow(job) {
+    const status = job.status || "queued";
+    const label = t(`copilot.images.${status}`);
+    const glyph =
+      status === "queued" || status === "generating"
+        ? `<span class="tool-spinner" aria-hidden="true"></span>`
+        : status === "placed"
+          ? `<svg class="tool-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+               <path d="m5 12.5 4.5 4.5L19 7"/></svg>`
+          : `<svg class="tool-check" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+               <path d="M12 7v6M12 17h.01"/></svg>`;
+    const target =
+      job.slide_index != null
+        ? t("copilot.images.slide", { n: job.slide_index + 1 })
+        : job.slide_id
+          ? t("copilot.images.slideId", { id: job.slide_id })
+          : "";
+    const detail =
+      status === "failed"
+        ? imageErrorText({ code: job.error_code, message: job.error })
+        : target;
+    const thumb = job.url
+      ? `<img class="image-thumb" src="${escapeHtml(job.url)}" alt="" loading="lazy">`
+      : `<span class="image-thumb is-empty" aria-hidden="true"></span>`;
+    return `<div class="image-row" data-status="${escapeHtml(status)}">
+      ${thumb}${glyph}<span class="image-label">${escapeHtml(label)}</span>${
+        detail ? `<span class="tool-detail">${escapeHtml(detail)}</span>` : ""
+      }</div>`;
   }
 
   function toolRow(tool) {
@@ -851,6 +926,8 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       text: "",
       thinking: "",
       tools: [],
+      images: [],
+      imageErrors: [],
       state: "streaming",
       errorCode: null,
       el: null,
@@ -880,6 +957,9 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
         ? crypto.randomUUID()
         : `turn-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     currentRequestId = requestId;
+    assistant.turnId = requestId;
+    assistant.images = [];
+    assistant.imageErrors = [];
 
     const payload = {
       provider: providerId,
@@ -1146,6 +1226,12 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
       syncAssistant(assistant);
       return;
     }
+    if (event.type === "images") {
+      assistant.images = Array.isArray(event.jobs) ? event.jobs : [];
+      assistant.imageErrors = Array.isArray(event.errors) ? event.errors : [];
+      syncAssistant(assistant);
+      return;
+    }
     if (event.type === "reversible") {
       assistant.reversible = true;
       document.dispatchEvent(new CustomEvent("slyde:versions-changed"));
@@ -1396,6 +1482,32 @@ export function mountCopilot({ client, getSelectedSlideId, getSelectedElementId,
   }
 
   // ---------- events ----------
+
+  // Background images keep moving after the text stream closes. The WebSocket
+  // carries their progress; update the turn that requested them in place.
+  document.addEventListener("slyde:image", (event) => {
+    const detail = event.detail || {};
+    if (!detail.job) return;
+    const assistant = [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.turnId === detail.turn_id);
+    if (!assistant) return;
+    if (!Array.isArray(assistant.images)) assistant.images = [];
+    const index = assistant.images.findIndex((job) => job.id === detail.job.id);
+    if (index >= 0) assistant.images[index] = { ...assistant.images[index], ...detail.job };
+    else assistant.images.push(detail.job);
+    if (detail.job.status === "failed" && detail.job.error) {
+      if (!Array.isArray(assistant.imageErrors)) assistant.imageErrors = [];
+      const failure = {
+        code: detail.job.error_code || "generic",
+        message: detail.job.error,
+      };
+      if (!assistant.imageErrors.some((item) => item.message === failure.message)) {
+        assistant.imageErrors.push(failure);
+      }
+    }
+    syncAssistant(assistant);
+  });
 
   els.input.addEventListener("input", () => {
     autosize();

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use slyde_server::RuntimeInfo;
-use slyde_server::http::{get_json, post_bytes, post_json};
+use slyde_server::http::{HttpError, get_json, post_bytes, post_json};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -47,7 +47,7 @@ pub fn definitions() -> Value {
                     "slide_id": { "type": "string", "description": "Stable id. Omit to let the server generate one; pass the id returned by a previous call to update that slide." },
                     "html_code": {
                         "type": "string",
-                        "description": "Self-contained HTML fragment for the slide body. Inline <style> is allowed. The stage is 1280x720 for 16:9 (720x1280 for 9:16, 1024x768 for 4:3). No network requests: images must be data: or SVG. Theme colors are available as var(--slyde-bg), var(--slyde-fg), var(--slyde-muted), var(--slyde-accent), var(--slyde-font)."
+                        "description": "Self-contained HTML fragment for the slide body. Inline <style> is allowed. The stage is 1280x720 for 16:9 (720x1280 for 9:16, 1024x768 for 4:3). Supports external photography (Unsplash/Pexels), Google Fonts via @import, inline SVG, and data URLs. Theme colors are available as var(--slyde-bg), var(--slyde-fg), var(--slyde-muted), var(--slyde-accent), var(--slyde-font)."
                     },
                     "template": {
                         "type": "string",
@@ -164,7 +164,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "search_asset",
-            "description": "Return inline SVG markup for a keyword (cloud, database, server, arrow, code, …) from the built-in curated icon set. Offline by design: local asset files and stock photo catalogs are not wired yet, and asset_type=image reports found=false.",
+            "description": "Return inline SVG markup for a keyword (cloud, database, server, arrow, code, …) from the built-in curated icon set. Offline by design. With asset_type=image it returns a curated Unsplash photograph for broad topics; for an exact picture use insert_image instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -176,13 +176,38 @@ pub fn definitions() -> Value {
             }
         },
         {
-            "name": "generate_image",
-            "description": "Reserve an image slot with a placeholder inline SVG that echoes the prompt and style. No image model is wired yet: the response is marked placeholder=true and nothing is written to assets/images/.",
+            "name": "insert_image",
+            "description": "Place a picture on a slide. The server downloads an https link (or decodes a data: URL) into the deck's asset store, so the slide works offline and travels inside the .slyde bundle. Returns the element id, which mutate_element can restyle afterwards.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "prompt": { "type": "string", "description": "Visual prompt describing the desired graphic or image." },
-                    "style": { "type": "string", "enum": ["minimal_vector", "photographic", "diagrammatic", "editorial"], "default": "minimal_vector" }
+                    "slide_id": { "type": "string", "description": "Slide that receives the picture." },
+                    "src": { "type": "string", "description": "https link, data:image/… URL or /assets/… path." },
+                    "alt": { "type": "string", "description": "Alternative text describing the picture for screen readers." },
+                    "x": { "type": "number", "description": "Left edge in stage pixels. Omit to centre." },
+                    "y": { "type": "number", "description": "Top edge in stage pixels. Omit to centre." },
+                    "w": { "type": "number", "description": "Width in stage pixels. Omit for 60% of the stage." },
+                    "h": { "type": "number", "description": "Height in stage pixels. Omit for 60% of the stage." }
+                },
+                "required": ["slide_id", "src"],
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "generate_image",
+            "description": "Create an original picture with the user's connected image model (OpenAI, Gemini or xAI) and store it in the deck. Needs a provider key with image access. Pass slide_id to place it on a slide immediately; omit it to only get the stored /assets/… URL. For real photographs the user already has, prefer insert_image.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "Visual prompt describing the desired picture in one or two sentences." },
+                    "style": { "type": "string", "enum": ["minimal_vector", "photographic", "diagrammatic", "editorial"], "default": "minimal_vector" },
+                    "provider": { "type": "string", "enum": ["openai", "gemini", "xai"], "description": "Provider with an image model; omit to use the first connected one." },
+                    "slide_id": { "type": "string", "description": "Optional slide to place the new picture on." },
+                    "alt": { "type": "string", "description": "Alternative text for screen readers." },
+                    "x": { "type": "number", "description": "Left edge in stage pixels. Omit to centre." },
+                    "y": { "type": "number", "description": "Top edge in stage pixels. Omit to centre." },
+                    "w": { "type": "number", "description": "Width in stage pixels. Omit for 60% of the stage." },
+                    "h": { "type": "number", "description": "Height in stage pixels. Omit for 60% of the stage." }
                 },
                 "required": ["prompt"],
                 "additionalProperties": false
@@ -522,12 +547,44 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
             let query = require_str(args, "query")?.to_lowercase();
             let asset_type = optional_str(args, "asset_type").unwrap_or("icon");
             if asset_type == "image" {
+                let img_url = match query.as_str() {
+                    q if q.contains("tech")
+                        || q.contains("code")
+                        || q.contains("ai")
+                        || q.contains("cyber") =>
+                    {
+                        "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1280&q=80"
+                    }
+                    q if q.contains("business")
+                        || q.contains("office")
+                        || q.contains("startup")
+                        || q.contains("finance") =>
+                    {
+                        "https://images.unsplash.com/photo-1557804506-669a67965ba0?auto=format&fit=crop&w=1280&q=80"
+                    }
+                    q if q.contains("architecture")
+                        || q.contains("city")
+                        || q.contains("building") =>
+                    {
+                        "https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=1280&q=80"
+                    }
+                    q if q.contains("nature") || q.contains("landscape") || q.contains("earth") => {
+                        "https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1280&q=80"
+                    }
+                    q if q.contains("minimal") || q.contains("art") || q.contains("design") => {
+                        "https://images.unsplash.com/photo-1558655146-d09347e92766?auto=format&fit=crop&w=1280&q=80"
+                    }
+                    _ => {
+                        "https://images.unsplash.com/photo-1634017839464-5c339ebe3cb4?auto=format&fit=crop&w=1280&q=80"
+                    }
+                };
                 return Ok(json!({
                     "query": query,
-                    "asset_type": asset_type,
-                    "source": "builtin",
-                    "found": false,
-                    "note": "image asset search is not wired yet; only the built-in SVG icon set is available"
+                    "asset_type": "image",
+                    "source": "unsplash",
+                    "found": true,
+                    "url": img_url,
+                    "usable_markup": format!("<img src=\"{img_url}\" alt=\"{query}\" style=\"width:100%;height:100%;object-fit:cover;border-radius:12px;\" />")
                 })
                 .to_string());
             }
@@ -564,24 +621,84 @@ pub async fn call(runtime: &RuntimeInfo, name: &str, args: &Value) -> Result<Str
             .to_string())
         }
 
+        "insert_image" => {
+            let slide_id = require_str(args, "slide_id")?;
+            let src = require_str(args, "src")?;
+            let mut command = json!({
+                "action": "insert_image",
+                "slide_id": slide_id,
+                "src": src
+            });
+            for key in ["alt", "x", "y", "w", "h"] {
+                if let Some(value) = args.get(key).filter(|value| !value.is_null()) {
+                    command[key] = value.clone();
+                }
+            }
+            let response = post(runtime, &command).await?;
+            let element = response
+                .get("element_id")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            Ok(format!(
+                "Inserted the picture on slide {slide_id} as element {element}. Source: {src}"
+            ))
+        }
+
         "generate_image" => {
             let prompt = require_str(args, "prompt")?;
-            let style = optional_str(args, "style").unwrap_or("minimal_vector");
-            // Placeholder only: no image model is wired, so the deck gets an
-            // inline, scalable SVG that reserves the slot and echoes the brief.
-            let placeholder_svg = format!(
-                "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 450' width='100%' height='100%'><rect width='100%' height='100%' fill='%23121214'/><rect x='40' y='40' width='720' height='370' rx='12' fill='none' stroke='rgba(255,255,255,0.1)' stroke-dasharray='4 4'/><text x='50%' y='48%' text-anchor='middle' fill='%23F4F3F1' font-family='sans-serif' font-size='20' font-weight='600'>{}</text><text x='50%' y='56%' text-anchor='middle' fill='%23FF6B4A' font-family='sans-serif' font-size='14'>Style: {}</text></svg>",
-                prompt.replace('\'', ""),
-                style
-            );
-            Ok(json!({
-                "prompt": prompt,
-                "style": style,
-                "placeholder": true,
-                "saved_path": null,
-                "note": "no image model is wired yet; this is a placeholder SVG, not a generated image",
-                "src": placeholder_svg
-            }).to_string())
+            let mut described = prompt.to_string();
+            if let Some(directive) = optional_str(args, "style").and_then(style_directive) {
+                described.push_str(" Style: ");
+                described.push_str(directive);
+            }
+            let mut body = json!({ "prompt": described });
+            if let Some(provider) = optional_str(args, "provider") {
+                body["provider"] = json!(provider);
+            }
+            // Image models routinely take longer than a chat turn.
+            let response = post_json(
+                &format!(
+                    "http://127.0.0.1:{}/api/images/generate?t={}",
+                    runtime.port, runtime.token
+                ),
+                &body,
+                REQUEST_TIMEOUT * 6,
+            )
+            .await
+            .map_err(generation_error)?;
+            let url = response
+                .get("url")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ToolFailure("the server returned no image URL".into()))?;
+            let provider = response
+                .get("provider")
+                .and_then(Value::as_str)
+                .unwrap_or("image model");
+            let model = response.get("model").and_then(Value::as_str).unwrap_or("");
+
+            let Some(slide_id) = optional_str(args, "slide_id") else {
+                return Ok(format!(
+                    "Generated the image with {provider} ({model}) and stored it at {url}. Reference it with <img src=\"{url}\">."
+                ));
+            };
+            let mut command = json!({
+                "action": "insert_image",
+                "slide_id": slide_id,
+                "src": url
+            });
+            for key in ["alt", "x", "y", "w", "h"] {
+                if let Some(value) = args.get(key).filter(|value| !value.is_null()) {
+                    command[key] = value.clone();
+                }
+            }
+            let placed = post(runtime, &command).await?;
+            let element = placed
+                .get("element_id")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            Ok(format!(
+                "Generated the image with {provider} ({model}), stored it at {url} and placed it on slide {slide_id} as element {element}."
+            ))
         }
 
         other => Err(ToolFailure(format!("unknown tool: {other}"))),
@@ -624,6 +741,39 @@ fn require_u64(args: &Value, key: &str) -> Result<u64, ToolFailure> {
         .ok_or_else(|| ToolFailure(format!("missing required integer argument: {key}")))
 }
 
+/// Turns the `style` hint into words an image model understands.
+fn style_directive(style: &str) -> Option<&'static str> {
+    match style {
+        "photographic" => Some("photographic, natural light, realistic depth of field"),
+        "diagrammatic" => Some("clean diagrammatic illustration, simple shapes, clear labels"),
+        "editorial" => Some("editorial illustration, bold composition, refined palette"),
+        "minimal_vector" => {
+            Some("flat vector illustration, minimal geometric shapes, generous negative space")
+        }
+        _ => None,
+    }
+}
+
+/// Extracts the server's human message from a failed generation call, so the
+/// agent sees "connect a provider" instead of a raw status/body pair.
+fn generation_error(error: HttpError) -> ToolFailure {
+    match error {
+        HttpError::Status { body, .. } => {
+            let message = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|payload| {
+                    payload
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or(body);
+            ToolFailure(message)
+        }
+        other => ToolFailure(other.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,7 +782,7 @@ mod tests {
     fn every_tool_has_a_name_description_and_schema() {
         let tools = definitions();
         let list = tools.as_array().unwrap();
-        assert_eq!(list.len(), 11);
+        assert_eq!(list.len(), 12);
         for tool in list {
             assert!(tool["name"].as_str().unwrap().len() > 3);
             assert!(tool["description"].as_str().unwrap().len() > 20);
@@ -690,6 +840,38 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.contains("ignored"))
         );
+    }
+
+    #[test]
+    fn image_tools_publish_the_placement_contract() {
+        let insert = tool("insert_image");
+        assert_eq!(
+            insert["inputSchema"]["required"],
+            json!(["slide_id", "src"])
+        );
+        for key in ["alt", "x", "y", "w", "h"] {
+            assert!(
+                insert["inputSchema"]["properties"].get(key).is_some(),
+                "insert_image must accept {key}"
+            );
+        }
+
+        let generate = tool("generate_image");
+        assert_eq!(generate["inputSchema"]["required"], json!(["prompt"]));
+        assert_eq!(
+            generate["inputSchema"]["properties"]["provider"]["enum"],
+            json!(["openai", "gemini", "xai"])
+        );
+    }
+
+    #[test]
+    fn style_hints_become_a_phrase_an_image_model_can_use() {
+        assert!(
+            style_directive("photographic")
+                .unwrap()
+                .contains("photographic")
+        );
+        assert!(style_directive("vector-pop").is_none());
     }
 
     #[test]

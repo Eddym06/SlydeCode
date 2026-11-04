@@ -6,9 +6,13 @@
 
 use serde_json::{Value, json};
 use slyde_core::Presentation;
+use std::sync::{Arc, Weak};
 
 use crate::agent::{AgentCommand, AgentOutcome};
 use crate::state::AppState;
+
+use super::image_service::{ImageRequest, ImageTurn};
+use super::stock::{self, StockKind};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ToolDef {
@@ -31,6 +35,10 @@ pub const WRITE_SLIDES: &str = "write_slides";
 pub const BUILD_DECK: &str = "build_deck";
 pub const SET_THEME: &str = "set_theme";
 pub const SET_TITLE: &str = "set_title";
+pub const INSERT_IMAGE: &str = "insert_image";
+pub const GENERATE_IMAGE: &str = "generate_image";
+pub const REQUEST_IMAGE: &str = "request_image";
+pub const SEARCH_IMAGES: &str = "search_images";
 /// Most slides one batch call may carry; keeps a single tool call reviewable
 /// and bounded even when a model gets carried away.
 const MAX_BATCH_SLIDES: usize = 16;
@@ -274,6 +282,47 @@ pub fn definitions() -> Vec<ToolDef> {
             },
         },
         ToolDef {
+            name: INSERT_IMAGE,
+            description: "Place a picture on a slide. Prefer this for photography, logos and screenshots the user already has: pass an https link, a data URL or an /assets/… path and the server stores the bytes so the deck keeps working offline. The picture is centred at 60% of the stage unless you pass x/y/w/h. Returns the element id, so you can restyle it later with mutate_element.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "slide_id": { "type": "string", "description": "Slide that receives the picture." },
+                        "src": { "type": "string", "description": "https link, data:image/… URL or /assets/… path." },
+                        "alt": { "type": "string", "description": "Alternative text for screen readers; write what the picture shows." },
+                        "x": { "type": "number", "description": "Left edge in stage pixels. Omit to centre." },
+                        "y": { "type": "number", "description": "Top edge in stage pixels. Omit to centre." },
+                        "w": { "type": "number", "description": "Width in stage pixels. Omit for 60% of the stage." },
+                        "h": { "type": "number", "description": "Height in stage pixels. Omit for 60% of the stage." }
+                    },
+                    "required": ["slide_id", "src"],
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
+            name: GENERATE_IMAGE,
+            description: "Create an original picture with the user's connected image model (OpenAI, Gemini or xAI) and store it in the deck. Use it when no real photograph fits and the prompt describes a visual (an illustration, a diagram-like scene, a mood image). Pass slide_id to place it immediately on that slide; omit it to only create the asset and get its URL. This needs a connected provider key with image access: if it fails with missing_key, tell the user to connect one instead of retrying.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "What the picture should show, in one or two sentences. Describe style, framing and colors." },
+                        "provider": { "type": "string", "enum": ["openai", "gemini", "xai"], "description": "Optional provider with an image model; omit to use the first connected one." },
+                        "slide_id": { "type": "string", "description": "Optional slide to place the new picture on." },
+                        "alt": { "type": "string", "description": "Alternative text for screen readers." },
+                        "x": { "type": "number", "description": "Left edge in stage pixels. Omit to centre." },
+                        "y": { "type": "number", "description": "Top edge in stage pixels. Omit to centre." },
+                        "w": { "type": "number", "description": "Width in stage pixels. Omit for 60% of the stage." },
+                        "h": { "type": "number", "description": "Height in stage pixels. Omit for 60% of the stage." }
+                    },
+                    "required": ["prompt"],
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
             name: GET_SELECTED_ELEMENT,
             description: "Read properties, tag name and text of the element the user has currently focused or selected in the canvas.",
             schema: || {
@@ -287,13 +336,96 @@ pub fn definitions() -> Vec<ToolDef> {
                 })
             },
         },
+        ToolDef {
+            name: REQUEST_IMAGE,
+            description: "Ask the image system for one original picture. It returns a ticket immediately and generates in the background, so keep writing the deck. Provide a unique image_id, a precise visual prompt, alt text and the target slide: slide_id for an existing slide, or the zero-based slide_index for a slide you are writing right now. Optional x/y/w/h place it exactly. Never name or choose a provider; the system does that and enforces its own budget and rate limits.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image_id": { "type": "string", "description": "Unique id for this picture in this turn, for example img_cover or img_market. Lowercase letters, digits, _ and - only." },
+                        "prompt": { "type": "string", "description": "What the picture should show, one or two sentences. Describe style, framing, light and colors." },
+                        "alt": { "type": "string", "description": "Alternative text for screen readers; say what the picture shows, not that it is an AI image." },
+                        "slide_id": { "type": "string", "description": "Existing slide that should receive the picture. Omit when targeting a slide you are still writing." },
+                        "slide_index": { "type": "integer", "minimum": 0, "description": "Zero-based position of the target slide. The system waits for it if it does not exist yet." },
+                        "x": { "type": "number", "description": "Left edge in stage pixels. Omit to centre." },
+                        "y": { "type": "number", "description": "Top edge in stage pixels. Omit to centre." },
+                        "w": { "type": "number", "description": "Width in stage pixels." },
+                        "h": { "type": "number", "description": "Height in stage pixels." }
+                    },
+                    "required": ["image_id", "prompt", "alt"],
+                    "additionalProperties": false
+                })
+            },
+        },
+        ToolDef {
+            name: SEARCH_IMAGES,
+            description: "Search real stock photography (Unsplash, Pexels) or vectors (Vecteezy) when no image generator is connected. Returns direct image URLs, dimensions and the credit to show. Pick the best result and place it with insert_image using its url and a specific alt. Never invent image URLs.",
+            schema: || {
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "What the slide needs, in a few concrete words, for example 'team working in a bright office'." },
+                        "kind": { "type": "string", "enum": ["photo", "vector"], "description": "Photo for real photography, vector for illustrations and icons." },
+                        "count": { "type": "integer", "minimum": 1, "maximum": 8, "description": "How many candidates to return. Defaults to 4." },
+                        "orientation": { "type": "string", "enum": ["landscape", "portrait", "square"], "description": "Optional orientation hint." }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                })
+            },
+        },
     ]
+}
+
+/// Which optional image tools this turn should advertise.
+///
+/// The model sees exactly one path: background generation when a model is
+/// connected, stock search when there is none. The legacy synchronous
+/// `generate_image` stays callable for compatibility but is never advertised to
+/// the copilot, so a deck turn can never block on a paid image call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolAvailability {
+    pub image_requests: bool,
+    pub stock_images: bool,
+}
+
+fn is_advertised(name: &str, availability: ToolAvailability) -> bool {
+    match name {
+        REQUEST_IMAGE => availability.image_requests,
+        SEARCH_IMAGES => availability.stock_images,
+        GENERATE_IMAGE => false,
+        _ => true,
+    }
+}
+
+pub fn definitions_for(availability: ToolAvailability) -> Vec<ToolDef> {
+    definitions()
+        .into_iter()
+        .filter(|tool| is_advertised(tool.name, availability))
+        .collect()
 }
 
 /// The same tools with the per-field descriptions removed, for providers whose
 /// plan or context cannot take the full schemas. The model still sees every tool,
 /// its purpose and the shape of its arguments.
 pub fn openai_tools_lean() -> Value {
+    let mut tools = openai_tools();
+    strip_tool_descriptions(&mut tools);
+    tools
+}
+
+/// The tools a copilot turn should receive, optionally with the per-field
+/// descriptions stripped for small-context providers.
+pub fn openai_tools_for(availability: ToolAvailability, lean: bool) -> Value {
+    let mut tools = openai_tools_from(definitions_for(availability));
+    if lean {
+        strip_tool_descriptions(&mut tools);
+    }
+    tools
+}
+
+fn strip_tool_descriptions(tools: &mut Value) {
     fn strip(value: &mut Value) {
         match value {
             Value::Object(map) => {
@@ -312,20 +444,22 @@ pub fn openai_tools_lean() -> Value {
             _ => {}
         }
     }
-    let mut tools = openai_tools();
-    if let Value::Array(items) = &mut tools {
+    if let Value::Array(items) = tools {
         for item in items {
             if let Some(parameters) = item.pointer_mut("/function/parameters") {
                 strip(parameters);
             }
         }
     }
-    tools
 }
 
 pub fn openai_tools() -> Value {
+    openai_tools_from(definitions())
+}
+
+fn openai_tools_from(tools: Vec<ToolDef>) -> Value {
     Value::Array(
-        definitions()
+        tools
             .into_iter()
             .map(|tool| {
                 json!({
@@ -342,8 +476,16 @@ pub fn openai_tools() -> Value {
 }
 
 pub fn anthropic_tools() -> Value {
+    anthropic_tools_from(definitions())
+}
+
+pub fn anthropic_tools_for(availability: ToolAvailability) -> Value {
+    anthropic_tools_from(definitions_for(availability))
+}
+
+fn anthropic_tools_from(tools: Vec<ToolDef>) -> Value {
     Value::Array(
-        definitions()
+        tools
             .into_iter()
             .map(|tool| {
                 json!({
@@ -370,6 +512,15 @@ pub struct Applied {
     pub created: bool,
     /// `(slide_id, index)` of every slide written so far, in call order.
     pub slides: Vec<(String, usize)>,
+}
+
+/// The turn a tool call belongs to. Background images need the live state and
+/// the job list that will be reported when the turn ends; both are absent for
+/// direct/MCP calls, where synchronous tools still work.
+#[derive(Clone)]
+pub struct TurnContext {
+    pub images: Arc<ImageTurn>,
+    pub state: Weak<AppState>,
 }
 
 /// Applies the slides a streaming batch call has finished so far. Returns what
@@ -418,7 +569,7 @@ pub async fn execute(
     name: &str,
     arguments: Value,
 ) -> Result<ToolOutcome, String> {
-    execute_with(state, name, arguments, None).await
+    execute_with(state, name, arguments, None, None).await
 }
 
 /// Like [`execute`], but a batch call skips what `applied` already wrote.
@@ -427,6 +578,7 @@ pub async fn execute_with(
     name: &str,
     arguments: Value,
     applied: Option<&Applied>,
+    turn: Option<&TurnContext>,
 ) -> Result<ToolOutcome, String> {
     match name {
         READ_DECK => read_deck(state).await,
@@ -434,12 +586,162 @@ pub async fn execute_with(
         GET_SELECTED_ELEMENT => get_selected_element(state, &arguments).await,
         BUILD_DECK => build_deck(state, arguments, applied).await,
         WRITE_SLIDES => write_slides(state, &arguments, applied).await,
+        REQUEST_IMAGE => request_image(state, &arguments, turn).await,
+        SEARCH_IMAGES => search_images(state, &arguments).await,
+        GENERATE_IMAGE => generate_image(state, &arguments).await,
         CREATE_PRESENTATION | UPSERT_SLIDE | REMOVE_SLIDE | MOVE_SLIDE | TRIGGER_ANIMATION
-        | SET_NOTES | MUTATE_ELEMENT | SET_THEME | SET_TITLE => {
+        | SET_NOTES | MUTATE_ELEMENT | SET_THEME | SET_TITLE | INSERT_IMAGE => {
             mutate(state, name, arguments).await
         }
         _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+/// Queues a background picture and returns before generation starts.
+async fn request_image(
+    _state: &AppState,
+    arguments: &Value,
+    turn: Option<&TurnContext>,
+) -> Result<ToolOutcome, String> {
+    let turn = turn.ok_or_else(|| {
+        "request_image is only available inside an interactive copilot turn; use generate_image for a direct call"
+            .to_string()
+    })?;
+    let state = turn
+        .state
+        .upgrade()
+        .ok_or_else(|| "the server is shutting down".to_string())?;
+
+    let id = arguments
+        .get("image_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| "image_id is required".to_string())?
+        .to_string();
+    if id.len() > 48
+        || !id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
+    {
+        return Err(
+            "image_id may only contain letters, digits, underscores and dashes (max 48)"
+                .to_string(),
+        );
+    }
+    let prompt = arguments
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .ok_or_else(|| "prompt is required".to_string())?
+        .to_string();
+    if prompt.chars().count() > 4_000 {
+        return Err("the image prompt is too long (max 4000 characters)".into());
+    }
+    let alt = arguments
+        .get("alt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|alt| !alt.is_empty())
+        .ok_or_else(|| "alt text is required so the picture is accessible".to_string())?
+        .to_string();
+    if alt.chars().count() > 400 {
+        return Err("the alt text is too long (max 400 characters)".into());
+    }
+    let slide_id = arguments
+        .get("slide_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let slide_index = arguments
+        .get("slide_index")
+        .and_then(Value::as_u64)
+        .map(|index| index as usize);
+    if slide_id.is_none() && slide_index.is_none() {
+        return Err(
+            "a target is required: pass slide_id for an existing slide or slide_index for one you are writing"
+                .into(),
+        );
+    }
+    let number = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .filter(|value| value.is_finite())
+    };
+    let request = ImageRequest {
+        id: id.clone(),
+        prompt,
+        alt,
+        slide_id: slide_id.clone(),
+        slide_index,
+        x: number("x"),
+        y: number("y"),
+        w: number("w"),
+        h: number("h"),
+    };
+    let job = state
+        .images
+        .request(state.clone(), turn.images.clone(), request)
+        .await
+        .map_err(|error| format!("the image system refused the request: {error}"))?;
+    Ok(ToolOutcome {
+        result: json!({
+            "ok": true,
+            "tool": REQUEST_IMAGE,
+            "image_id": job.id,
+            "status": job.status,
+            "slide_id": slide_id,
+            "slide_index": slide_index,
+            "note": "Queued in the background. Keep writing; the system places it on the target slide when ready."
+        }),
+        slide_id,
+        slide_index,
+    })
+}
+
+async fn search_images(state: &AppState, arguments: &Value) -> Result<ToolOutcome, String> {
+    let query = arguments
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "query is required".to_string())?;
+    let kind = arguments
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("photo");
+    let kind = StockKind::parse(kind).ok_or_else(|| "kind must be photo or vector".to_string())?;
+    let count = arguments
+        .get("count")
+        .and_then(Value::as_u64)
+        .unwrap_or(4)
+        .clamp(1, 8) as usize;
+    let orientation = arguments
+        .get("orientation")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "landscape" | "portrait" | "square"));
+    let keys = state.copilot.stock_keys().await;
+    let hits = stock::search(state.copilot.http(), &keys, query, kind, count, orientation)
+        .await
+        .map_err(|error| error.public_message())?;
+    Ok(ToolOutcome {
+        result: json!({
+            "ok": true,
+            "tool": SEARCH_IMAGES,
+            "query": query,
+            "kind": match kind {
+                StockKind::Photo => "photo",
+                StockKind::Vector => "vector",
+            },
+            "providers": keys.providers(),
+            "results": hits,
+            "hint": "Pick one result and call insert_image with its url, the slide_id and a specific alt. If attribution is present, keep it in the slide's speaker notes."
+        }),
+        slide_id: None,
+        slide_index: None,
+    })
 }
 
 /// Creates the deck, then writes every slide through the same command path the
@@ -703,6 +1005,7 @@ fn outcome_to_tool(name: &str, outcome: AgentOutcome) -> ToolOutcome {
         "created": outcome.created,
         "upsert": outcome.upsert,
         "slide_id": outcome.mutated_slide_id,
+        "element_id": outcome.element_id,
         "animation": outcome.animation.is_some(),
     });
     ToolOutcome {
@@ -710,6 +1013,79 @@ fn outcome_to_tool(name: &str, outcome: AgentOutcome) -> ToolOutcome {
         slide_id,
         slide_index,
     }
+}
+
+/// Generates a picture, stores it, and optionally places it on a slide.
+///
+/// The asset is saved even when placement fails, so a bad `slide_id` costs a
+/// retry of the inset only, not another paid image call.
+async fn generate_image(state: &AppState, arguments: &Value) -> Result<ToolOutcome, String> {
+    let prompt = arguments
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "prompt is required".to_string())?;
+    let provider = arguments.get("provider").and_then(Value::as_str);
+    let image = crate::copilot::imagegen::generate(&state.copilot, provider, prompt)
+        .await
+        .map_err(|error| error.public_message())?;
+    // A provider may answer WebP or JPEG; the store names the file after the
+    // bytes, so the slide always references a format the browser can decode.
+    let stored = state
+        .assets
+        .save_bytes(&image.bytes)
+        .map_err(|error| error.to_string())?;
+
+    let mut result = json!({
+        "ok": true,
+        "tool": GENERATE_IMAGE,
+        "url": stored.url,
+        "content_type": stored.content_type,
+        "bytes": stored.bytes,
+        "provider": image.provider,
+        "model": image.model,
+        "revised_prompt": image.revised_prompt,
+        "element_id": Value::Null,
+        "slide_id": Value::Null,
+    });
+
+    let Some(slide_id) = arguments.get("slide_id").and_then(Value::as_str) else {
+        return Ok(ToolOutcome {
+            result,
+            slide_id: None,
+            slide_index: None,
+        });
+    };
+
+    let mut insert = serde_json::Map::new();
+    insert.insert("action".into(), Value::String(INSERT_IMAGE.into()));
+    insert.insert("slide_id".into(), Value::String(slide_id.to_string()));
+    insert.insert("src".into(), Value::String(stored.url.clone()));
+    for key in ["alt", "x", "y", "w", "h"] {
+        if let Some(value) = arguments.get(key) {
+            insert.insert(key.into(), value.clone());
+        }
+    }
+    let command: AgentCommand = serde_json::from_value(Value::Object(insert)).map_err(|error| {
+        format!(
+            "image created at {}, but the placement was invalid: {error}",
+            stored.url
+        )
+    })?;
+    let outcome = crate::agent::run(state, command).await.map_err(|error| {
+        format!(
+            "image created at {}, but it could not be placed: {error}",
+            stored.url
+        )
+    })?;
+    if let Some(object) = result.as_object_mut() {
+        object.insert("slide_id".into(), json!(outcome.mutated_slide_id));
+        object.insert("element_id".into(), json!(outcome.element_id));
+    }
+    Ok(ToolOutcome {
+        result,
+        slide_id: outcome.mutated_slide_id,
+        slide_index: outcome.upsert.as_ref().map(|upsert| upsert.index),
+    })
 }
 
 /// Compact, prompt-sized deck snapshot used by the system message and by the
@@ -878,6 +1254,67 @@ mod tests {
         assert_eq!(schema["properties"]["slide_id"]["type"], "string");
     }
 
+    #[tokio::test]
+    async fn insert_image_places_a_stored_picture_and_reports_its_element() {
+        let state = test_state();
+        execute(
+            &state,
+            UPSERT_SLIDE,
+            json!({ "index": 0, "slide_id": "sld_a", "html_code": "<h1>Hi</h1>" }),
+        )
+        .await
+        .unwrap();
+        let stored = state
+            .assets
+            .save_bytes(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+            .unwrap();
+
+        let outcome = execute(
+            &state,
+            INSERT_IMAGE,
+            json!({ "slide_id": "sld_a", "src": stored.url.clone(), "alt": "A chart", "w": 640, "h": 360 }),
+        )
+        .await
+        .unwrap();
+
+        let element = outcome.result["element_id"]
+            .as_str()
+            .expect("the model needs the handle to restyle the picture");
+        assert!(element.starts_with("image-"), "{element}");
+        assert_eq!(outcome.slide_id.as_deref(), Some("sld_a"));
+        let code = &state.view().await.presentation.slides[0].code;
+        assert!(code.contains(&stored.url), "{code}");
+        assert!(code.contains("alt=\"A chart\""), "{code}");
+        assert!(code.contains("width: 640px"), "{code}");
+
+        let error = execute(
+            &state,
+            INSERT_IMAGE,
+            json!({ "slide_id": "nope", "src": stored.url }),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("nope"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn generate_image_explains_when_a_provider_has_no_image_model() {
+        let state = test_state();
+        let error = execute(
+            &state,
+            GENERATE_IMAGE,
+            json!({ "prompt": "a red apple", "provider": "anthropic" }),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Claude"), "{error}");
+
+        let error = execute(&state, GENERATE_IMAGE, json!({ "prompt": "   " }))
+            .await
+            .unwrap_err();
+        assert!(error.contains("prompt"), "{error}");
+    }
+
     #[test]
     fn deck_summary_marks_the_selected_slide_and_keeps_other_previews_short() {
         let mut deck = Presentation::new(
@@ -898,6 +1335,110 @@ mod tests {
         assert!(summary.contains("<h1>Second</h1>"));
         assert!(summary.contains("<-- selected"));
         assert!(!summary.contains("selected slide source:\n<h1>Hello"));
+    }
+
+    #[test]
+    fn the_advertised_image_tool_matches_the_live_capability() {
+        let image = ToolAvailability {
+            image_requests: true,
+            stock_images: false,
+        };
+        let stock = ToolAvailability {
+            image_requests: false,
+            stock_images: true,
+        };
+        let names = |availability| {
+            definitions_for(availability)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+        };
+        assert!(names(image).contains(&REQUEST_IMAGE));
+        assert!(!names(image).contains(&SEARCH_IMAGES));
+        assert!(!names(image).contains(&GENERATE_IMAGE));
+        assert!(names(stock).contains(&SEARCH_IMAGES));
+        assert!(!names(stock).contains(&REQUEST_IMAGE));
+        assert!(names(stock).contains(&INSERT_IMAGE));
+
+        let wire = openai_tools_for(image, false);
+        let names: Vec<&str> = wire
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        assert!(names.contains(&REQUEST_IMAGE));
+        assert!(!names.contains(&SEARCH_IMAGES));
+    }
+
+    #[tokio::test]
+    async fn request_image_needs_a_turn_and_a_configured_image_model() {
+        let state = test_state();
+        let error = execute(
+            &state,
+            REQUEST_IMAGE,
+            json!({
+                "image_id": "img_cover",
+                "prompt": "a red apple",
+                "alt": "A red apple",
+                "slide_index": 0
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("interactive copilot turn"), "{error}");
+
+        let turn = state.images.begin_turn("t1");
+        let context = TurnContext {
+            images: turn,
+            state: std::sync::Arc::downgrade(&state),
+        };
+        let error = execute_with(
+            &state,
+            REQUEST_IMAGE,
+            json!({
+                "image_id": "img_cover",
+                "prompt": "a red apple",
+                "alt": "A red apple",
+                "slide_index": 0
+            }),
+            None,
+            Some(&context),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("no image model"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn request_image_validates_the_ticket_before_queueing() {
+        let state = test_state();
+        let turn = state.images.begin_turn("t2");
+        let context = TurnContext {
+            images: turn,
+            state: std::sync::Arc::downgrade(&state),
+        };
+        let error = execute_with(
+            &state,
+            REQUEST_IMAGE,
+            json!({ "image_id": "bad id", "prompt": "x", "alt": "x", "slide_index": 0 }),
+            None,
+            Some(&context),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("image_id"), "{error}");
+
+        let error = execute_with(
+            &state,
+            REQUEST_IMAGE,
+            json!({ "image_id": "img_a", "prompt": "x", "alt": "x" }),
+            None,
+            Some(&context),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("target"), "{error}");
     }
 
     fn test_state() -> std::sync::Arc<AppState> {

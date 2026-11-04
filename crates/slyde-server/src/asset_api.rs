@@ -26,6 +26,14 @@ pub struct UploadRequest {
     pub data: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GenerateRequest {
+    pub prompt: String,
+    /// `openai`, `gemini` or `xai`. Omitted picks the first connected one.
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+
 fn guard(state: &AppState, headers: &HeaderMap, auth: &AuthQuery) -> Option<Response> {
     if !origin_allowed(state, headers) {
         return Some(forbidden());
@@ -57,6 +65,52 @@ pub async fn api_upload(
         "url": info.url,
         "content_type": info.content_type,
         "bytes": info.bytes,
+    }))
+    .into_response()
+}
+
+/// Generates one picture with a connected provider and stores it like an upload.
+///
+/// The model never sees the key and the browser never sees the vendor payload:
+/// the result is an ordinary `/assets/…` URL a slide can reference offline.
+pub async fn api_generate_image(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(request): Json<GenerateRequest>,
+) -> Response {
+    if let Some(response) = guard(&state, &headers, &auth) {
+        return response;
+    }
+    let image = match crate::copilot::imagegen::generate(
+        &state.copilot,
+        request.provider.as_deref(),
+        &request.prompt,
+    )
+    .await
+    {
+        Ok(image) => image,
+        Err(error) => return crate::copilot::routes::error_response(error),
+    };
+    let info = match state.assets.save_bytes(&image.bytes) {
+        Ok(info) => info,
+        Err(error) => return bad_request(&error.to_string()),
+    };
+    tracing::info!(
+        url = %info.url,
+        provider = image.provider,
+        model = %image.model,
+        "generated an image asset"
+    );
+    Json(json!({
+        "ok": true,
+        "id": info.id,
+        "url": info.url,
+        "content_type": info.content_type,
+        "bytes": info.bytes,
+        "provider": image.provider,
+        "model": image.model,
+        "revised_prompt": image.revised_prompt,
     }))
     .into_response()
 }
@@ -213,6 +267,47 @@ mod tests {
             response.status(),
             StatusCode::BAD_REQUEST,
             "SVG is refused: it is a document, not a picture"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn image_generation_is_guarded_and_explains_a_provider_without_an_image_model() {
+        let (state, root) = state_with_store("generate");
+        let app = crate::routes::app_router(state);
+
+        let generate = |body: &str, query: &str| {
+            Request::post(format!("/api/images/generate{query}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+
+        let response = app
+            .clone()
+            .oneshot(generate(r#"{"prompt":"a red apple"}"#, ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(generate(
+                r#"{"prompt":"a red apple","provider":"anthropic"}"#,
+                "?t=tok_test",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["ok"], false);
+        assert_eq!(payload["code"], "invalid_request");
+        assert!(
+            payload["error"].as_str().unwrap().contains("Claude"),
+            "the message must name the provider: {payload}"
         );
 
         let _ = std::fs::remove_dir_all(root);

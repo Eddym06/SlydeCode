@@ -80,9 +80,10 @@ export function createClient(token) {
       return payload.result;
     },
 
-    async copilotModels(provider) {
+    async copilotModels(provider, kind = "text") {
+      const suffix = kind === "image" ? "&kind=image" : "";
       const payload = await json(
-        `/api/copilot/models?provider=${encodeURIComponent(provider)}`
+        `/api/copilot/models?provider=${encodeURIComponent(provider)}${suffix}`
       );
       return payload.models || [];
     },
@@ -94,6 +95,26 @@ export function createClient(token) {
         body: JSON.stringify({ provider, key }),
       });
       return payload.models || [];
+    },
+
+    /** Saves or removes a stock-image service key (Unsplash/Pexels/Vecteezy). */
+    async copilotSaveStockKey(provider, key, account = "") {
+      const payload = await json(`/api/copilot/stock-key`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, key, account }),
+      });
+      return payload.config;
+    },
+
+    /** Remembers which provider/model draws images, independently of chat. */
+    async copilotImageModel(provider, model) {
+      const payload = await json(`/api/copilot/image-model`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, model }),
+      });
+      return payload.config;
     },
 
     /** The conversation stored for one deck. */

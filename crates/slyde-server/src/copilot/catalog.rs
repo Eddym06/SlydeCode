@@ -25,6 +25,30 @@ pub enum ModelShape {
     Gemini,
 }
 
+/// How a provider accepts an image-generation request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageWire {
+    /// `POST {url}` with `{model, prompt}`, answering `{data:[{b64_json|url}]}`.
+    OpenAi,
+    /// OpenRouter's image endpoint: `POST {url}` with `{model, prompt}`,
+    /// answering `{data:[{b64_json, media_type}], usage:{cost}}`.
+    OpenRouter,
+    /// Gemini `generateContent` with `{contents:[{parts:[{text}]}]}`, answering
+    /// `candidates[0].content.parts[*].inlineData`.
+    Gemini,
+}
+
+/// The image model a provider offers, when it offers one.
+#[derive(Debug, Clone, Copy)]
+pub struct ImageSpec {
+    pub wire: ImageWire,
+    pub url: &'static str,
+    pub model: &'static str,
+    /// Conservative list price for one picture. Vendors that report the real
+    /// cost (OpenRouter) replace it as soon as a job completes.
+    pub cost_usd: f64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderDef {
     pub id: &'static str,
@@ -38,6 +62,8 @@ pub struct ProviderDef {
     pub chat_base: &'static str,
     pub models_url: &'static str,
     pub model_shape: ModelShape,
+    /// None when the provider has no image model behind the same key.
+    pub image: Option<ImageSpec>,
 }
 
 pub const PROVIDERS: &[ProviderDef] = &[
@@ -52,6 +78,12 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://api.openai.com/v1",
         models_url: "https://api.openai.com/v1/models",
         model_shape: ModelShape::OpenAi,
+        image: Some(ImageSpec {
+            wire: ImageWire::OpenAi,
+            url: "https://api.openai.com/v1/images/generations",
+            model: "gpt-image-1",
+            cost_usd: 0.04,
+        }),
     },
     ProviderDef {
         id: "anthropic",
@@ -64,6 +96,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://api.anthropic.com/v1",
         models_url: "https://api.anthropic.com/v1/models?limit=1000",
         model_shape: ModelShape::Anthropic,
+        image: None,
     },
     ProviderDef {
         id: "gemini",
@@ -76,6 +109,12 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://generativelanguage.googleapis.com/v1beta/openai",
         models_url: "https://generativelanguage.googleapis.com/v1beta/models",
         model_shape: ModelShape::Gemini,
+        image: Some(ImageSpec {
+            wire: ImageWire::Gemini,
+            url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+            model: "gemini-2.5-flash-image",
+            cost_usd: 0.039,
+        }),
     },
     ProviderDef {
         id: "xai",
@@ -88,6 +127,12 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://api.x.ai/v1",
         models_url: "https://api.x.ai/v1/models",
         model_shape: ModelShape::OpenAi,
+        image: Some(ImageSpec {
+            wire: ImageWire::OpenAi,
+            url: "https://api.x.ai/v1/images/generations",
+            model: "grok-2-image-1212",
+            cost_usd: 0.07,
+        }),
     },
     ProviderDef {
         id: "groq",
@@ -100,6 +145,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://api.groq.com/openai/v1",
         models_url: "https://api.groq.com/openai/v1/models",
         model_shape: ModelShape::OpenAi,
+        image: None,
     },
     ProviderDef {
         id: "openrouter",
@@ -112,6 +158,12 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://openrouter.ai/api/v1",
         models_url: "https://openrouter.ai/api/v1/models",
         model_shape: ModelShape::OpenAi,
+        image: Some(ImageSpec {
+            wire: ImageWire::OpenRouter,
+            url: "https://openrouter.ai/api/v1/images",
+            model: "google/gemini-2.5-flash-image",
+            cost_usd: 0.04,
+        }),
     },
     ProviderDef {
         id: "deepseek",
@@ -124,6 +176,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://api.deepseek.com",
         models_url: "https://api.deepseek.com/models",
         model_shape: ModelShape::OpenAi,
+        image: None,
     },
     ProviderDef {
         id: "nvidia",
@@ -136,6 +189,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         chat_base: "https://integrate.api.nvidia.com/v1",
         models_url: "https://integrate.api.nvidia.com/v1/models",
         model_shape: ModelShape::OpenAi,
+        image: None,
     },
 ];
 
@@ -163,6 +217,57 @@ impl ProviderDef {
         }
     }
 
+    /// OpenRouter keeps its full picture catalog on a separate endpoint; the
+    /// normal `/models` list only advertises the handful that also answer text.
+    pub fn image_models_url(self, key: &str) -> String {
+        if self.id == "openrouter" {
+            "https://openrouter.ai/api/v1/images/models".to_string()
+        } else {
+            self.models_url(key)
+        }
+    }
+
+    /// Per-endpoint pricing for one OpenRouter image model. Direct vendors do
+    /// not expose this metadata, so they return `None` and use the catalog
+    /// estimate instead.
+    pub fn image_endpoints_url(self, model: &str) -> Option<String> {
+        if self.id != "openrouter" || !safe_routed_model(model) {
+            return None;
+        }
+        Some(format!(
+            "https://openrouter.ai/api/v1/images/models/{model}/endpoints"
+        ))
+    }
+
+    /// Image endpoint for the provider, with the key folded in where the vendor
+    /// expects it in the query string instead of a bearer header.
+    pub fn image_url(self, key: &str) -> Option<String> {
+        self.image.map(|spec| match spec.wire {
+            ImageWire::Gemini => format!("{}?key={}", spec.url, encode_query(key)),
+            ImageWire::OpenAi | ImageWire::OpenRouter => spec.url.to_string(),
+        })
+    }
+
+    /// Image endpoint for a selected model. Gemini puts the model in the path;
+    /// the routed and OpenAI-compatible vendors take it in the JSON body.
+    pub fn image_url_for(self, key: &str, model: &str) -> Option<String> {
+        let spec = self.image?;
+        match spec.wire {
+            ImageWire::Gemini => {
+                if !safe_model_segment(model) {
+                    return None;
+                }
+                let suffix = format!("{}:generateContent", spec.model);
+                let stem = spec.url.strip_suffix(&suffix).unwrap_or(spec.url);
+                Some(format!(
+                    "{stem}{model}:generateContent?key={}",
+                    encode_query(key)
+                ))
+            }
+            ImageWire::OpenAi | ImageWire::OpenRouter => Some(spec.url.to_string()),
+        }
+    }
+
     pub fn env_key(self) -> Option<String> {
         self.key_env.iter().find_map(|name| {
             std::env::var(name)
@@ -171,6 +276,28 @@ impl ProviderDef {
                 .filter(|value| !value.is_empty())
         })
     }
+}
+
+/// Gemini model ids are path segments. Reject anything that could escape the
+/// `/models/` segment; the catalog default and every vendor id match this set.
+fn safe_model_segment(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 200
+        && model
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+/// Routed OpenRouter ids contain a provider prefix and a slash. They are still
+/// path segments on the pricing endpoint, so traversal sequences are refused.
+fn safe_routed_model(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 200
+        && !model.contains("..")
+        && !model.starts_with('/')
+        && model
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':'))
 }
 
 fn encode_query(raw: &str) -> String {
@@ -209,6 +336,69 @@ mod tests {
         assert!(url.contains("key=a%20b%2Bc"));
         assert!(!url.contains("a b+c"));
     }
+
+    #[test]
+    fn every_image_model_has_a_secure_endpoint_and_only_known_providers_offer_one() {
+        for provider in PROVIDERS {
+            if let Some(image) = provider.image {
+                assert!(
+                    image.url.starts_with("https://"),
+                    "{} must not send a key over plain http",
+                    provider.id
+                );
+                assert!(!image.model.is_empty());
+            }
+        }
+        let offer = |id: &str| PROVIDERS.iter().any(|p| p.id == id && p.image.is_some());
+        assert!(offer("openai"));
+        assert!(offer("gemini"));
+        assert!(offer("xai"));
+        assert!(offer("openrouter"));
+        assert!(!offer("anthropic"));
+        assert!(!offer("deepseek"));
+
+        let openrouter = find("openrouter").unwrap().image.unwrap();
+        assert_eq!(openrouter.wire, ImageWire::OpenRouter);
+        assert!(openrouter.cost_usd > 0.0);
+
+        let gemini = find("gemini").unwrap();
+        assert!(gemini.image_url("a b+c").unwrap().contains("key=a%20b%2Bc"));
+        assert!(
+            gemini
+                .image_url_for("a b+c", "gemini-2.5-flash-image-preview")
+                .unwrap()
+                .contains("/models/gemini-2.5-flash-image-preview:generateContent?key=a%20b%2Bc")
+        );
+        assert!(
+            gemini.image_url_for("key", "../another-model").is_none(),
+            "a model id may not escape the path segment"
+        );
+        let openrouter = find("openrouter").unwrap();
+        assert_eq!(
+            openrouter.image_models_url("key"),
+            "https://openrouter.ai/api/v1/images/models"
+        );
+        assert_eq!(
+            openrouter
+                .image_endpoints_url("sourceful/riverflow-v2.6-pro")
+                .as_deref(),
+            Some(
+                "https://openrouter.ai/api/v1/images/models/sourceful/riverflow-v2.6-pro/endpoints"
+            )
+        );
+        assert!(openrouter.image_endpoints_url("../escape").is_none());
+        assert!(
+            openrouter
+                .image_endpoints_url("openai/gpt-image-1")
+                .is_some()
+        );
+        assert!(
+            find("openai")
+                .unwrap()
+                .image_endpoints_url("gpt-image-1")
+                .is_none()
+        );
+    }
 }
 
 /// A scripted provider for end-to-end tests of the tool loop: tests point it at a
@@ -246,10 +436,35 @@ pub(crate) mod tests_support {
             chat_base: base,
             models_url: base,
             model_shape: ModelShape::OpenAi,
+            image: None,
         }));
         if let Ok(mut mocks) = MOCKS.lock() {
             mocks.retain(|mock| mock.id != id);
             mocks.push(def);
+        }
+    }
+
+    /// Registers a scripted provider that also answers image generation at
+    /// `{base}/images/generations`, so the image path is tested without a vendor.
+    #[cfg(test)]
+    pub fn register_image_mock_as(id: &str, base: &str) {
+        register_mock_as(id, base);
+        let image_url: &'static str =
+            Box::leak(format!("{base}/images/generations").into_boxed_str());
+        let mut mocks = match MOCKS.lock() {
+            Ok(mocks) => mocks,
+            Err(error) => error.into_inner(),
+        };
+        if let Some(def) = mocks.iter_mut().find(|mock| mock.id == id) {
+            *def = Box::leak(Box::new(ProviderDef {
+                image: Some(ImageSpec {
+                    wire: ImageWire::OpenAi,
+                    url: image_url,
+                    model: "mock-image",
+                    cost_usd: 0.01,
+                }),
+                ..**def
+            }));
         }
     }
 }

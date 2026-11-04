@@ -552,6 +552,7 @@ function boot(sessionToken) {
     switch (state.phase) {
       case "writing":
         if (state.action === "set_notes") return t("agent.notes");
+        if (state.action === "insert_image") return t("agent.insertImage");
         if (state.action === "upsert_slide") {
           return Number.isInteger(state.slideIndex)
             ? t("agent.writing", { n: state.slideIndex + 1 })
@@ -1108,6 +1109,10 @@ function boot(sessionToken) {
         exportJob.total = event.total;
         syncExportUi();
       }
+      return;
+    }
+    if (event.type === "image_progress") {
+      document.dispatchEvent(new CustomEvent("slyde:image", { detail: event }));
       return;
     }
     if (event.type === "animation") {

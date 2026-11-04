@@ -32,6 +32,9 @@ pub struct StreamRequest<'a> {
     /// Send the short prompt's plainer tool schemas: for providers whose plan or
     /// context cannot take the full ones.
     pub lean: bool,
+    /// Which optional image tool this turn advertises. Text tools are always
+    /// present; the image path changes with the live account capability.
+    pub availability: tools::ToolAvailability,
 }
 
 /// Slides that closed inside a tool call that is still streaming.
@@ -141,13 +144,14 @@ async fn stream_openai(
         cancel,
         partial: _,
         lean,
+        availability,
     } = *request;
     // `tool_choice` is left out: "auto" is the default whenever tools are sent, and
     // several OpenAI-compatible servers (vLLM-backed ones among them) refuse the field.
     let mut body = json!({
         "model": model,
         "messages": openai_messages(system, turns),
-        "tools": if lean { tools::openai_tools_lean() } else { tools::openai_tools() },
+        "tools": tools::openai_tools_for(availability, lean),
         "stream": true,
         "stream_options": { "include_usage": true }
     });
@@ -231,12 +235,13 @@ async fn stream_anthropic(
         cancel,
         partial: _,
         lean: _,
+        availability,
     } = *request;
     let body = json!({
         "model": model,
         "system": system,
         "messages": anthropic_messages(turns),
-        "tools": tools::anthropic_tools(),
+        "tools": tools::anthropic_tools_for(availability),
         "max_tokens": 8192,
         "stream": true
     });

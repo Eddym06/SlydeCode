@@ -30,6 +30,9 @@ pub const MAX_CHAT_BODY_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 pub struct ProviderQuery {
     provider: String,
+    /// `image` asks for the picture models; anything else is the chat list.
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(flatten)]
     auth: AuthQuery,
 }
@@ -39,6 +42,21 @@ pub struct KeyInput {
     provider: String,
     #[serde(default)]
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImageModelInput {
+    provider: String,
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StockKeyInput {
+    provider: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    account: Option<String>,
 }
 
 pub async fn api_config(
@@ -67,7 +85,12 @@ pub async fn api_models(
     if !is_authorized(&state, &headers, &query.auth) {
         return unauthorized();
     }
-    match state.copilot.models(&query.provider).await {
+    let result = if query.kind.as_deref() == Some("image") {
+        state.copilot.image_models(&query.provider).await
+    } else {
+        state.copilot.models(&query.provider).await
+    };
+    match result {
         Ok(models) => (
             StatusCode::OK,
             Json(json!({ "ok": true, "models": models })),
@@ -90,11 +113,65 @@ pub async fn api_key(
         return unauthorized();
     }
     match state.copilot.set_key(&input.provider, &input.key).await {
-        Ok(models) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "models": models })),
-        )
-            .into_response(),
+        Ok(models) => {
+            state.images.invalidate().await;
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "models": models })),
+            )
+                .into_response()
+        }
+        Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_image_model(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<ImageModelInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match state
+        .copilot
+        .remember_image(&input.provider, &input.model)
+        .await
+    {
+        Ok(()) => {
+            state.images.invalidate().await;
+            let view = state.copilot.view().await;
+            (StatusCode::OK, Json(json!({ "ok": true, "config": view }))).into_response()
+        }
+        Err(error) => error_response(error),
+    }
+}
+
+pub async fn api_stock_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(auth): Query<AuthQuery>,
+    Json(input): Json<StockKeyInput>,
+) -> Response {
+    if !origin_allowed(&state, &headers) {
+        return forbidden();
+    }
+    if !is_authorized(&state, &headers, &auth) {
+        return unauthorized();
+    }
+    match state
+        .copilot
+        .set_stock_key(&input.provider, &input.key, input.account.as_deref())
+        .await
+    {
+        Ok(()) => {
+            let view = state.copilot.view().await;
+            (StatusCode::OK, Json(json!({ "ok": true, "config": view }))).into_response()
+        }
         Err(error) => error_response(error),
     }
 }
@@ -191,7 +268,9 @@ pub async fn api_fetch_url(
     }
 }
 
-fn error_response(error: CopilotError) -> Response {
+/// Maps a copilot failure to its HTTP status and public JSON body. Shared with
+/// the asset API so image generation reports errors the same way chat does.
+pub(crate) fn error_response(error: CopilotError) -> Response {
     let status = match error.kind() {
         CopilotError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
         CopilotError::BadToolCall(_) | CopilotError::ModelUnavailable(_) => StatusCode::BAD_GATEWAY,
@@ -344,11 +423,13 @@ fn forbidden() -> Response {
 
 /// Ensures the module is part of the app router even when the route list is
 /// edited later.
-pub fn routes() -> [&'static str; 4] {
+pub fn routes() -> [&'static str; 6] {
     [
         "/api/copilot/config",
         "/api/copilot/models",
         "/api/copilot/key",
+        "/api/copilot/image-model",
+        "/api/copilot/stock-key",
         "/api/copilot/chat",
     ]
 }
@@ -359,6 +440,6 @@ mod tests {
 
     #[test]
     fn route_list_matches_the_documented_surface() {
-        assert_eq!(routes().len(), 4);
+        assert_eq!(routes().len(), 6);
     }
 }

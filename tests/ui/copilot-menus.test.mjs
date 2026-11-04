@@ -23,14 +23,52 @@ const providers = [
   icon: id,
   key_url: "https://example.com",
   configured: id === "openai",
+  image_model: id === "openai" ? "gpt-image-1" : null,
 }));
-const config = { providers, last_provider: "openai", last_model: "gpt-4.1-mini" };
+const config = {
+  providers,
+  stock: [
+    { id: "unsplash", name: "Unsplash", configured: false },
+    { id: "pexels", name: "Pexels", configured: false },
+    { id: "vecteezy", name: "Vecteezy", configured: false },
+  ],
+  last_provider: "openai",
+  last_model: "gpt-4.1-mini",
+};
+let imageModelRequests = 0;
+let stockKeyRequests = 0;
 const models = Array.from({ length: 30 }, (_, index) => ({
   id: index === 0 ? "gpt-4.1-mini" : `gpt-model-${index}`,
   name: index === 0 ? "gpt-4.1-mini" : `gpt-model-${index}`,
   free: index % 5 === 0,
   context_window: 128000,
+  input_price: 2.5,
+  output_price: 10,
 }));
+const imageModels = [
+  {
+    id: "gpt-image-1",
+    name: "GPT Image 1",
+    free: false,
+    image_price: 0.04,
+    input_price: 5,
+    output_price: 40,
+  },
+  {
+    id: "google/gemini-2.5-flash-image",
+    name: "Gemini 2.5 Flash Image",
+    free: false,
+    image_price: 0.039,
+    input_price: 0.3,
+    output_price: 2.5,
+  },
+  {
+    id: "black-forest-labs/flux-1.1-pro",
+    name: "FLUX 1.1 Pro",
+    free: false,
+    image_price: 0.04,
+  },
+];
 const events = [
   { type: "meta", provider: "openai", model: "gpt-4.1-mini" },
   { type: "delta", text: "Done." },
@@ -58,7 +96,27 @@ before(async () => {
       if (request.url.includes("/api/copilot/config")) {
         await fulfill(requestId, { ok: true, config });
       } else if (request.url.includes("/api/copilot/models")) {
-        await fulfill(requestId, { ok: true, models });
+        const kind = new URL(request.url).searchParams.get("kind");
+        await fulfill(requestId, { ok: true, models: kind === "image" ? imageModels : models });
+      } else if (request.url.includes("/api/copilot/image-model")) {
+        imageModelRequests += 1;
+        const input = JSON.parse(request.postData || "{}");
+        await fulfill(requestId, {
+          ok: true,
+          config: {
+            ...config,
+            last_image_provider: input.provider,
+            last_image_model: input.model,
+          },
+        });
+      } else if (request.url.includes("/api/copilot/stock-key")) {
+        stockKeyRequests += 1;
+        const input = JSON.parse(request.postData || "{}");
+        const configured = Boolean(input.key && input.key.trim());
+        config.stock = config.stock.map((source) =>
+          source.id === input.provider ? { ...source, configured } : source
+        );
+        await fulfill(requestId, { ok: true, config });
       } else if (request.url.includes("/api/copilot/fetch-url")) {
         const { url } = JSON.parse(request.postData || "{}");
         if (url.includes("127.0.0.1")) {
@@ -84,7 +142,7 @@ before(async () => {
     }
   });
   await page.send("Fetch.enable", {
-    patterns: ["config", "models", "fetch-url", "chat"].map((name) => ({
+    patterns: ["config", "models", "image-model", "stock-key", "fetch-url", "chat"].map((name) => ({
       urlPattern: `*api/copilot/${name}*`,
       requestStage: "Request",
     })),
@@ -219,6 +277,95 @@ test("the model menu searches, scrolls and picks, with a way to configure", asyn
   await page.waitFor(`!document.getElementById("copilot-sheet").hidden`);
   await page.press("Escape", { keyCode: 27 });
   await page.waitFor(`document.getElementById("copilot-sheet").hidden`);
+});
+
+test("the provider sheet switches between chat and image models", async () => {
+  await page.evaluate(`document.getElementById("copilot-provider").click(); true`);
+  await page.waitFor(`!document.getElementById("copilot-sheet").hidden`);
+  await page.waitFor(`document.getElementById("sheet-model-for-label") !== null`);
+
+  const before = await page.evaluate(`(() => ({
+    label: document.getElementById("sheet-model-for-label").textContent,
+    options: [...document.querySelectorAll(".model-for-option")].map((b) => b.textContent),
+    active: document.querySelector(".model-for-switch").dataset.active,
+    providers: document.querySelectorAll("[data-provider]").length,
+    chatModel: document.getElementById("copilot-model-chip-text").textContent
+  }))()`);
+  assert.match(before.label, /Model for/);
+  assert.deepEqual(before.options, ["Text", "Image"]);
+  assert.equal(before.active, "text");
+  assert.equal(before.providers, 3, "the text role offers every provider");
+
+  await page.evaluate(
+    `document.querySelector('.model-for-option[data-kind="image"]').click(); true`
+  );
+  await page.waitFor(
+    `document.querySelector(".model-for-switch").dataset.active === "image" &&
+     document.querySelectorAll("[data-model]").length === 3`
+  );
+
+  const image = await page.evaluate(`(() => ({
+    providers: document.querySelectorAll("[data-provider]").length,
+    models: [...document.querySelectorAll("[data-model]")].map((row) => row.dataset.model),
+    badge: document.querySelector(".model-badge.is-image").textContent,
+    prices: document.querySelectorAll(".model-price.is-input").length,
+    outputs: document.querySelectorAll(".model-price.is-output").length,
+    legend: document.querySelector(".model-legend").textContent,
+    chatModel: document.getElementById("copilot-model-chip-text").textContent
+  }))()`);
+  assert.equal(image.providers, 1, "only providers with a picture model are offered");
+  assert.deepEqual(image.models, [
+    "gpt-image-1",
+    "google/gemini-2.5-flash-image",
+    "black-forest-labs/flux-1.1-pro",
+  ]);
+  assert.equal(image.badge, "Image");
+  assert.equal(image.prices, 2, "models with token prices show the green input arrow");
+  assert.equal(image.outputs, 2, "models with token prices show the red output arrow");
+  assert.match(image.legend, /Input/);
+  assert.match(image.legend, /Output/);
+  assert.match(image.legend, /USD per 1M tokens/);
+  assert.equal(image.chatModel, "gpt-model-2", "the chat model is never disturbed");
+
+  const requests = imageModelRequests;
+  await page.evaluate(`document.querySelector('[data-model="gpt-image-1"]').click(); true`);
+  await page.waitFor(`document.getElementById("copilot-sheet").hidden === true`);
+  assert.equal(imageModelRequests, requests + 1, "the choice reaches the server");
+  await page.waitFor(
+    `document.activeElement && document.activeElement.id === "copilot-provider"`
+  );
+});
+
+test("the provider sheet saves stock image keys", async () => {
+  await page.evaluate(`document.getElementById("copilot-provider").click(); true`);
+  await page.waitFor(`!document.getElementById("copilot-sheet").hidden`);
+  await page.waitFor(`document.getElementById("sheet-stock-keys") !== null`);
+  await page.evaluate(`document.getElementById("sheet-stock-keys").click(); true`);
+  await page.waitFor(`document.querySelectorAll("[data-stock-form]").length === 3`);
+
+  const sources = await page.evaluate(
+    `[...document.querySelectorAll("[data-stock-form]")].map((form) => form.dataset.stockForm)`
+  );
+  assert.deepEqual(sources, ["unsplash", "pexels", "vecteezy"]);
+  assert.equal(
+    await page.evaluate(`Boolean(document.querySelector('[data-stock-form="vecteezy"] [data-stock-account]'))`),
+    true,
+    "Vecteezy asks for its account id as well as the key"
+  );
+
+  await page.evaluate(`(() => {
+    const form = document.querySelector('[data-stock-form="unsplash"]');
+    form.querySelector("[data-stock-key]").value = "unsplash-key";
+    form.requestSubmit();
+    return true;
+  })()`);
+  await page.waitFor(
+    `Boolean(document.querySelector('[data-stock-form="unsplash"] .connected-pill'))`
+  );
+  assert.equal(stockKeyRequests, 1, "the key reaches the server");
+
+  await page.press("Escape", { keyCode: 27 });
+  await page.waitFor(`document.getElementById("copilot-sheet").hidden === true`);
 });
 
 test("a sent message offers run again and edit, and the reply shows its usage", async () => {

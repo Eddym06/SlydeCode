@@ -60,6 +60,12 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
     let provider_id = request.provider.clone();
     let model = request.model.clone();
     let request_id = request.request_id.clone();
+    let turn_id = request_id.clone().unwrap_or_else(crate::new_token);
+    let turn = state.images.begin_turn(turn_id.clone());
+    let turn_context = tools::TurnContext {
+        images: turn.clone(),
+        state: Arc::downgrade(&state),
+    };
     let _ = tx.send(ChatEvent::Meta {
         provider: provider_id.clone(),
         model: model.clone(),
@@ -75,7 +81,16 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
     let before = state.view().await;
     state.copilot.begin_snapshot(before.presentation.clone());
     let request_messages = request.messages.clone();
-    let result = run_inner(&state, request, &tx, cancel).await;
+    let cancel_after = cancel.clone();
+    let result = run_inner(&state, request, &tx, cancel, &turn_context).await;
+    // Stopping the textual turn also stops its image queue: queued jobs never
+    // start and an in-flight provider call is dropped. Checking the flag as well
+    // catches a stop that lands just after the final provider response.
+    if matches!(&result, Err(CopilotError::Cancelled))
+        || crate::copilot::CopilotState::was_cancelled(&cancel_after)
+    {
+        turn.cancel().await;
+    }
     let after = state.view().await;
     let reversible = state
         .copilot
@@ -91,6 +106,13 @@ pub async fn run(state: Arc<AppState>, request: ChatRequest, tx: UnboundedSender
             true,
             &before.presentation,
         );
+    }
+    // Report every picture this turn requested, including the failures that
+    // happened while the model was still writing. Jobs that finish later keep
+    // updating the chat through `ServerEvent::ImageProgress`.
+    let (jobs, errors) = turn.snapshot().await;
+    if !jobs.is_empty() || !errors.is_empty() {
+        let _ = tx.send(ChatEvent::Images { jobs, errors });
     }
     if let Some(id) = &request_id {
         state.copilot.end_turn(id);
@@ -120,6 +142,7 @@ async fn run_inner(
     request: ChatRequest,
     tx: &UnboundedSender<ChatEvent>,
     cancel: tokio::sync::watch::Receiver<bool>,
+    turn: &tools::TurnContext,
 ) -> Result<(), CopilotError> {
     let provider = catalog::find(&request.provider)
         .ok_or_else(|| CopilotError::InvalidRequest("unknown provider".into()))?;
@@ -178,19 +201,37 @@ async fn run_inner(
             .selected_slide_id
             .as_deref()
             .filter(|id| deck.slides.iter().any(|slide| &slide.id == id));
+        // The image capability is re-read every round: an image failure removes
+        // it from the next prompt and advertises the stock fallback instead.
+        // No image count is predicted or sent to the model.
+        let capability = state.images.capability(state).await;
+        let availability = tools::ToolAvailability {
+            image_requests: capability.available,
+            // Advertise the stock tool only when a service is actually
+            // configured. Without keys the model gets the plain `insert_image`
+            // guidance instead of a dead-end search.
+            stock_images: !capability.available
+                && !state.copilot.stock_keys().await.providers().is_empty(),
+        };
+        let image_prompt = prompt::ImagePrompt {
+            capability: Some(&capability),
+            stock: availability.stock_images,
+        };
         let system = if lean {
-            prompt::system_prompt_lean(
+            prompt::system_prompt_lean_with_images(
                 deck,
                 selected,
                 request.selected_element_id.as_deref(),
                 language,
+                image_prompt,
             )
         } else {
-            prompt::system_prompt(
+            prompt::system_prompt_with_images(
                 deck,
                 selected,
                 request.selected_element_id.as_deref(),
                 language,
+                image_prompt,
             )
         };
         compact_history(&mut turns);
@@ -228,6 +269,7 @@ async fn run_inner(
                 cancel: &cancel,
                 partial: Some(&partial_tx),
                 lean,
+                availability,
             },
             tx,
         )
@@ -324,9 +366,14 @@ async fn run_inner(
             } else {
                 None
             };
-            let outcome =
-                tools::execute_with(state, &call.name, call.arguments.clone(), prefix.as_ref())
-                    .await;
+            let outcome = tools::execute_with(
+                state,
+                &call.name,
+                call.arguments.clone(),
+                prefix.as_ref(),
+                Some(turn),
+            )
+            .await;
             let (content, status) = match outcome {
                 Ok(outcome) => (
                     serde_json::to_string(&outcome.result)

@@ -59,6 +59,10 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             post(crate::asset_api::api_upload)
                 .layer(DefaultBodyLimit::max(crate::assets::MAX_IMAGE_BYTES + 4096)),
         )
+        .route(
+            "/api/images/generate",
+            post(crate::asset_api::api_generate_image),
+        )
         .route("/assets/{name}", get(crate::asset_api::serve_asset))
         .route("/api/decks", get(crate::deck_api::api_list))
         .route("/api/decks/new", post(crate::deck_api::api_new))
@@ -79,6 +83,14 @@ pub fn app_router(state: Arc<AppState>) -> Router {
             get(crate::copilot::routes::api_models),
         )
         .route("/api/copilot/key", post(crate::copilot::routes::api_key))
+        .route(
+            "/api/copilot/image-model",
+            post(crate::copilot::routes::api_image_model),
+        )
+        .route(
+            "/api/copilot/stock-key",
+            post(crate::copilot::routes::api_stock_key),
+        )
         .route(
             "/api/copilot/cancel",
             post(crate::copilot::routes::api_cancel),
@@ -457,6 +469,7 @@ async fn api_agent(
             "created": outcome.created,
             "upsert": outcome.upsert,
             "mutated_slide_id": outcome.mutated_slide_id,
+            "element_id": outcome.element_id,
             "sandbox_origin": state.sandbox_origin,
             "view": state.view().await
         }))

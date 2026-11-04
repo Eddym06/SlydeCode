@@ -29,6 +29,9 @@ pub struct AppState {
     /// Image store. Always present: an in-memory server points it at a scratch
     /// directory so tests never touch the user's app-data.
     pub assets: Arc<crate::assets::AssetStore>,
+    /// Background picture requests: budgeting, rate limiting, buffering and
+    /// final placement. Shared by every copilot turn in this server.
+    pub images: Arc<crate::copilot::image_service::ImageService>,
     /// When present, the deck endpoints can list or switch decks in the library
     /// and the autosave task writes to the active deck file.
     /// Tests and ephemeral servers leave it `None` and never touch the disk.
@@ -158,6 +161,7 @@ impl AppState {
             deck_tx,
             copilot,
             assets,
+            images: Arc::new(crate::copilot::image_service::ImageService::new()),
         })
     }
 
@@ -221,6 +225,7 @@ pub enum AgentAction {
     MutateElement,
     SetTheme,
     SetTitle,
+    InsertImage,
     /// The in-app copilot is generating or choosing a tool. This is the only
     /// action that can legitimately sit in `Thinking` phase.
     Chat,
@@ -255,6 +260,12 @@ pub enum ServerEvent {
         format: String,
         completed: usize,
         total: usize,
+    },
+    /// One background picture moved between queued, generating, placed or
+    /// failed. Sent after the text turn too, so the chat can update in place.
+    ImageProgress {
+        turn_id: String,
+        job: crate::copilot::image_service::ImageJobView,
     },
 }
 

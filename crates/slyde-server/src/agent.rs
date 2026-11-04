@@ -84,6 +84,27 @@ pub enum AgentCommand {
     SetTitle {
         title: String,
     },
+    /// Adds a picture to one slide.
+    ///
+    /// `src` may be a stored `/assets/…` URL, a base64 image data URL, or an
+    /// `http(s)` link. Remote sources are downloaded and stored before the deck
+    /// is touched, so the slide works offline and travels in a `.slyde` bundle.
+    InsertImage {
+        slide_id: String,
+        src: String,
+        #[serde(default)]
+        alt: Option<String>,
+        /// Stage-pixel rectangle. Omitted values default to a centred image at
+        /// 60% of the stage width and height, which reads well on a new slide.
+        #[serde(default)]
+        x: Option<f32>,
+        #[serde(default)]
+        y: Option<f32>,
+        #[serde(default)]
+        w: Option<f32>,
+        #[serde(default)]
+        h: Option<f32>,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -92,6 +113,8 @@ pub struct AgentOutcome {
     pub created: bool,
     pub animation: Option<ServerEvent>,
     pub mutated_slide_id: Option<String>,
+    /// Handle of the element a command created, when it created one.
+    pub element_id: Option<String>,
 }
 
 /// Structured descriptor of an agent command, used to announce activity before
@@ -175,11 +198,28 @@ impl AgentCommand {
                 slide_id: None,
                 slide_index: None,
             },
+            AgentCommand::InsertImage { slide_id, .. } => Activity {
+                phase: AgentPhase::Writing,
+                action: AgentAction::InsertImage,
+                slide_id: Some(slide_id.clone()),
+                slide_index: None,
+            },
         }
     }
 }
 
-pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutcome, CoreError> {
+pub async fn handle(
+    state: &AppState,
+    mut command: AgentCommand,
+) -> Result<AgentOutcome, CoreError> {
+    // A remote picture is downloaded and stored before the deck lock is taken:
+    // network time must never freeze the editor, autosave or the exporter.
+    if let AgentCommand::InsertImage { src, .. } = &mut command {
+        *src = crate::image_intake::resolve(state, src)
+            .await
+            .map_err(CoreError::InvalidAsset)?;
+    }
+
     let mut core = state.core.write().await;
     match command {
         AgentCommand::CreatePresentation {
@@ -327,6 +367,45 @@ pub async fn handle(state: &AppState, command: AgentCommand) -> Result<AgentOutc
             core.set_title(title)?;
             Ok(AgentOutcome::default())
         }
+        AgentCommand::InsertImage {
+            slide_id,
+            src,
+            alt,
+            x,
+            y,
+            w,
+            h,
+        } => {
+            let (stage_w, stage_h) = core.presentation().aspect_ratio.size_px();
+            let (stage_w, stage_h) = (stage_w as f32, stage_h as f32);
+            // A deliberate size is honoured but never allowed to leave the stage;
+            // a missing one centres the picture at a readable 60% of the canvas.
+            // Defaults snap to whole pixels so the stored CSS stays tidy.
+            let width = w.unwrap_or((stage_w * 0.6).round()).clamp(8.0, stage_w);
+            let height = h.unwrap_or((stage_h * 0.6).round()).clamp(8.0, stage_h);
+            let left = x
+                .unwrap_or(((stage_w - width) / 2.0).round())
+                .clamp(0.0, (stage_w - width).max(0.0));
+            let top = y
+                .unwrap_or(((stage_h - height) / 2.0).round())
+                .clamp(0.0, (stage_h - height).max(0.0));
+            let element_id = core.insert_image_with_alt(
+                &slide_id,
+                &src,
+                alt.as_deref().unwrap_or(""),
+                slyde_core::ImageRect {
+                    x: left,
+                    y: top,
+                    w: width,
+                    h: height,
+                },
+            )?;
+            Ok(AgentOutcome {
+                element_id: Some(element_id),
+                mutated_slide_id: Some(slide_id),
+                ..AgentOutcome::default()
+            })
+        }
     }
 }
 
@@ -343,6 +422,8 @@ pub async fn run(state: &AppState, command: AgentCommand) -> Result<AgentOutcome
             if let Some(upsert) = &outcome.upsert {
                 activity.slide_id = Some(upsert.slide_id.clone());
                 activity.slide_index = Some(upsert.index);
+            } else if let Some(slide_id) = &outcome.mutated_slide_id {
+                activity.slide_id = Some(slide_id.clone());
             }
             if let Some(event) = outcome.animation.clone() {
                 state.broadcast(event);
@@ -491,6 +572,56 @@ mod tests {
         assert_eq!(state.core.read().await.presentation().title, ok);
     }
 
+    #[tokio::test]
+    async fn insert_image_defaults_to_a_centred_picture_and_keeps_the_alt_text() {
+        let state = state();
+        handle(
+            &state,
+            AgentCommand::UpsertSlide {
+                index: 0,
+                slide_id: Some("sld_a".into()),
+                html_code: "<h1>Hi</h1>".into(),
+                template: None,
+                animation: None,
+            },
+        )
+        .await
+        .unwrap();
+        let stored = state
+            .assets
+            .save_bytes(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+            .unwrap();
+        let outcome = handle(
+            &state,
+            AgentCommand::InsertImage {
+                slide_id: "sld_a".into(),
+                src: stored.url,
+                alt: Some("A \"chart\" of sales".into()),
+                x: None,
+                y: None,
+                w: None,
+                h: None,
+            },
+        )
+        .await
+        .unwrap();
+        let element_id = outcome.element_id.expect("the picture gets a handle");
+        assert!(element_id.starts_with("image-"), "{element_id}");
+        assert_eq!(outcome.mutated_slide_id.as_deref(), Some("sld_a"));
+
+        let core = state.core.read().await;
+        let code = &core.presentation().slides[0].code;
+        // 60% of 1280x720, centred: (1280-768)/2 and (720-432)/2.
+        assert!(code.contains("left: 256px"), "{code}");
+        assert!(code.contains("top: 144px"), "{code}");
+        assert!(code.contains("width: 768px"), "{code}");
+        assert!(code.contains("height: 432px"), "{code}");
+        assert!(
+            code.contains("alt=\"A &quot;chart&quot; of sales\""),
+            "{code}"
+        );
+    }
+
     #[test]
     fn commands_map_to_structured_activity() {
         let cases = [
@@ -551,6 +682,21 @@ mod tests {
                 },
                 AgentPhase::Animating,
                 AgentAction::TriggerAnimation,
+                Some("sld_a"),
+                None,
+            ),
+            (
+                AgentCommand::InsertImage {
+                    slide_id: "sld_a".into(),
+                    src: "https://example.com/a.png".into(),
+                    alt: None,
+                    x: None,
+                    y: None,
+                    w: None,
+                    h: None,
+                },
+                AgentPhase::Writing,
+                AgentAction::InsertImage,
                 Some("sld_a"),
                 None,
             ),
