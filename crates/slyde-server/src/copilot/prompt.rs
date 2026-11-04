@@ -156,7 +156,24 @@ pub fn system_prompt_with_images(
                  when they ask for a broader change."
             ),
         },
-        None => "- No element is selected on the canvas.".to_string(),
+        None => match selected_id {
+            Some(slide_id) => {
+                let number = deck
+                    .slides
+                    .iter()
+                    .position(|slide| slide.id == slide_id)
+                    .map(|index| index + 1);
+                match number {
+                    Some(number) => format!(
+                        "- Selected slide on canvas: `{slide_id}` (slide {number}). The user is \
+                         looking at it: treat \"this slide\", \"here\" and similar references as \
+                         this slide unless they name another."
+                    ),
+                    None => "- No element is selected on the canvas.".to_string(),
+                }
+            }
+            None => "- No element is selected on the canvas.".to_string(),
+        },
     };
     format!(
         r#"You are SlydeCode's presentation designer and engineer. You turn plain language into
@@ -421,7 +438,8 @@ mod tests {
         assert!(prompt.contains("sld_a"));
         assert!(prompt.contains("Never paste HTML"));
         assert!(prompt.contains("upsert_slide"));
-        assert!(prompt.contains("No element is selected on the canvas"));
+        assert!(prompt.contains("Selected slide on canvas: `sld_a` (slide 1)"));
+        assert!(prompt.contains("treat \"this slide\""));
     }
 
     #[test]
