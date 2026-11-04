@@ -1,14 +1,213 @@
 # STATE.md — Current State & Task Tracker
 
-> Last updated: 2026-10-27 22:40
+> Last updated: 2026-11-03 20:59
+
+## Current Task — SaC documentation refresh (2026-11-03)
+
+- [x] Replace the old tagline with **SaC: Slide as Code**
+- [x] Rewrite README for a first-time reader: what SaC is, quick start, features,
+      commands, configuration, image flow, testing and security
+- [x] Document the latest image behavior: prompt only advertises availability, no
+      predicted count; independent image model; background tickets; cancellation
+- [x] Document the **Stock image keys** screen and the Unsplash/Pexels/Vecteezy
+      configuration, including the environment fallback
+- [x] Keep the Vecteezy search endpoint and raster-preview guidance accurate
+- [x] Update brand wording in `AGENTS.md` and its `CLAUDE.md` mirror
+- [x] Refresh test counts: 348 Rust (347 passing, 1 ignored) and 110 UI tests
+- [ ] Visual pass of the README on GitHub in light and dark mode
+- [ ] Live OpenRouter image catalog and stock calls re-verified with real keys
+
+## Previous task — full image catalog and pricing (2026-11-03)
+
+- [x] Show every image model a provider publishes, not only the text catalog
+  - [x] OpenRouter reads `/api/v1/images/models` (61 routes), while `/api/v1/models`
+        only exposes the handful with an image output modality
+  - [x] `GET /api/copilot/models?kind=image` returns the picture catalog; the text
+        path is unchanged
+  - [x] `ModelInfo` carries `input_price`, `output_price` and `image_price`; token
+        prices are normalized to USD per 1M tokens
+- [x] Per-model picture pricing
+  - [x] Selecting a model fetches `/api/v1/images/models/{model}/endpoints` once;
+        an `output_image` price is exact for `unit: "image"` and estimated at 1,024
+        image tokens for `unit: "token"`
+  - [x] `last_image_cost` is persisted and reused by the capability budget, so the
+        prompt reserves the selected model's price without a probe per turn
+  - [x] The real OpenRouter `usage.cost` settles the reservation after generation
+- [x] Model sheet
+  - [x] One dynamic list for text and image; search, free-only filter and selection
+  - [x] Green down arrow for input and red up arrow for output, USD/1M tokens,
+        localized legend and a per-picture fallback label
+  - [x] EN/ES keys added in the same change
+- [x] Tests: catalog parsing, price merge, endpoint price parser, URL safety,
+      image-model route/UI mocks; `fmt`, clippy `-D warnings`, 341 Rust tests and
+      109 UI tests green on Windows
+- [x] README, docs/copilot.md, MEMORY.md and STATE.md updated
+- [ ] Live OpenRouter catalog/pricing verified with a real key
+- [ ] Visual pass of the 61-model sheet in the running app
+
+## Previous task — background image orchestration (2026-11-03)
+
+- [x] Background image orchestration, OpenRouter and stock fallback
+  - [x] `request_image` returns a ticket immediately; generation runs in detached jobs
+  - [x] Image service owns provider/model choice, balance, per-image cost, 10/min rate,
+        3 parallel jobs, 10 per turn, 120 s slide wait and placement
+  - [x] Atomic budget reservations: check-and-reserve before the ticket, release on
+        generation/worker failure, settle the real vendor cost after generation
+  - [x] OpenRouter image wire (`google/gemini-2.5-flash-image`), cost and balance probe
+  - [x] Dynamic prompt block only while the image model is healthy; 90 s degradation
+        after a generation failure and localized error reporting at turn close
+  - [x] Stock fallback (`search_images`) for Unsplash, Pexels and Vecteezy when no
+        usable generator exists; keys from the environment
+  - [x] UI image queue rows, late WebSocket updates, localized error panel, EN/ES keys
+  - [x] Tests: budget reservations, background placement after a missing slide,
+        tool availability, prompt contract, OpenRouter parsing, stock parsers, UI images
+  - [x] `fmt`, clippy `-D warnings`, full workspace and all UI files green on Windows
+  - [x] README, docs/copilot.md, MEMORY.md and STATE.md updated
+  - [ ] Live vendor and stock calls verified with real keys
+
+## Previous task — AI image insertion (2026-11-03)
+
+- [x] AI image insertion and image-generation support
+  - [x] Audit the current image surface (asset store, canvas, copilot, MCP)
+  - [x] `insert_image` agent command that resolves `https:` and `data:` sources into the asset store
+  - [x] Copilot tool `insert_image` (URL or data URL, default centred geometry)
+  - [x] MCP tool `insert_image` (additive contract change)
+  - [x] Real image generation through a connected provider (OpenAI, Gemini, xAI) and copilot/MCP tools
+  - [x] Prompt: tell the model how to insert photos and what generation needs
+  - [x] EN/ES locale entries for tool and activity labels
+  - [x] Rust tests (intake, agent command, tools, generation parsing) and schema tests
+  - [x] Build, fmt, clippy and the UI suite verified on Windows
+  - [x] Docs updated (README, docs/copilot.md, MEMORY.md, STATE.md)
+
+## Image support (2026-11-03)
+
+The product already had human image support: paste/drop, an asset store at
+`/assets/<hex>.<ext>`, and `.slyde` ZIP bundles. AI models could not insert
+pictures, and `generate_image` was a hardcoded Unsplash lookup. Both are now real.
+
+- **One intake path.** `AgentCommand::InsertImage` (`/api/agent`, copilot and MCP)
+  accepts an `https:` link, a `data:image/…` URL or an existing `/assets/…` path.
+  `image_intake::resolve` downloads remote bytes with the SSRF-safe
+  `copilot::webfetch` (private/loopback blocked, 5 MiB, 12 s, max four
+  redirects) **before** the deck lock, then core `insert_image_with_alt` writes a
+  positioned `<img>` with escaped alt text. Defaults: centred, 60% of the stage,
+  clamped to the canvas.
+- **Real generation.** `copilot/imagegen.rs` calls OpenAI `gpt-image-1`, Gemini
+  `gemini-2.5-flash-image` or xAI `grok-2-image-1212` with the user's stored key.
+  `POST /api/images/generate` stores the bytes and returns the asset URL. The
+  copilot `generate_image` tool can place it immediately; the MCP tool does the
+  same through that endpoint plus `insert_image`. Generated assets survive a
+  failed placement, so a retry never pays twice.
+- **Contract.** Copilot advertises 16 tools per turn (18 definitions; one image
+  tool and `generate_image` are hidden by availability), MCP 12. `insert_image`
+  and `generate_image` are additive: names, arguments and the MCP `tool/list`
+  count were updated in the same change, and `search_asset` now points at
+  `insert_image` for exact pictures.
+- **CSP.** Slides keep `style-src`/`img-src`/`font-src`/`media-src` over `https:`
+  but `connect-src` is back to `'none'` and plain `http:` is gone: a slide can
+  display a remote picture yet cannot fetch or phone home.
+- **Not verified:** live calls to the image vendors (no keys on this machine).
+  The request builders and parsers are covered by unit tests and a local
+  OpenAI-wire mock; a real vendor response should be checked before release.
+
+## Background image orchestration (2026-11-03)
+
+The copilot no longer calls a vendor from the text loop. The text model asks for a
+picture and keeps writing; a background service owns everything else.
+
+- **Contract.** `request_image(image_id, prompt, alt, slide_id|slide_index, x?, y?,
+  w?, h?)` validates a unique id, a bounded prompt, alt text and a target. It never
+  accepts a provider or model. `generate_image` stays as the synchronous MCP/direct
+  tool, and `ToolAvailability` hides it from copilot schemas.
+- **Service.** `copilot/image_service.rs` caches the capability for 30 s, probes
+  OpenRouter balance concurrently, computes `max_images` from balance/cost, enforces
+  `MAX_IMAGES_PER_MINUTE = 10`, `MAX_PARALLEL = 3` and `MAX_IMAGES_PER_TURN = 10`.
+  A worker slot is released after the asset is saved, before waiting for a slide.
+- **Budget.** `Budget { balance, spent, reserved }` lives under one lock. The ticket
+  reserves the estimated cost before returning, releases it on generation/worker
+  failure, and settles the actual vendor cost (OpenRouter reports it) immediately
+  after generation. A probe resets confirmed spend but preserves outstanding
+  reservations.
+- **Arrival.** Bytes are stored in the asset store before placement. A job whose
+  target slide does not exist yet waits up to 120 s and then places on the requested
+  slide/position. Placement or save failures do not degrade the model capability;
+  generation failures hide it for 90 s and enable the stock fallback when configured.
+- **Prompt.** A dedicated block appears only while the capability is available and
+  states model, remaining balance, per-image cost, maximum for the turn, rate and
+  parallelism. The lean prompt has a compact version; the fixed-overhead threshold
+  is 3,000 tokens. When unavailable, the prompt says the generator is unavailable and
+  points at `search_images` only if a stock service is configured.
+- **Providers.** OpenAI `gpt-image-1`, Gemini `gemini-2.5-flash-image`, xAI
+  `grok-2-image-1212` and OpenRouter `google/gemini-2.5-flash-image`. OpenRouter uses
+  `POST /api/v1/images`, reads `data[0].b64_json`/`media_type` and `usage.cost`, and
+  probes `/credits` + `/key` for a balance; an unknown balance falls back to a
+  conservative six-image budget.
+- **Stock fallback.** `search_images(query, kind?, count?, orientation?)` searches
+  Unsplash and Pexels for photos and Vecteezy for vectors, returns direct URLs,
+  dimensions and attribution, and the model places one with `insert_image`. Keys:
+  `UNSPLASH_ACCESS_KEY`, `PEXELS_API_KEY`, `VECTEEZY_API_KEY` +
+  `VECTEEZY_ACCOUNT_ID`. No stock-key UI.
+- **UI.** The thread shows queued/generating/placed/failed rows with thumbnails, a
+  localized error panel, and live `slyde:image` updates after the text stream closes.
+  EN/ES keys cover every status and error code.
+- **Verified:** 341 Rust tests (227 server, 1 ignored) and 109 UI tests in 12 files,
+  fmt and clippy clean on `x86_64-pc-windows-gnu`. The new background test proves a
+  picture waits for a slide created later and lands as `/assets/…`.
+- **Not verified:** live OpenAI/Gemini/xAI/OpenRouter generation and live
+  Unsplash/Pexels/Vecteezy search (no keys configured). Parsers, availability and
+  budget logic are covered by unit tests.
+
+## Provider & model role switch (2026-11-03)
+
+The model sheet now carries a compact **Model for: Text | Image** switch beside
+its title. **Text** is the chat model that writes the deck; **Image** lists only
+the providers whose key unlocks a picture model (OpenAI, Gemini, xAI,
+OpenRouter) and remembers that choice independently.
+
+- `ProviderStatus.image_model` and `CopilotConfigView.last_image_*` expose the
+  picture role; `POST /api/copilot/image-model` validates and persists it.
+- `imagegen::pick` prefers the saved picture provider over the first connected
+  one, so the chat and drawing vendors can differ (DeepSeek writes, OpenAI
+  draws).
+- UI: spring thumb, `aria-labelledby`/`aria-pressed`, focus follows the chosen
+  role, reduced motion respected; EN/ES keys added in the same change.
+- Tests: the server rejects a provider/model without an image model and leaves
+  the chat selection untouched; a UI test covers the switch, provider filtering
+  and the request.
+
+## Full image catalog and token prices (2026-11-03)
+
+The image view of the model sheet used to show only the few image-capable rows
+from each provider's text catalog. OpenRouter was the visible gap: its general
+`/api/v1/models` list contains 12 routes with an image output modality, while
+`/api/v1/images/models` publishes 61. The sheet now reads the picture catalog.
+
+- **Route.** `GET /api/copilot/models?kind=image` keeps the text contract intact
+  and returns the provider's image list. OpenRouter's list is merged with the
+  token prices from `/api/v1/models` by model id; the remaining routes show
+  "priced per image" rather than inventing a token price.
+- **Prices.** `ModelInfo.input_price` and `output_price` are USD per 1M tokens.
+  The UI renders a green down arrow for input and a red up arrow for output, plus
+  a localized legend; `image_price` is only a per-picture fallback when the vendor
+  publishes one.
+- **Selected model cost.** OpenRouter's `pricing.image` is an image *input token*
+  rate, not the price of one generated picture. On selection the server reads
+  `/api/v1/images/models/{model}/endpoints`, takes an `output_image` entry and
+  stores `last_image_cost` (`unit: "image"` exact, `unit: "token"` estimated at
+  1,024 image tokens). The capability budget reuses that value; `usage.cost`
+  settles the real amount after generation.
+- **Tests.** Catalog parsing and merge, the endpoint price parser, safe model
+  segments, the UI image-list mock and the EN/ES parity suite. Live OpenRouter
+  calls still need a real key.
 
 ## Current Phase
 
-Phase 3.9 — **copilot provider rejections and the visual review loop** (branch
-`fix/provider-rejections`, two commits on top of `main`). The Rust workspace has **300 tests**
-(core 63, server 189 plus one ignored because it writes to the real credential store, export 9,
-pptx 17, mcp 16, app 6) and the UI suite has **106 tests** in 11 files; both green, with
-`cargo fmt --check` and `clippy --workspace --all-targets -D warnings` clean on
+Phase 3.9 — **copilot provider rejections, the visual review loop, background
+images and the full picture-model catalog**. The Rust workspace has **341 tests**
+(core 64, server 227 including one ignored because it writes to the real credential
+store, export 9, pptx 17, mcp 18, app 6) and the UI suite has **109 tests** in 12
+files; both green, with `cargo fmt --check` and
+`clippy --workspace --all-targets -D warnings` clean on
 `x86_64-pc-windows-gnu`.
 
 ### What the integration kept, and what it dropped
@@ -158,7 +357,7 @@ Double-clicking used to open a terminal that also *was* the server. Now two exec
 
 Verified on the real binaries from the unzipped package: no `conhost` child, the app window opens,
 a second launch reuses the running server and exits, closing the window stops the server in 8 s and
-clears `runtime.json`, and `slyde.exe mcp` still answers `initialize` and `tools/list` (11 tools).
+clears `runtime.json`, and `slyde.exe mcp` still answers `initialize` and `tools/list` (12 tools).
 `scripts/package-windows.ps1` builds both and writes `dist\SlydeCode\` plus a zip.
 
 **Icon and version info (2026-10-27).** Both executables embed `assets/brand/slydecode.ico` (the
@@ -354,6 +553,11 @@ old suite:
 - `.slyde` v2: a deck that references stored images saves as a ZIP bundle
   (`deck.json` + `assets/…`); a deck without images stays plain JSON. The reader
   sniffs the ZIP signature, so both shapes open with the same button.
+- **Agents (2026-11-03):** `insert_image` (copilot + MCP + `/api/agent`) resolves
+  remote/data sources into the same store; `generate_image` creates a picture with
+  OpenAI, Gemini, xAI or OpenRouter; the copilot's `request_image` queues a
+  background job and `search_images` covers the no-generator case. The prompt and
+  both locale files describe them.
 
 ### PowerPoint export (new)
 
@@ -376,14 +580,15 @@ old suite:
   break export.
 - PDF stays on `--print-to-pdf` (960×540 pt, exact 16:9).
 
-### Backend (Rust workspace, six crates, 300 tests)
+### Backend (Rust workspace, six crates, 338 tests)
 
-- `slyde-core` (63 tests): model, `PresentationState` with snapshot history and
+- `slyde-core` (64 tests): model, `PresentationState` with snapshot history and
   coalescing typing, validation, `.slyde` project format, element scoping,
-  `insert_image` / `set_element_geometry`, `ImageRect`.
-- `slyde-server` (189 tests, plus one ignored): two listeners, all HTTP/WS endpoints, token +
-  Origin guards, the deck library, the asset store, the copilot, exports.
-- `slyde-mcp` (16 tests): JSON-RPC stdio with **concurrent dispatch** — each line
+  `insert_image` / `insert_image_with_alt` / `set_element_geometry`, `ImageRect`.
+- `slyde-server` (224 tests, one ignored): two listeners, all HTTP/WS endpoints, token +
+  Origin guards, the deck library, the asset store, the copilot, background image
+  orchestration, image intake and generation, stock search, exports.
+- `slyde-mcp` (18 tests): JSON-RPC stdio with **concurrent dispatch** — each line
   becomes a task under a `Semaphore(8)`, one writer task serialises stdout, and a
   fast request overtakes a slow one.
 - `slyde-pptx` (17 tests), `slyde-export` (9 tests incl. the CDP batch test and the
@@ -439,7 +644,7 @@ old suite:
 
 ### Frontend (`ui/`, vanilla ES modules, no bundler)
 
-- Locale dictionaries live in `ui/static/locales/{en,es}.js` (555 keys each) and
+- Locale dictionaries live in `ui/static/locales/{en,es}.js` (558 keys each) and
   `i18n.js` is a 56-line loader with the same API. A parity test enforces equal
   key sets, no empty values, every `data-i18n*` attribute resolving, matching
   `{placeholder}` tokens, and that the dictionary did not creep back into
@@ -466,10 +671,10 @@ old suite:
 
 ### Verified end to end
 
-- `cargo test --workspace`: 300 green (1 ignored).
-- `node --test "tests/ui/*.test.mjs"`: 106 green in 11 files, including the deck library flow,
+- `cargo test --workspace`: 338 green (1 ignored).
+- `node --test "tests/ui/*.test.mjs"`: 109 green in 12 files, including the deck library flow,
   the image flow (insert → render in the sandbox → drag → geometry persisted →
-  bundle download) and the 2x PNG export.
+  bundle download), failed/late background picture rows and the 2x PNG export.
 - `python scripts/validate-pptx.py target/tmp/pptx-check.pptx --expect-slides 3`:
   `OK … 3 slides, one full-bleed PNG each`.
 - Live probe: `/s/{id}` 401 without a token, 200 with the sandbox token; the
@@ -522,7 +727,10 @@ Nothing partially implemented on the branch.
 - Image editing only exists in the studio stage, not in the presenter.
 - The `.slyde` bundle duplicates assets that another deck may already have (no
   content addressing yet).
-- Slide images must be raster; SVG and remote URLs are rejected by design.
+- Slide images must be raster; SVG is rejected. Slide code may reference
+  `/assets/…`, `data:`/`blob:` and remote `https:` URLs, but a stored asset is
+  preferred: agents use `insert_image` to download a remote picture into the
+  store, so the deck still renders offline and travels in the `.slyde` bundle.
 - The inspector still rebuilds itself with `innerHTML`; the notes caret and
   scroll are restored explicitly, but focus can be lost while a remote change
   lands.
@@ -533,7 +741,9 @@ Nothing partially implemented on the branch.
 - Provider model lists include models that may not support tool calling; the UI
   shows metadata but does not pre-validate capability.
 - Only DeepSeek has been exercised with a live key. OpenAI, Anthropic, Gemini, xAI, Groq,
-  OpenRouter and NVIDIA are still unverified.
+  OpenRouter and NVIDIA are still unverified. Live image generation (OpenAI, Gemini,
+  xAI, OpenRouter) and live stock search (Unsplash, Pexels, Vecteezy) also need keys
+  and a real end-to-end pass.
 - A provider connection reset mid-stream (seen once with DeepSeek, `os error 10054`) ends the
   turn with a localized network error; there is no automatic retry.
 - A first copilot turn takes 70–140 s on DeepSeek and streams ~8–10k `thinking` SSE frames.
@@ -575,10 +785,31 @@ Nothing partially implemented on the branch.
 
 ## Next Immediate Step
 
-- Review the branch, open an exported deck in real PowerPoint, and run the same live
-  probe against the other seven providers.
+- Configure at least one image key (OpenAI, Gemini, xAI or OpenRouter) and one stock
+  key, then run a live copilot turn that requests a picture for a slide written later.
+  Confirm the capability block, the budget reservation, the background row and the
+  final `/assets/…` placement. Then review the branch and open an exported deck in
+  real PowerPoint.
 
 ## Completed
+
+- [x] SaC README and brand refresh: new **SaC: Slide as Code** tagline, clearer
+      onboarding, image flow, cancellation, stock-key screen and 348 Rust + 110 UI
+      tests documented — 2026-11-03
+
+- [x] Background image orchestration: `request_image` + detached jobs, atomic budget
+      reservations, 10/min + 3 parallel + 10/turn, slide wait tickets, OpenRouter
+      image provider, 90 s degradation, localized error panel, stock fallback
+      (Unsplash/Pexels/Vecteezy), EN/ES keys, 338 Rust + 109 UI tests green — 2026-11-03
+
+- [x] Provider & model switch: **Model for: Text | Image** beside the sheet title,
+      independent image provider/model persisted server-side, imagegen prefers it,
+      EN/ES labels and tests — 2026-11-03
+
+- [x] AI image insertion and real image generation: `insert_image` intake into the
+      asset store, provider image generation (`gpt-image-1`, `gemini-2.5-flash-image`,
+      `grok-2-image-1212`), 16 copilot / 12 MCP tools, prompt and EN/ES labels,
+      319 Rust + 107 UI tests green on Windows — 2026-11-03
 
 - [x] Documentation brought back in line with the tree: 300 Rust / 106 UI tests, six crates,
       555 locale keys, the real copilot tool and round counts, and the phantom

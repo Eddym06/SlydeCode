@@ -29,7 +29,7 @@ You have access to three specialized skills. Use them deliberately, not decorati
 
 ### `frontend-design`
 Invoke when: designing or iterating on any visual surface (layouts, components, the design system, motion/animation specs, the AI-generation overlay, the Storyboard panel, Presenter mode).
-Expectation: Produce options grounded in real design reasoning (hierarchy, spacing, contrast, motion easing, affordance), not generic Bootstrap-tier output. Every screen must be justified against SlydeCode's brand ADN: *"Canva met a compiler"* — warm, premium, never terminal/hacker aesthetics unless explicitly inside "Developer Mode."
+Expectation: Produce options grounded in real design reasoning (hierarchy, spacing, contrast, motion easing, affordance), not generic Bootstrap-tier output. Every screen must be justified against SlydeCode's brand ADN: *"SaC: Slide as Code"* — warm, premium, never terminal/hacker aesthetics unless explicitly inside "Developer Mode."
 
 ### `ui-ux-pro-max`
 Invoke when: validating usability flows, onboarding, empty states, error states, loading/generation states, accessibility (contrast ratios, keyboard nav, screen reader labels), and micro-interaction quality.
